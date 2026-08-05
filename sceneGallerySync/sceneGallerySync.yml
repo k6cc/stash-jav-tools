@@ -1,0 +1,22 @@
+name: sceneGallerySync
+description: Automatically creates galleries for scenes with matching metadata, cover, and fanart images
+version: 1.5.0
+exec:
+  - python
+  - "{pluginDir}/sceneGallerySync.py"
+interface: raw
+hooks:
+  - name: hook_sceneGallerySync
+    description: Creates gallery when a scene is updated
+    triggeredBy:
+      - Scene.Update.Post
+tasks:
+  - name: "Create Gallery for Scene"
+    description: (Internal use) Do NOT click here. Use the button in scene edit page instead.
+    defaultArgs:
+      mode: create_gallery
+ui:
+  javascript:
+    - sceneGallerySync.js
+  css:
+    - sceneGallerySync.css

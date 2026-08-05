@@ -1,0 +1,34 @@
+name: Scene Translate
+description: Add one-click translate buttons to scene edit page. Supports Google Free, Google API, Microsoft, Baidu, DeepL (official & DeepLX), and OpenAI engines.
+version: 2.3.0
+url: https://github.com/stash-translate/sceneTranslate
+
+exec:
+  - python
+  - "{pluginDir}/translateProxy.py"
+  - "--config"
+  - "{pluginDir}/config.json"
+
+interface: raw
+
+tasks:
+  - name: Start Translate Proxy
+    description: Start (or restart) the Python translate proxy server. Click this if translation fails with "Proxy not running".
+    defaultArgs:
+      restart: true
+
+ui:
+  javascript:
+    - sceneTranslate.js
+  css:
+    - sceneTranslate.css
+  csp:
+    connect-src:
+      - "http://127.0.0.1:9998"
+      - "https://translate.googleapis.com"
+      - "https://translation.googleapis.com"
+      - "https://fanyi-api.baidu.com"
+      - "https://api.cognitive.microsofttranslator.com"
+      - "https://api.openai.com"
+      - "https://api.deepl.com"
+      - "https://api-free.deepl.com"

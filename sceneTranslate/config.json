@@ -1,0 +1,76 @@
+{
+  // ╔══════════════════════════════════════════════════════════════════╗
+  // ║  Scene Translate 插件配置文件                                    ║
+  // ║  修改后需重启代理: python translateProxy.py --config config.json ║
+  // ╚══════════════════════════════════════════════════════════════════╝
+
+  // ─── 翻译引擎 ────────────────────────────────────────────────────
+  // 可选值:
+  //   google_free  - Google 免费翻译 (无需 API Key，无需代理)
+  //   google_api   - Google Cloud Translation API (需要 API Key，需代理)
+  //   microsoft    - Microsoft 翻译 (需要 API Key，需代理)
+  //   baidu        - 百度翻译 (需要 App ID + 密钥，需代理)
+  //   openai       - OpenAI 兼容 API (需要 API Key，需代理)
+  //   deepl        - DeepL 翻译 (需要 API Key，需代理)
+  "translateTool": "google_free",
+
+  // ─── 目标语言 ───────────────────────────────────────────────────
+  // 翻译目标语言代码
+  // 常用: zh-CN(简体中文) zh-TW(繁体中文) en(英语) ja(日语) ko(韩语)
+  //       fr(法语) de(德语) es(西班牙语) ru(俄语) pt(葡萄牙语)
+  //       it(意大利语) th(泰语) vi(越南语) id(印尼语) ar(阿拉伯语) hi(印地语)
+  "targetLanguage": "zh-CN",
+
+  // ─── 代理服务器端口 ─────────────────────────────────────────────
+  // Python 翻译代理的监听端口 (translateProxy.py)
+  "proxyPort": 9998,
+
+  // ─── 空闲超时时间 ───────────────────────────────────────────────
+  // 代理在无翻译请求时自动关闭的秒数
+  // 0 表示不自动关闭，默认 600 秒 (10 分钟)
+  // 点击「Start Translate Proxy」或执行翻译时重置计时
+  "idleTimeout": 300,
+
+  // ─── Google API ─────────────────────────────────────────────────
+  // 当 translateTool 为 "google_api" 时必填
+  // 获取地址: https://console.cloud.google.com/apis/credentials
+  "googleApiKey": "",
+
+  // ─── Microsoft 翻译 ─────────────────────────────────────────────
+  // 当 translateTool 为 "microsoft" 时必填
+  // 获取地址: https://portal.azure.com/ → 创建"翻译"资源
+  "microsoftApiKey": "",
+  // Azure 区域，如 "eastasia"(东亚) "global"(全球，默认)
+  "microsoftRegion": "global",
+
+  // ─── 百度翻译 ───────────────────────────────────────────────────
+  // 当 translateTool 为 "baidu" 时必填
+  // 获取地址: https://fanyi-api.baidu.com/ → 管理控制台
+  "baiduAppId": "",
+  "baiduSecret": "",
+
+  // ─── OpenAI ─────────────────────────────────────────────────────
+  // 当 translateTool 为 "openai" 时必填
+  "openaiApiKey": "",
+  // 模型名称，如 "gpt-4o-mini"(便宜快速) "gpt-4o"(更强)
+  "openaiModel": "gpt-4o-mini",
+  // 自定义 API 基础 URL (留空使用 OpenAI 官方地址)
+  // 示例: "https://api.deepseek.com" 或其他 OpenAI 兼容服务
+  "openaiBaseUrl": "",
+
+  // ─── DeepL ─────────────────────────────────────────────────────
+  // 当 translateTool 为 "deepl" 时必填
+  // 支持两种模式:
+  //   官方 API: 填写 deeplApiKey，deeplBaseUrl 留空
+  //   DeepLX 中转: 填写 deeplBaseUrl（完整接口地址），deeplApiKey 填访问令牌（无则留空）
+  // 官方 API 获取地址: https://www.deepl.com/pro-account/registration
+  "deeplApiKey": "",
+  // 仅官方 API 有效: true 使用 api-free.deepl.com，false 使用 api.deepl.com (Pro)
+  "deeplFreeApi": false,
+  // 自定义 DeepL API 地址 (留空使用官方地址)
+  // 填写完整的翻译接口地址，例如:
+  //   官方 Pro: "https://api.deepl.com/v2/translate"
+  //   官方 Free: "https://api-free.deepl.com/v2/translate"
+  //   DeepLX 中转: "http://<IP>:1188/translate"
+  "deeplBaseUrl": ""
+}

@@ -1,0 +1,108 @@
+/* Scene Translate Plugin Styles */
+
+/* Translate button base style */
+.scene-translate-btn {
+  font-size: 14px !important;
+  padding: 2px 8px !important;
+  margin-left: 4px !important;
+  line-height: 1.4 !important;
+  border-radius: 3px !important;
+  cursor: pointer !important;
+  -webkit-transition: all 0.2s ease !important;
+  transition: all 0.2s ease !important;
+  vertical-align: middle !important;
+}
+
+/* Hover effect */
+.scene-translate-btn:not(:disabled):hover {
+  opacity: 0.85;
+  -webkit-transform: scale(1.05);
+  transform: scale(1.05);
+}
+
+/* Active/pressed effect */
+.scene-translate-btn:not(:disabled):active {
+  -webkit-transform: scale(0.95);
+  transform: scale(0.95);
+}
+
+/* Disabled state */
+.scene-translate-btn:disabled {
+  opacity: 0.6;
+  cursor: wait !important;
+}
+
+/* Success state */
+.scene-translate-btn.btn-success {
+  background-color: #0e8a16 !important;
+  border-color: #0e8a16 !important;
+  color: #fff !important;
+}
+
+/* Error state */
+.scene-translate-btn.btn-danger {
+  background-color: #cf222e !important;
+  border-color: #cf222e !important;
+  color: #fff !important;
+}
+
+/* Spinner animation */
+.scene-translate-spinner {
+  display: inline-block;
+  -webkit-animation: scene-translate-spin 1s linear infinite;
+  animation: scene-translate-spin 1s linear infinite;
+}
+
+@-webkit-keyframes scene-translate-spin {
+  from { -webkit-transform: rotate(0deg); }
+  to   { -webkit-transform: rotate(360deg); }
+}
+
+@keyframes scene-translate-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Loading pulse effect */
+.scene-translate-btn:disabled .scene-translate-spinner {
+  -webkit-animation: scene-translate-spin 1s linear infinite, scene-translate-pulse 1.5s ease-in-out infinite;
+  animation: scene-translate-spin 1s linear infinite, scene-translate-pulse 1.5s ease-in-out infinite;
+}
+
+@-webkit-keyframes scene-translate-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+@keyframes scene-translate-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+/* Settings gear button */
+.scene-translate-settings-btn {
+  font-size: 14px !important;
+  padding: 2px 8px !important;
+  margin-left: 4px !important;
+  line-height: 1.4 !important;
+  border-radius: 3px !important;
+  cursor: pointer !important;
+  -webkit-transition: all 0.2s ease !important;
+  transition: all 0.2s ease !important;
+  vertical-align: middle !important;
+}
+
+.scene-translate-settings-btn:hover {
+  opacity: 0.85;
+  -webkit-transform: scale(1.05) rotate(30deg);
+  transform: scale(1.05) rotate(30deg);
+}
+
+/* Settings panel input focus */
+#scene-translate-settings-panel input:focus,
+#scene-translate-settings-panel select:focus {
+  outline: none;
+  border-color: #6c9ef7 !important;
+  -webkit-box-shadow: 0 0 0 2px rgba(108, 158, 247, 0.3) !important;
+  box-shadow: 0 0 0 2px rgba(108, 158, 247, 0.3) !important;
+}

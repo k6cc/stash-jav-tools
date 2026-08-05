@@ -1,0 +1,9 @@
+﻿name: Studio Tools
+description: Studio page toolkit - merge studios and search/update from StashDB.
+version: 1.0.0
+
+ui:
+  javascript:
+    - studioTools.js
+  css:
+    - studioTools.css

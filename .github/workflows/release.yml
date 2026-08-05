@@ -1,0 +1,108 @@
+﻿name: release
+
+# 发布 sceneTranslate / sceneGallerySync / studioTools 插件：
+#   1. 从 tag 提取插件名和版本号（sceneTranslate-v2.3.0 → sceneTranslate + 2.3.0）
+#   2. 打包对应子目录的 zip
+#   3. 计算 sha256 + 北京时间戳 + 下载 URL
+#   4. clone stash-plugins 仓库 → awk 更新 index.yml → push
+#   5. 创建 GitHub Release（上传 zip）
+# 需要 STASH_PLUGINS_TOKEN secret（PAT with repo scope）跨仓库 push。
+# secret 未设置时跳过 index.yml 更新，仅创建 release。
+
+on:
+  push:
+    tags:
+      - "sceneTranslate-v*.*.*"
+      - "sceneGallerySync-v*.*.*"
+      - "studioTools-v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve plugin and version
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PLUGIN_ID="${TAG%%-v*}"
+          VERSION="${TAG#*-v}"
+          echo "plugin_id=${PLUGIN_ID}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack zip
+        run: |
+          cd ${{ steps.ver.outputs.plugin_id }}
+          zip "../${{ steps.ver.outputs.plugin_id }}-v${{ steps.ver.outputs.version }}.zip" *
+
+      - name: Compute metadata
+        id: meta
+        run: |
+          ZIP="${{ steps.ver.outputs.plugin_id }}-v${{ steps.ver.outputs.version }}.zip"
+          SHA=$(sha256sum "$ZIP" | awk '{print $1}')
+          TS=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+          PATH_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/${ZIP}"
+          {
+            echo "sha=$SHA"
+            echo "ts=$TS"
+            echo "path_url=$PATH_URL"
+          } >> "$GITHUB_OUTPUT"
+          echo "=== Metadata ==="
+          echo "plugin   : ${{ steps.ver.outputs.plugin_id }}"
+          echo "zip      : $ZIP"
+          echo "sha256   : $SHA"
+          echo "date     : $TS"
+          echo "path     : $PATH_URL"
+
+      - name: Update stash-plugins index.yml
+        env:
+          PLUGIN_ID: ${{ steps.ver.outputs.plugin_id }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          DATE: ${{ steps.meta.outputs.ts }}
+          PATH_URL: ${{ steps.meta.outputs.path_url }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          STASH_PLUGINS_TOKEN: ${{ secrets.STASH_PLUGINS_TOKEN }}
+        run: |
+          if [ -z "$STASH_PLUGINS_TOKEN" ]; then
+            echo "⚠ STASH_PLUGINS_TOKEN secret not set — skipping index.yml update"
+            echo "  Manual update needed: clone k6cc/stash-plugins, update plugins/main/index.yml"
+            exit 0
+          fi
+          git clone https://x-access-token:${STASH_PLUGINS_TOKEN}@github.com/k6cc/stash-plugins.git /tmp/stash-plugins
+          cd /tmp/stash-plugins
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # awk 只更新匹配 PLUGIN_ID 的条目，避免误改其他插件
+          awk -v id="$PLUGIN_ID" -v version="$VERSION" -v date="$DATE" -v path="$PATH_URL" -v sha="$SHA" '
+          /^- id: / { in_block = ($3 == id) }
+          in_block && /^  version: / { print "  version: " version; next }
+          in_block && /^  date: / { print "  date: " date; next }
+          in_block && /^  path: / { print "  path: " path; next }
+          in_block && /^  sha256: / { print "  sha256: " sha; next }
+          { print }
+          ' plugins/main/index.yml > /tmp/index.yml && mv /tmp/index.yml plugins/main/index.yml
+          echo "=== Updated plugins/main/index.yml ==="
+          cat plugins/main/index.yml
+          git add plugins/main/index.yml
+          if git diff --cached --quiet; then
+            echo "index.yml already up to date — nothing to commit"
+          else
+            git commit -m "chore: bump ${PLUGIN_ID} to ${TAG}"
+            git push
+            echo "Pushed index.yml update to stash-plugins"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          files: ${{ steps.ver.outputs.plugin_id }}-v${{ steps.ver.outputs.version }}.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

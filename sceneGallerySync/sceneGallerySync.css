@@ -1,0 +1,13 @@
+.sgs-btn {
+  font-size: 14px !important;
+  padding: 2px 8px !important;
+  margin-left: 6px !important;
+  line-height: 1.4 !important;
+  border-radius: 3px !important;
+  cursor: pointer !important;
+  vertical-align: middle !important;
+}
+.sgs-btn:disabled {
+  opacity: 0.6;
+  cursor: wait !important;
+}

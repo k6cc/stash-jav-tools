@@ -42,6 +42,17 @@ class SceneGallerySync:
             if not self._stash.gql_checkPluginEnabled("nfoSceneParser"):
                 log.LogInfo("nfoSceneParser not found, exiting")
                 return
+            # 前台阶段先检查 extrafanart 文件夹
+            # extrafanart 是文件系统状态，不依赖 nfoSceneParser 的元数据写入
+            # 无 extrafanart 的 scene（如 /social/x/ 抓取内容）直接跳过，避免启动无谓的后台轮询
+            scene = self._stash.gql_findScene(scene_id)
+            if not scene or not scene.get("files"):
+                log.LogWarning(f"Scene {scene_id} not found or no files")
+                return
+            scene_dir = os.path.dirname(scene["files"][0]["path"])
+            if not self.__find_extrafanart_folder(scene_dir):
+                log.LogInfo("No extrafanart folder, skipping")
+                return
             self.__spawn_background(scene_id)
         elif mode == "background":
             self.__run_background(scene_id)
@@ -54,7 +65,7 @@ class SceneGallerySync:
                 return
             now = time.time()
             for f in os.listdir(self.PENDING_DIR):
-                if not f.endswith('.json'):
+                if not (f.endswith('.json') or f.endswith('.log')):
                     continue
                 fp = os.path.join(self.PENDING_DIR, f)
                 if os.path.isfile(fp) and now - os.path.getmtime(fp) > config.get_stale_file_max_age():
@@ -83,6 +94,12 @@ class SceneGallerySync:
         script_path = os.path.abspath(__file__)
         plugin_dir = os.path.dirname(script_path)
 
+        # 重定向 stdin/stdout 到 DEVNULL，stderr 到日志文件
+        # 关键：如果不重定向，后台子进程会继承前台的 stdout/stderr 管道句柄，
+        # 导致 stash 收不到 EOF，hook 一直阻塞直到后台超时退出
+        log_path = os.path.join(self.PENDING_DIR, f"{scene_id}.log")
+        log_fh = open(log_path, 'a', encoding='utf-8')
+
         try:
             if sys.platform == "win32":
                 subprocess.Popen(
@@ -90,6 +107,9 @@ class SceneGallerySync:
                     creationflags=0x00000008 | 0x00000200,
                     close_fds=True,
                     cwd=plugin_dir,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_fh,
                 )
             else:
                 subprocess.Popen(
@@ -97,10 +117,15 @@ class SceneGallerySync:
                     start_new_session=True,
                     close_fds=True,
                     cwd=plugin_dir,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=log_fh,
                 )
         except Exception as e:
             log.LogError(f"Background start failed: {repr(e)}")
             return
+        finally:
+            log_fh.close()
 
         log.LogInfo(f"Background task spawned for scene {scene_id}")
 
@@ -382,6 +407,7 @@ class SceneGallerySync:
 
 if __name__ == '__main__':
     try:
+        is_background = False
         if len(sys.argv) > 1:
             arg = sys.argv[1]
             if arg.endswith('.json') and os.path.isfile(arg):
@@ -395,10 +421,14 @@ if __name__ == '__main__':
                     "server_connection": task["server_connection"],
                     "args": {"mode": "background", "scene_id": task["scene_id"]},
                 }
+                is_background = True
             else:
                 fragment = json.loads(arg)
         else:
             fragment = json.loads(sys.stdin.read())
+
+        if is_background:
+            log.set_plain(True)
 
         log.LogInfo("sceneGallerySync starting")
         stash = StashInterface(fragment)

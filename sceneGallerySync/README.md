@@ -40,13 +40,13 @@ sceneGallerySync 是一个 Stash 插件，在影片扫描入库时自动创建�
 ```
 影片扫描 → nfoSceneParser 导入 NFO → Scene.Update.Post 触发
   → 检测 nfoSceneParser 是否启用
-  → 写入任务文件到 .sgs_pending/
-  → 启动独立后台进程（不阻塞扫描）
-  → 钩子立即退出
+  → 查询 scene 路径，前台检查 extrafanart 文件夹
+    → 不存在：钩子立即退出，不启动后台
+    → 存在：写入任务文件到 .sgs_pending/，启动独立后台进程
+  → 钩子立即退出（不阻塞扫描）
 
 后台进程：
   → 渐进退避等待影片元数据就绪（3s→5s→7s...最长15s，最多12次）
-  → 检查 extrafanart 文件夹是否存在且含图片
   → 查找封面、fanart、extrafanart 图片
   → 轮询等待图片入库（5s→7s→9s...最长15s，最多12次）
   → 四层搜索已有图库 → 创建或追加
@@ -56,9 +56,11 @@ sceneGallerySync 是一个 Stash 插件，在影片扫描入库时自动创建�
 ### 关键设计
 
 - **不阻塞扫描**：钩子模式使用一次性后台进程，钩子立即退出，不影响 Stash 扫描任务队列
+- **前台早期过滤**：`Scene.Update.Post` 阶段先检查 extrafanart 文件夹，无图库前置条件的 scene（如 `/social/x/` 抓取内容）直接跳过，不启动后台进程，不进行无谓的元数据轮询
+- **stdio 隔离**：后台子进程重定向 stdin/stdout 到 DEVNULL、stderr 到 `.sgs_pending/{scene_id}.log`，避免继承前台的 stash 管道句柄导致 hook 阻塞
 - **nfoSceneParser 依赖**：自动模式仅在 nfoSceneParser 启用时触发，避免无 NFO 数据时创建空图库
 - **进程隔离**：后台进程使用 `start_new_session=True`（Linux/Docker）或 `DETACHED_PROCESS`（Windows），成为独立进程
-- **过期清理**：`.sgs_pending/` 目录中超过 1 小时的任务文件自动清理
+- **过期清理**：`.sgs_pending/` 目录中超过 1 小时的任务文件（`.json`）和日志文件（`.log`）自动清理
 
 ## 依赖
 
@@ -295,7 +297,7 @@ services:
 | `sceneGallerySync.py` | 主程序，包含三种执行模式和图库创建逻辑 |
 | `stashInterface.py` | Stash GraphQL API 接口，含重试机制 |
 | `config.py` | 配置文件，管理文件名和文件夹名 |
-| `log.py` | Stash 日志协议封装（SOH/STX 编码） |
+| `log.py` | Stash 日志协议封装（SOH/STX 编码），后台模式输出纯文本到日志文件 |
 | `sceneGallerySync.js` | 前端注入脚本，在编辑页面添加"创建图库"按钮 |
 | `sceneGallerySync.css` | 前端按钮样式 |
 | `sceneGallerySync.yml` | 插件清单定义 |
@@ -335,4 +337,23 @@ A: 先在 Stash 中删除已有图库，然后在影片编辑页面点击"创建
 
 **Q: `.sgs_pending` 目录是什么？**
 
-A: 钩子模式下的临时任务目录，用于后台进程读取连接信息。任务文件在后台进程启动后立即删除，超过1小时的残留文件会自动清理。可以安全删除整个目录。
+A: 钩子模式下的临时任务目录，用于后台进程读取连接信息。任务文件（`.json`）在后台进程启动后立即删除；后台日志文件（`.log`，1.6.0 新增）记录后台进程运行日志。超过 1 小时的残留文件会自动清理。可以安全删除整个目录。
+
+## 变更历史
+
+### 1.6.0
+
+- **修复 hook 阻塞**：后台子进程未重定向 stdio，会继承前台的 stash stdout/stderr 管道句柄，导致 stash 在前台 `exit_plugin` 后仍收不到 EOF，hook 一直挂起直到后台超时（表现为手动编辑元数据时 UI 转圈数分钟、stash 日志出现 `operation cancelled`）
+  - 重定向后台子进程 stdin/stdout 到 DEVNULL，stderr 写入 `.sgs_pending/{scene_id}.log`
+  - 后台模式日志改用纯文本格式（`[INFO] xxx`），不再带 stash 协议前缀
+  - `__cleanup_stale_tasks` 同时清理过期 `.json` 和 `.log` 文件
+- **前台早期过滤 extrafanart**：`Scene.Update.Post` 阶段先查询 scene 路径并检查 extrafanart 文件夹，无文件夹的 scene（如 `/social/x/` 抓取内容）直接跳过，不启动后台进程，不进行无谓的 2.3 分钟 title 轮询
+  - extrafanart 是文件系统状态，不依赖 nfoSceneParser 的元数据写入，可在 hook 触发瞬间检查
+  - 保留 per-scene 顺序执行：每个 scene 的 hook 独立处理，不影响 stash 扫描线程调度
+
+### 1.5.0
+
+- 初始版本：钩子模式 + 后台模式 + 手动模式三种执行模式
+- 渐进退避轮询等待元数据和图片入库
+- 四层图库关联搜索，支持多碟影片自动共享同一图库
+- 低功耗 Docker 环境优化（GraphQL 重试、过期任务清理）

@@ -1,12 +1,12 @@
 # Scene Translate
 
-Stash 插件 — 在场景编辑页面添加一键翻译按钮，支持翻译标题和详情。
+Stash 插件 — 在场景和图片编辑页面添加一键翻译按钮，支持翻译标题和详情。
 
 ## 支持的翻译引擎
 
 | 引擎 | 需要代理 | 需要密钥 | 说明 |
 |------|---------|---------|------|
-| `google_free` | 否 | 否 | Google 免费翻译，开箱即用 |
+| `google_free` | 否 | 否 | Google 免费翻译，开箱即用（代理离线时走浏览器直连兜底） |
 | `google_api` | 是 | API Key | Google Cloud Translation API |
 | `microsoft` | 是 | API Key | Microsoft 翻译 |
 | `baidu` | 是 | App ID + 密钥 | 百度翻译 |
@@ -53,9 +53,19 @@ Stash 插件 — 在场景编辑页面添加一键翻译按钮，支持翻译标
 
 ## 使用方式
 
+### 适用页面
+
+翻译按钮会注入到以下编辑页面的 Title 和 Details 字段旁：
+
+- 场景编辑页：`/scenes/{id}`
+- 图片编辑页：`/images/{id}`
+
 ### Google Free（无需代理）
 
-选择 `google_free` 引擎后，无需任何额外操作，刷新页面即可使用翻译按钮。
+选择 `google_free` 引擎后，无需任何额外操作，刷新页面即可使用翻译按钮：
+
+- 代理在线时优先走代理（Python 端请求 Google）
+- 代理离线时自动走浏览器直连 `translate.googleapis.com`（需浏览器本机能访问 Google）
 
 ### 百度 / Microsoft / Google API / OpenAI（需要代理）
 

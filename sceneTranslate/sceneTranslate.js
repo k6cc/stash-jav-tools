@@ -1,11 +1,12 @@
 /**
- * Scene Translate Plugin v2.4
+ * Scene Translate Plugin v2.4.0
  *
- * Adds one-click translate buttons to scene edit page.
- * Proxy must be started manually via "Start Translate Proxy" task in plugin settings.
+ * Adds one-click translate buttons to scene & image edit pages.
+ * google_free engine works without proxy (browser direct fallback);
+ * other engines require the "Start Translate Proxy" task in plugin settings.
  */
 
-console.log("[SceneTranslate] v2.4 loaded");
+console.log("[SceneTranslate] v2.4.0 loaded");
 
 try {
 (function () {
@@ -158,7 +159,8 @@ try {
       btn.textContent = "\u23F3";
 
       ensureProxy().then(function (online) {
-        if (!online) {
+        // google_free 可在代理离线时走浏览器直连兜底，不强制要求代理在线
+        if (!online && config.translateTool !== "google_free") {
           throw new Error("Proxy not running! Click 'Start Translate Proxy' in plugin settings.");
         }
         return translateText(text, config.targetLanguage);
@@ -278,14 +280,16 @@ try {
   // ─── URL Helpers ──────────────────────────────────────────────────
 
   function getSceneIdFromUrl() {
-    var m = window.location.pathname.match(/\/scenes?\/(\d+)/);
-    if (m) return m[1];
-    m = window.location.hash.match(/\/scenes?\/(\d+)/);
-    return m ? m[1] : null;
+    // 同时支持 scenes 和 images 编辑页，返回 "类型:id" 以避免 id 空间重叠
+    var re = /\/(scenes?|images?)\/(\d+)/;
+    var m = window.location.pathname.match(re);
+    if (m) return m[1] + ":" + m[2];
+    m = window.location.hash.match(re);
+    return m ? (m[1] + ":" + m[2]) : null;
   }
 
   function isScenePage() {
-    return /\/scenes?\/\d+/.test(window.location.pathname + window.location.hash);
+    return /\/(scenes?|images?)\/\d+/.test(window.location.pathname + window.location.hash);
   }
 
   // ─── Init ──────────────────────────────────────────────────────────
@@ -304,7 +308,8 @@ try {
   function setupObservers() {
     var PluginApi = window.PluginApi;
     if (PluginApi && PluginApi.patch && PluginApi.patch.after) {
-      var names = ["Scene", "SceneEditPanel", "SceneEdit", "SceneDetails"];
+      var names = ["Scene", "SceneEditPanel", "SceneEdit", "SceneDetails",
+                   "Image", "ImageEditPanel", "ImageEdit", "ImageDetails"];
       for (var i = 0; i < names.length; i++) {
         try {
           PluginApi.patch.after(names[i], function (props) {

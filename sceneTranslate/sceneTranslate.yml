@@ -1,6 +1,6 @@
 name: Scene Translate
-description: Add one-click translate buttons to scene edit page. Supports Google Free, Google API, Microsoft, Baidu, DeepL (official & DeepLX), and OpenAI engines.
-version: 2.3.0
+description: Add one-click translate buttons to scene & image edit pages. Supports Google Free (proxy-free), Google API, Microsoft, Baidu, DeepL (official & DeepLX), and OpenAI engines.
+version: 2.4.0
 url: https://github.com/stash-translate/sceneTranslate
 
 exec:

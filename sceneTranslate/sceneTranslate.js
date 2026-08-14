@@ -212,19 +212,38 @@ try {
     var titleInput = null, titleLabel = null;
     var detailsTextarea = null, detailsLabel = null;
 
-    for (var i = 0; i < labels.length; i++) {
+    // 结构锚点优先（与界面语言无关）：Stash 编辑表单字段带 data-field / label[for] 属性
+    var tRow = document.querySelector('[data-field="title"]');
+    if (tRow) {
+      titleInput = tRow.querySelector("input");
+      titleLabel = tRow.querySelector("label");
+    } else {
+      titleInput = document.querySelector("input#title, input[name='title']");
+      titleLabel = document.querySelector("label[for='title']");
+    }
+    var dRow = document.querySelector('[data-field="details"]');
+    if (dRow) {
+      detailsTextarea = dRow.querySelector("textarea");
+      detailsLabel = dRow.querySelector("label");
+    } else {
+      detailsTextarea = document.querySelector("textarea#details, textarea[name='details']");
+      detailsLabel = document.querySelector("label[for='details']");
+    }
+
+    // 文本匹配兜底（仅旧版本 Stash 无结构属性时使用）
+    for (var i = 0; i < labels.length && (!titleInput || !detailsTextarea); i++) {
       var label = labels[i];
       var text = (label.textContent || "").trim();
       if (label.querySelector(".scene-translate-btn")) continue;
 
-      if (TITLE_PATTERNS.test(text) && !SKIP_PATTERNS.test(text)) {
+      if (!titleInput && TITLE_PATTERNS.test(text) && !SKIP_PATTERNS.test(text)) {
         var row = label.closest(".row") || label.closest(".form-group") || label.parentElement;
         if (row) {
           var input = row.querySelector('input[type="text"], input:not([type])');
           if (input) { titleInput = input; titleLabel = label; }
         }
       }
-      if (DETAILS_PATTERNS.test(text)) {
+      if (!detailsTextarea && DETAILS_PATTERNS.test(text)) {
         var row = label.closest(".row") || label.closest(".form-group") || label.parentElement;
         if (row) {
           var ta = row.querySelector("textarea");

@@ -41,14 +41,20 @@ console.log("[SceneGallerySync] v1.5.0 loaded");
     if (!sceneId) return;
     if (sceneId === injectedSceneId && document.querySelector(".sgs-btn")) return;
 
-    var labels = document.querySelectorAll("label");
-    var target = null;
-    for (var i = 0; i < labels.length; i++) {
-      var t = labels[i].textContent.trim();
-      if (labels[i].querySelector(".sgs-btn")) continue;
-      if (/galleries|gallery|图库/i.test(t) && !/studio|movie|tag|performer|工作室|标签|演员|系列/i.test(t)) {
-        target = labels[i];
-        break;
+    // 结构锚点优先（与界面语言无关）：Stash 编辑表单字段带 data-field / label[for] 属性
+    var target = document.querySelector('label[for="gallery_ids"]')
+      || document.querySelector('[data-field="gallery_ids"] label');
+
+    // 文本匹配兜底（仅旧版本 Stash 无结构属性时使用）
+    if (!target) {
+      var labels = document.querySelectorAll("label");
+      for (var i = 0; i < labels.length; i++) {
+        var t = labels[i].textContent.trim();
+        if (labels[i].querySelector(".sgs-btn")) continue;
+        if (/galleries|gallery|galerie|图库|ギャラリー|갤러리/i.test(t) && !/studio|movie|tag|performer|工作室|标签|演员|系列/i.test(t)) {
+          target = labels[i];
+          break;
+        }
       }
     }
     if (!target) return;

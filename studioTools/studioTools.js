@@ -100,13 +100,28 @@ try {
     });
   }
 
-  // 查找"自动标签"锚点按钮（两个模块共用）
-  function findAnchorButton() {
+  // 查找按钮注入锚点（两个模块共用）。
+  // 结构锚点与界面语言无关；文本匹配仅作旧版本兜底。
+  // 返回 { parent: 容器, before: 参考节点或 null }，按钮通过 parent.insertBefore(btn, before) 插入。
+  function getInjectSpot() {
+    // 1) Auto Tag 按钮：.details-edit 中唯一被 <div> 包裹的直接子按钮（Stash DetailsEditNavbar 结构）
+    var autoTag = document.querySelector("#studio-page .details-edit > div > button");
+    if (autoTag && autoTag.parentElement) {
+      return { parent: autoTag.parentElement, before: null };
+    }
+    // 2) 编辑栏自身：.save/.delete 类名与语言无关，插到其前面
+    var navbar = document.querySelector("#studio-page .details-edit");
+    if (navbar) {
+      var ref = navbar.querySelector("button.save") || navbar.querySelector("button.delete");
+      if (ref) return { parent: navbar, before: ref };
+    }
+    // 3) 文本兜底：按界面文本匹配 Auto Tag（去空格后比较，兼容 "Auto Tag…" 等变体）
     var allButtons = document.querySelectorAll("button");
     for (var i = 0; i < allButtons.length; i++) {
       var text = (allButtons[i].textContent || "").trim();
-      if (text.indexOf("自动标签") !== -1 || text.toLowerCase().indexOf("autotag") !== -1) {
-        return allButtons[i];
+      var compact = text.toLowerCase().replace(/[\s…]+/g, "");
+      if (text.indexOf("自动标签") !== -1 || compact.indexOf("autotag") !== -1) {
+        return { parent: allButtons[i].parentElement, before: null };
       }
     }
     return null;
@@ -1281,14 +1296,14 @@ try {
 
       fetchCurrentStudio().then(function (studio) {
         if (!studio || document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
-        var anchorBtn = findAnchorButton();
-        if (!anchorBtn) return;
+        var spot = getInjectSpot();
+        if (!spot) return;
         var btn = document.createElement("button");
         btn.className = "st-inject-btn sm-btn";
         btn.textContent = "合并";
         btn.title = "将此工作室与另一个合并";
         btn.addEventListener("click", function () { showSelectDialog(studio); });
-        anchorBtn.parentElement.appendChild(btn);
+        spot.parent.insertBefore(btn, spot.before);
         _mergeBtnInjected = true;
       });
     }
@@ -1327,8 +1342,8 @@ try {
 
       fetchCurrentStudio().then(function (studio) {
         if (!studio || document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
-        var anchorBtn = findAnchorButton();
-        if (!anchorBtn) return;
+        var spot = getInjectSpot();
+        if (!spot) return;
 
         var btn = document.createElement("button");
         btn.className = "st-inject-btn ss-search-btn";
@@ -1340,7 +1355,7 @@ try {
           e.stopPropagation();
           showSearchPanel(btn, studio);
         });
-        anchorBtn.insertAdjacentElement("afterend", btn);
+        spot.parent.insertBefore(btn, spot.before);
         _searchBtnInjected = true;
       });
     }

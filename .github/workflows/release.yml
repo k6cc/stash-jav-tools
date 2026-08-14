@@ -1,4 +1,4 @@
-﻿name: release
+name: release
 
 # 发布 sceneTranslate / sceneGallerySync / studioTools 插件：
 #   1. 从 tag 提取插件名和版本号（sceneTranslate-v2.3.0 → sceneTranslate + 2.3.0）
@@ -15,6 +15,12 @@ on:
       - "sceneTranslate-v*.*.*"
       - "sceneGallerySync-v*.*.*"
       - "studioTools-v*.*.*"
+
+# 串行执行：多个插件 tag 同时推送时会竞争推送 stash-plugins 的 index.yml，
+# 并发推送会互相冲突导致失败，排队依次执行。
+concurrency:
+  group: release-stash-plugins
+  cancel-in-progress: false
 
 permissions:
   contents: write

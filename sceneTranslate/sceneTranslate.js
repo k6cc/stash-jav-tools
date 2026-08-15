@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.5.1
+ * Scene Translate Plugin v2.5.2
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
@@ -8,7 +8,7 @@
  * other engines require the "Start Translate Proxy" task in plugin settings.
  */
 
-console.log("[SceneTranslate] v2.5.1 loaded");
+console.log("[SceneTranslate] v2.5.2 loaded");
 
 try {
 (function () {

@@ -268,9 +268,14 @@ def sync_settings_with_stash(stash_port):
         log(f"Warning: Could not fetch Stash plugin config: {e}")
         return
 
+    # 详细日志：Stash 当前的值
+    log(f"Stash plugin config: {stash_cfg}")
+    log(f"Local _settings: tool={_settings.get('translateTool')}, lang={_settings.get('targetLanguage')}, idle={_settings.get('idleTimeout')}")
+
     stash_has_value = bool(
         stash_cfg.get("translateTool") or stash_cfg.get("targetLanguage")
     )
+    log(f"stash_has_value={stash_has_value}")
 
     if stash_has_value:
         # Stash → config.json
@@ -289,10 +294,13 @@ def sync_settings_with_stash(stash_port):
                 updates[k] = stash_val
         if updates:
             save_config_file_fields(updates)
-            log(f"Synced Stash → config.json: {list(updates.keys())}")
+            log(f"Synced Stash → config.json: {updates}")
+        else:
+            log("Stash and config.json already in sync (Stash → config.json direction)")
     else:
         # config.json → Stash（首次启用插件）
         values = {k: _settings.get(k) for k in SYNC_KEYS if k in _settings}
+        log(f"Writing to Stash: {values}")
         try:
             update_stash_plugin_config(stash_port, values)
             log(f"Synced config.json → Stash: {list(values.keys())}")
@@ -857,6 +865,11 @@ def main():
         detected_port = detect_stash_port(stash_args)
         if detected_port:
             child_args += ["--stash-port", str(detected_port)]
+            # 在父进程执行 sync（日志对 Stash 可见，_settings 已正确加载）
+            log(f"Detected Stash on port {detected_port}, syncing settings...")
+            sync_settings_with_stash(detected_port)
+        else:
+            log("No Stash port detected (idle timeout only)")
         spawn_background_process(child_args)
 
         if wait_for_proxy(port, max_wait=15):

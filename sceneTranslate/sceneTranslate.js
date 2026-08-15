@@ -1,12 +1,14 @@
 /**
- * Scene Translate Plugin v2.4.0
+ * Scene Translate Plugin v2.5.0
  *
  * Adds one-click translate buttons to scene & image edit pages.
+ * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
+ * plugin config and synced to config.json on proxy startup.
  * google_free engine works without proxy (browser direct fallback);
  * other engines require the "Start Translate Proxy" task in plugin settings.
  */
 
-console.log("[SceneTranslate] v2.4.0 loaded");
+console.log("[SceneTranslate] v2.5.0 loaded");
 
 try {
 (function () {
@@ -17,6 +19,7 @@ try {
   var config = {
     translateTool: "google_free",
     targetLanguage: "zh-CN",
+    idleTimeout: 600,
     proxyUrl: "http://127.0.0.1:9998",
   };
 
@@ -45,6 +48,37 @@ try {
     );
   }
 
+  // ─── Stash GraphQL (Plugin Settings) ───────────────────────────────
+  // 插件设置存储在 Stash 的 config.yml 中，通过 GraphQL 读写。
+  // 这样不依赖代理在线就能拿到目标语言，解决 google_free 离线模式下的配置读取问题。
+
+  var PLUGIN_ID = "sceneTranslate";
+
+  function callGQL(query, variables) {
+    return fetch("/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query, variables: variables || {} }),
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.errors && d.errors.length) throw new Error(d.errors[0].message);
+      return d.data;
+    });
+  }
+
+  function fetchStashPluginConfig() {
+    return callGQL("query { configuration { plugins } }").then(function (data) {
+      var plugins = (data && data.configuration && data.configuration.plugins) || {};
+      return plugins[PLUGIN_ID] || {};
+    });
+  }
+
+  function writeStashPluginConfig(values) {
+    return callGQL(
+      "mutation ConfigurePlugin($plugin_id: ID!, $input: Map!) { configurePlugin(plugin_id: $plugin_id, input: $input) }",
+      { plugin_id: PLUGIN_ID, input: values }
+    );
+  }
+
   // ─── Proxy Connection ──────────────────────────────────────────────
 
   function fetchProxyConfig() {
@@ -64,7 +98,41 @@ try {
   }
 
   function loadConfig() {
-    return fetchProxyConfig();
+    // 优先读取 Stash 插件设置（不依赖代理在线）
+    return fetchStashPluginConfig().then(function (stashCfg) {
+      var hasStashValue =
+        (stashCfg.translateTool && stashCfg.translateTool !== "") ||
+        (stashCfg.targetLanguage && stashCfg.targetLanguage !== "") ||
+        stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null;
+
+      if (hasStashValue) {
+        // Stash 设置优先：应用到内存 config
+        if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
+        if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
+        if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
+          var n = parseInt(stashCfg.idleTimeout, 10);
+          if (!isNaN(n)) config.idleTimeout = n;
+        }
+        // 同时尝试同步到代理（向后兼容，代理离线则忽略）
+        fetchProxyConfig().catch(function () { /* proxy offline, fine */ });
+        return true;
+      }
+
+      // Stash 设置为空（首次使用）→ 尝试从代理读取并写入 Stash 实现首次同步
+      return fetchProxyConfig().then(function (online) {
+        if (online) {
+          writeStashPluginConfig({
+            translateTool: config.translateTool,
+            targetLanguage: config.targetLanguage,
+            idleTimeout: config.idleTimeout,
+          }).catch(function () { /* ignore write failure */ });
+        }
+        return true;
+      });
+    }).catch(function () {
+      // GraphQL 不可用（旧版 Stash 或异常）→ 回退到代理
+      return fetchProxyConfig();
+    });
   }
 
   function ensureProxy() {
@@ -159,8 +227,18 @@ try {
       btn.textContent = "\u23F3";
 
       ensureProxy().then(function (online) {
+        // 每次点击前重新读取 Stash 插件设置，确保用户在设置页改的参数立即生效
+        return fetchStashPluginConfig().then(function (stashCfg) {
+          if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
+          if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
+          if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
+            var n = parseInt(stashCfg.idleTimeout, 10);
+            if (!isNaN(n)) config.idleTimeout = n;
+          }
+        }).catch(function () { /* GraphQL 不可用则沿用内存配置 */ });
+      }).then(function () {
         // google_free 可在代理离线时走浏览器直连兜底，不强制要求代理在线
-        if (!online && config.translateTool !== "google_free") {
+        if (!proxyOnline && config.translateTool !== "google_free") {
           throw new Error("Proxy not running! Click 'Start Translate Proxy' in plugin settings.");
         }
         return translateText(text, config.targetLanguage);

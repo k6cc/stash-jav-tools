@@ -21,6 +21,7 @@ import sys
 import json
 import hashlib
 import random
+import re
 import time
 import argparse
 import os
@@ -175,6 +176,128 @@ def load_settings(path):
         val = os.environ.get(env_key, "")
         if val:
             _settings[settings_key] = val
+
+
+# ─── Stash Plugin Settings Sync (Stash ↔ config.json) ───────────────────────
+# 插件设置（translateTool/targetLanguage/idleTimeout）存储在 Stash 的 config.yml 中。
+# 这里实现双向同步：
+#   - Stash 有值 → 覆盖 config.json（保留注释的字段级更新）
+#   - Stash 无值 → 用 config.json 的值写入 Stash
+# 假设本地部署无认证；如需认证请通过 stash_args 的 server_connection 传递。
+
+PLUGIN_ID = "sceneTranslate"
+SYNC_KEYS = ("translateTool", "targetLanguage", "idleTimeout")
+
+
+def _gql_call(stash_port, query, variables=None, timeout=5):
+    """调用 Stash GraphQL endpoint（本地无认证假设）。"""
+    url = f"http://127.0.0.1:{stash_port}/graphql"
+    body = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+    req = Request(url, data=body, headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=timeout) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    if result.get("errors"):
+        raise RuntimeError(f"GraphQL error: {result['errors']}")
+    return result.get("data")
+
+
+def fetch_stash_plugin_config(stash_port):
+    """通过 GraphQL 读取 Stash 插件配置。"""
+    data = _gql_call(stash_port, "query { configuration { plugins } }")
+    plugins = (data or {}).get("configuration", {}).get("plugins", {}) or {}
+    return plugins.get(PLUGIN_ID, {}) or {}
+
+
+def update_stash_plugin_config(stash_port, values):
+    """通过 GraphQL mutation 写入 Stash 插件配置。"""
+    mutation = (
+        "mutation ConfigurePlugin($plugin_id: ID!, $input: Map!) "
+        "{ configurePlugin(plugin_id: $plugin_id, input: $input) }"
+    )
+    _gql_call(stash_port, mutation, {"plugin_id": PLUGIN_ID, "input": values})
+
+
+def save_config_file_fields(updates):
+    """保留注释地更新 config.json 中指定字段。
+    updates: dict[str, Any] - 要更新的字段及其新值。
+    """
+    if not _settings_path or not os.path.exists(_settings_path):
+        return
+    try:
+        with open(_settings_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except Exception as e:
+        log(f"Warning: Could not read config.json for update: {e}")
+        return
+
+    changed = False
+    for key, new_val in updates.items():
+        if key not in SYNC_KEYS:
+            continue
+        # JSON 序列化值（字符串、整数等）
+        val_json = json.dumps(new_val, ensure=False)
+        # 匹配 "key": <old_value> 形式（容忍键前后空白、值类型变化）
+        pattern = re.compile(
+            r'("(?:' + re.escape(key) + r')"\s*:\s*)(?:"[^"]*"|\d+|-?\d+\.\d+|true|false|null)',
+            re.DOTALL,
+        )
+        new_text, n = pattern.subn(lambda m: m.group(1) + val_json, text, count=1)
+        if n > 0:
+            text = new_text
+            changed = True
+
+    if changed:
+        try:
+            with open(_settings_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            log(f"Updated config.json fields: {list(updates.keys())}")
+        except Exception as e:
+            log(f"Warning: Could not write config.json: {e}")
+
+
+def sync_settings_with_stash(stash_port):
+    """Stash 插件配置与 config.json 双向同步。
+    - Stash 有值 → 用 Stash 值覆盖 _settings 与 config.json
+    - Stash 无值 → 用 _settings（来自 config.json）写入 Stash
+    """
+    if not stash_port:
+        return
+    try:
+        stash_cfg = fetch_stash_plugin_config(stash_port)
+    except Exception as e:
+        log(f"Warning: Could not fetch Stash plugin config: {e}")
+        return
+
+    stash_has_value = any(
+        stash_cfg.get(k) not in (None, "") for k in SYNC_KEYS
+    )
+
+    if stash_has_value:
+        # Stash → config.json
+        updates = {}
+        for k in SYNC_KEYS:
+            stash_val = stash_cfg.get(k)
+            if stash_val is None or stash_val == "":
+                continue
+            if k == "idleTimeout":
+                try:
+                    stash_val = int(stash_val)
+                except (ValueError, TypeError):
+                    continue
+            if _settings.get(k) != stash_val:
+                _settings[k] = stash_val
+                updates[k] = stash_val
+        if updates:
+            save_config_file_fields(updates)
+            log(f"Synced Stash → config.json: {list(updates.keys())}")
+    else:
+        # config.json → Stash（首次启用插件）
+        values = {k: _settings.get(k) for k in SYNC_KEYS if k in _settings}
+        try:
+            update_stash_plugin_config(stash_port, values)
+            log(f"Synced config.json → Stash: {list(values.keys())}")
+        except Exception as e:
+            log(f"Warning: Could not write Stash plugin config: {e}")
 
 
 # ─── Translation Engines ────────────────────────────────────────────────────
@@ -719,6 +842,8 @@ def main():
     _stash_port = detect_stash_port(stash_args)
     if _stash_port:
         log(f"Detected Stash on port {_stash_port}")
+        # Stash 插件配置 ↔ config.json 双向同步
+        sync_settings_with_stash(_stash_port)
     else:
         log("No Stash port detected (idle timeout only)")
 

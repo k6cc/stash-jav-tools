@@ -47,4 +47,4 @@ settings:
   idleTimeout:
     displayName: 空闲超时（秒）
     description: "代理无翻译请求时自动关闭的秒数，0 表示不自动关闭"
-    type: INTEGER
+    type: NUMBER

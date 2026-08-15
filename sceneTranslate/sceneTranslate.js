@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.5.0
+ * Scene Translate Plugin v2.5.1
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
@@ -8,7 +8,7 @@
  * other engines require the "Start Translate Proxy" task in plugin settings.
  */
 
-console.log("[SceneTranslate] v2.5.0 loaded");
+console.log("[SceneTranslate] v2.5.1 loaded");
 
 try {
 (function () {
@@ -79,6 +79,15 @@ try {
     );
   }
 
+  // 将 Stash 配置同步到代理的 config.json（代理在线时生效，离线则忽略）
+  function syncProxyConfig(values) {
+    return fetchWithTimeout(config.proxyUrl + "/sync_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    }, 3000).then(function (r) { return r.json(); }).catch(function () { /* proxy offline, fine */ });
+  }
+
   // ─── Proxy Connection ──────────────────────────────────────────────
 
   function fetchProxyConfig() {
@@ -102,8 +111,7 @@ try {
     return fetchStashPluginConfig().then(function (stashCfg) {
       var hasStashValue =
         (stashCfg.translateTool && stashCfg.translateTool !== "") ||
-        (stashCfg.targetLanguage && stashCfg.targetLanguage !== "") ||
-        stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null;
+        (stashCfg.targetLanguage && stashCfg.targetLanguage !== "");
 
       if (hasStashValue) {
         // Stash 设置优先：应用到内存 config
@@ -234,6 +242,16 @@ try {
           if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
             var n = parseInt(stashCfg.idleTimeout, 10);
             if (!isNaN(n)) config.idleTimeout = n;
+          }
+          // 更新按钮 tooltip 反映最新配置
+          btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+          // 代理在线时，将 Stash 配置同步到 config.json
+          if (proxyOnline) {
+            syncProxyConfig({
+              translateTool: config.translateTool,
+              targetLanguage: config.targetLanguage,
+              idleTimeout: config.idleTimeout,
+            });
           }
         }).catch(function () { /* GraphQL 不可用则沿用内存配置 */ });
       }).then(function () {

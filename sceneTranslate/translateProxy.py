@@ -268,8 +268,8 @@ def sync_settings_with_stash(stash_port):
         log(f"Warning: Could not fetch Stash plugin config: {e}")
         return
 
-    stash_has_value = any(
-        stash_cfg.get(k) not in (None, "") for k in SYNC_KEYS
+    stash_has_value = bool(
+        stash_cfg.get("translateTool") or stash_cfg.get("targetLanguage")
     )
 
     if stash_has_value:
@@ -503,6 +503,8 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             self._handle_translate()
         elif self.path == "/shutdown":
             self._handle_shutdown()
+        elif self.path == "/sync_config":
+            self._handle_sync_config()
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -522,6 +524,31 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             "translateTool": _settings.get("translateTool", "google_free"),
             "targetLanguage": _settings.get("targetLanguage", "zh-CN"),
         })
+
+    def _handle_sync_config(self):
+        """浏览器 POST Stash 配置值 → 更新 _settings 与 config.json"""
+        try:
+            body = self._read_body()
+        except Exception as e:
+            self._send_json({"error": f"Invalid request body: {e}"}, 400)
+            return
+        updates = {}
+        for k in SYNC_KEYS:
+            val = body.get(k)
+            if val is None or val == "":
+                continue
+            if k == "idleTimeout":
+                try:
+                    val = int(val)
+                except (ValueError, TypeError):
+                    continue
+            if _settings.get(k) != val:
+                _settings[k] = val
+                updates[k] = val
+        if updates:
+            save_config_file_fields(updates)
+            log(f"Synced via /sync_config: {list(updates.keys())}")
+        self._send_json({"status": "ok", "updated": list(updates.keys())})
 
     def _handle_translate(self):
         reset_idle_timer()
@@ -778,6 +805,7 @@ def main():
     parser.add_argument("--config", default="", help="Path to config.json (supports // comments)")
     parser.add_argument("--detach", action="store_true", help="Run as detached background process (for Stash task)")
     parser.add_argument("--restart", action="store_true", help="Restart: kill existing proxy before starting (for Stash task)")
+    parser.add_argument("--stash-port", type=int, default=0, help="Stash server port (for GraphQL sync)")
     args = parser.parse_args()
 
     # Check if called by Stash with task args via stdin
@@ -825,6 +853,10 @@ def main():
             child_args += ["--port", str(args.port)]
         if args.config:
             child_args += ["--config", args.config]
+        # 传递 Stash 端口给子进程（用于 GraphQL 同步）
+        detected_port = detect_stash_port(stash_args)
+        if detected_port:
+            child_args += ["--stash-port", str(detected_port)]
         spawn_background_process(child_args)
 
         if wait_for_proxy(port, max_wait=15):
@@ -839,7 +871,7 @@ def main():
         return
 
     global _stash_port
-    _stash_port = detect_stash_port(stash_args)
+    _stash_port = args.stash_port or detect_stash_port(stash_args)
     if _stash_port:
         log(f"Detected Stash on port {_stash_port}")
         # Stash 插件配置 ↔ config.json 双向同步

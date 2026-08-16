@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.6.1
+ * Scene Translate Plugin v2.6.4
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
@@ -9,7 +9,7 @@
  * Proxy URL auto-detects host from Stash URL (supports Docker port mapping).
  */
 
-console.log("[SceneTranslate] v2.6.1 loaded");
+console.log("[SceneTranslate] v2.6.4 loaded");
 
 try {
 (function () {
@@ -316,43 +316,24 @@ try {
       }
     }
 
-    if (!titleInput) {
-      var allInputs = document.querySelectorAll('input[type="text"], input:not([type])');
-      if (allInputs.length > 0) {
-        titleInput = allInputs[0];
-        titleLabel = titleInput.closest(".row") ? titleInput.closest(".row").querySelector("label") : null;
-      }
-    }
-    if (!detailsTextarea) {
-      var allTAs = document.querySelectorAll("textarea");
-      if (allTAs.length > 0) {
-        detailsTextarea = allTAs[0];
-        detailsLabel = detailsTextarea.closest(".row") ? detailsTextarea.closest(".row").querySelector("label") : null;
-      }
-    }
+    // 找不到 label 时放弃本次注入（不使用 fallback 注入到 block 容器，避免整行显示）
+    // 等待下次重试（onUrlChange 的多次 setTimeout / MutationObserver）
+    if (titleInput && !titleLabel) titleInput = null;
+    if (detailsTextarea && !detailsLabel) detailsTextarea = null;
+
+    // 字段未准备好说明 DOM 还在渲染，等待下次重试
+    if (!titleInput && !detailsTextarea) return;
 
     var injected = false;
 
     if (titleInput && titleLabel && !titleLabel.querySelector(".scene-translate-btn")) {
       titleLabel.appendChild(createTranslateButton(titleInput, "title"));
       injected = true;
-    } else if (titleInput) {
-      var w = titleInput.closest(".col-sm-9") || titleInput.parentElement;
-      if (w && !w.querySelector(".scene-translate-btn")) {
-        w.appendChild(createTranslateButton(titleInput, "title"));
-        injected = true;
-      }
     }
 
     if (detailsTextarea && detailsLabel && !detailsLabel.querySelector(".scene-translate-btn")) {
       detailsLabel.appendChild(createTranslateButton(detailsTextarea, "details"));
       injected = true;
-    } else if (detailsTextarea) {
-      var w = detailsTextarea.closest(".col-lg-12") || detailsTextarea.closest(".col-sm-9") || detailsTextarea.parentElement;
-      if (w && !w.querySelector(".scene-translate-btn")) {
-        w.appendChild(createTranslateButton(detailsTextarea, "details"));
-        injected = true;
-      }
     }
 
     if (injected) {
@@ -363,8 +344,8 @@ try {
   // ─── URL Helpers ──────────────────────────────────────────────────
 
   function getSceneIdFromUrl() {
-    // 同时支持 scenes 和 images 编辑页，返回 "类型:id" 以避免 id 空间重叠
-    var re = /\/(scenes?|images?)\/(\d+)/;
+    // 支持 scenes/images/galleries 编辑页，返回 "类型:id" 以避免 id 空间重叠
+    var re = /\/(scenes?|images?|galleries?)\/(\d+)/;
     var m = window.location.pathname.match(re);
     if (m) return m[1] + ":" + m[2];
     m = window.location.hash.match(re);
@@ -372,20 +353,25 @@ try {
   }
 
   function isScenePage() {
-    return /\/(scenes?|images?)\/\d+/.test(window.location.pathname + window.location.hash);
+    return /\/(scenes?|images?|galleries?)\/\d+/.test(window.location.pathname + window.location.hash);
   }
 
   // ─── Init ──────────────────────────────────────────────────────────
 
   function initPlugin() {
+    // 立即注册观察器，不等待 loadConfig
+    // 否则 fetch 期间 React 组件已渲染，错过第一次 patch 回调和 MutationObserver 首次触发
+    setupObservers();
+    if (isScenePage()) {
+      // 多次重试，覆盖 DOM 渐进渲染（Chrome 翻译干扰下更慢）
+      setTimeout(injectTranslateButtons, 300);
+      setTimeout(injectTranslateButtons, 1000);
+      setTimeout(injectTranslateButtons, 2000);
+      setTimeout(injectTranslateButtons, 3000);
+    }
+    // 异步加载配置，完成后刷新已注入按钮的 tooltip
     loadConfig().then(function () {
-      setupObservers();
-      // 已注入的按钮刷新 tooltip，新页面注入的按钮直接用最新 config
       refreshButtonTooltips();
-      if (isScenePage()) {
-        setTimeout(injectTranslateButtons, 300);
-        setTimeout(injectTranslateButtons, 1000);
-      }
     });
   }
 
@@ -453,8 +439,11 @@ try {
     loadConfig().then(function () {
       refreshButtonTooltips();
     });
+    // 多次重试，覆盖 Chrome 翻译干扰下 DOM 渲染延迟的时机
     setTimeout(injectTranslateButtons, 300);
     setTimeout(injectTranslateButtons, 1000);
+    setTimeout(injectTranslateButtons, 2000);
+    setTimeout(injectTranslateButtons, 3000);
   }
 
   if (document.readyState === "loading") {

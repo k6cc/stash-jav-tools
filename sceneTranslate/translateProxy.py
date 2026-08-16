@@ -475,7 +475,7 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             }
         self._send_json({
             "status": "running",
-            "version": "2.6.1",
+            "version": "2.6.4",
             "currentEngine": _settings.get("translateTool", "google_free"),
             "currentLang": _settings.get("targetLanguage", "zh-CN"),
             "engines": engines_status,
@@ -765,7 +765,7 @@ def main():
         signal.signal(signal.SIGTERM, shutdown)
 
     log(f"")
-    log(f"  Scene Translate Proxy v2.6.1")
+    log(f"  Scene Translate Proxy v2.6.4")
     log(f"  http://{bind_host}:{port}")
     if in_docker:
         log(f"  Docker detected: bound to 0.0.0.0 (requires -p {port}:{port})")

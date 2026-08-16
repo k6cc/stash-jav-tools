@@ -1,14 +1,15 @@
 /**
- * Scene Translate Plugin v2.6.0
+ * Scene Translate Plugin v2.6.1
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
  * plugin config only. config.json holds proxyPort and API keys.
  * google_free engine works without proxy (browser direct fallback);
  * other engines require the "Start Translate Proxy" task in plugin settings.
+ * Proxy URL auto-detects host from Stash URL (supports Docker port mapping).
  */
 
-console.log("[SceneTranslate] v2.6.0 loaded");
+console.log("[SceneTranslate] v2.6.1 loaded");
 
 try {
 (function () {
@@ -16,11 +17,15 @@ try {
 
   // ─── Config ────────────────────────────────────────────────────────
 
+  // 用访问 Stash 的 hostname 自动推断代理 URL
+  // 裸机: localhost/127.0.0.1 → 浏览器直接访问本机代理
+  // Docker: 192.168.x.x → 浏览器访问映射到容器代理的宿主机端口
+  var _proxyHost = window.location.hostname || "127.0.0.1";
   var config = {
     translateTool: "google_free",
     targetLanguage: "zh-CN",
     idleTimeout: 600,
-    proxyUrl: "http://127.0.0.1:9998",
+    proxyUrl: "http://" + _proxyHost + ":9998",
   };
 
   var proxyOnline = false;

@@ -475,7 +475,7 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             }
         self._send_json({
             "status": "running",
-            "version": "2.6.0",
+            "version": "2.6.1",
             "currentEngine": _settings.get("translateTool", "google_free"),
             "currentLang": _settings.get("targetLanguage", "zh-CN"),
             "engines": engines_status,
@@ -523,6 +523,18 @@ def is_stash_alive_tcp(port):
         result = s.connect_ex(("127.0.0.1", port))
         s.close()
         return result == 0
+    except Exception:
+        return False
+
+
+def is_running_in_docker():
+    """检测是否运行在 Docker 容器内。
+    Docker 环境下需要绑定 0.0.0.0 才能让端口映射生效,让容器外的浏览器访问到代理。"""
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", "r") as f:
+            return "docker" in f.read() or "containerd" in f.read()
     except Exception:
         return False
 
@@ -739,7 +751,10 @@ def main():
     else:
         log("No Stash port detected (idle timeout only)")
 
-    server = HTTPServer(("127.0.0.1", port), TranslateProxyHandler)
+    # Docker 环境下绑定 0.0.0.0,让端口映射生效;裸机绑定 127.0.0.1 更安全
+    in_docker = is_running_in_docker()
+    bind_host = "0.0.0.0" if in_docker else "127.0.0.1"
+    server = HTTPServer((bind_host, port), TranslateProxyHandler)
 
     def shutdown(signum, frame):
         log("Shutting down proxy server...")
@@ -750,8 +765,10 @@ def main():
         signal.signal(signal.SIGTERM, shutdown)
 
     log(f"")
-    log(f"  Scene Translate Proxy v2.6.0")
-    log(f"  http://127.0.0.1:{port}")
+    log(f"  Scene Translate Proxy v2.6.1")
+    log(f"  http://{bind_host}:{port}")
+    if in_docker:
+        log(f"  Docker detected: bound to 0.0.0.0 (requires -p {port}:{port})")
     log(f"  Engine/Target: supplied per-request from Stash plugin UI")
     if args.config:
         log(f"  Config: {args.config} (proxyPort + API keys)")

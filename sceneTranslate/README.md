@@ -105,8 +105,47 @@ DeepL 支持两种模式：
 
 **DeepLX 中转：**
 - `deeplBaseUrl` 填写完整翻译接口地址，如 `http://192.168.3.190:1188/translate`
-- `deeplApiKey` 填写 DeepLX 的访问令牌（如果 DeepLX 启动了 `-token` 参数）；无令牌则留空
+- `deeplApiKey` 填写 DeepLX 的访问令牌（如果 DeepLX 启用了 `-token` 参数）；无令牌则留空
 - `deeplFreeApi` 在中转模式下无效，可忽略
+
+## Docker 部署
+
+Stash 官方 Docker 镜像已预装 Python，插件开箱即用。插件会**自动检测 Docker 环境**并适配：
+
+- **代理监听**：自动绑定 `0.0.0.0`（裸机仍绑定 `127.0.0.1`，更安全）
+- **浏览器代理 URL**：自动用访问 Stash 的 host（如 `http://192.168.1.100:9999` → 代理 URL 推断为 `http://192.168.1.100:9998`）
+- **无需改 `config.json`**：Docker 检测和 host 推断都是自动的
+
+**唯一需要手动操作**：映射代理端口 9998，让容器外的浏览器能访问容器内的代理。
+
+### docker-compose.yml
+
+```yaml
+services:
+  stash:
+    image: stashapp/stash:latest
+    ports:
+      - "9999:9999"   # Stash Web 端口（已有）
+      - "9998:9998"   # 翻译代理端口（新增）
+    volumes:
+      - ./data:/data
+      - ./stash:/root/.stash
+      # 插件目录挂载（安装插件后）
+      - ./plugins:/root/.stash/plugins
+```
+
+### docker run
+
+```bash
+docker run -d \
+  -p 9999:9999 \
+  -p 9998:9998 \
+  -v ./data:/data \
+  -v ./stash:/root/.stash \
+  --name stash stashapp/stash:latest
+```
+
+> 仅使用 `google_free` 引擎时无需映射 9998 端口（浏览器直连 Google，不经过代理）。使用其他引擎（Google API / Microsoft / Baidu / DeepL / OpenAI）时必须映射。
 
 ## 代理生命周期
 

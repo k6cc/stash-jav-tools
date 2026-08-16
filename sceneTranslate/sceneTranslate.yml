@@ -1,6 +1,6 @@
 name: Scene Translate
 description: Add one-click translate buttons to scene & image edit pages. Supports Google Free (proxy-free), Google API, Microsoft, Baidu, DeepL (official & DeepLX), and OpenAI engines. Settings configurable from Stash plugin UI.
-version: 2.6.0
+version: 2.6.1
 url: https://github.com/stash-translate/sceneTranslate
 errLog: info
 
@@ -25,7 +25,8 @@ ui:
     - sceneTranslate.css
   csp:
     connect-src:
-      - "http://127.0.0.1:9998"
+      # 代理端口: 支持任意 host(Docker 端口映射场景)
+      - "http://*:9998"
       - "https://translate.googleapis.com"
       - "https://translation.googleapis.com"
       - "https://fanyi-api.baidu.com"

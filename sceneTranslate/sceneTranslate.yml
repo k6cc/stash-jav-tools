@@ -1,6 +1,6 @@
 name: Scene Translate
 description: Add one-click translate buttons to scene & image edit pages. Supports Google Free (proxy-free), Google API, Microsoft, Baidu, DeepL (official & DeepLX), and OpenAI engines. Settings configurable from Stash plugin UI.
-version: 2.5.2
+version: 2.6.0
 url: https://github.com/stash-translate/sceneTranslate
 errLog: info
 
@@ -35,17 +35,19 @@ ui:
       - "https://api-free.deepl.com"
 
 # 插件设置（Stash → 设置 → 插件 → Scene Translate）
-# 修改后会自动同步到 config.json（启动代理时）；浏览器端翻译按钮实时读取，无需重启代理
+# 这三项仅在 Stash 插件页管理，不再写入 config.json。
+# config.json 只存放代理端口与各引擎 API 密钥。
+# 留空时浏览器使用默认值: google_free / zh-CN / 600
 settings:
   translateTool:
     displayName: 翻译引擎
-    description: "可选值: google_free / google_api / microsoft / baidu / openai / deepl"
+    description: "可选值: google_free / google_api / microsoft / baidu / openai / deepl。默认 google_free(无需代理与密钥)；选用其他引擎需在 config.json 配置对应 API 密钥"
     type: STRING
   targetLanguage:
     displayName: 目标语言
-    description: "如 zh-CN(简体中文) zh-TW(繁体中文) en(英语) ja(日语) ko(韩语)"
+    description: "如 zh-CN(简体中文) zh-TW(繁体中文) en(英语) ja(日语) ko(韩语)。留空默认 zh-CN"
     type: STRING
   idleTimeout:
     displayName: 空闲超时（秒）
-    description: "代理无翻译请求时自动关闭的秒数，0 表示不自动关闭"
-    type: NUMBER
+    description: "代理无翻译请求时自动关闭的秒数，0 表示不自动关闭。留空默认 600"
+    type: STRING

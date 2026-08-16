@@ -23,45 +23,51 @@ Stash 插件 — 在场景和图片编辑页面添加一键翻译按钮，支持
 ├── sceneTranslate.css
 ├── sceneTranslate.yml
 ├── translateProxy.py
-└── config.json          ← 编辑此文件配置
+└── config.json          ← 代理端口 + 各引擎 API 密钥
 ```
 
 ## 配置
 
-所有设置在 `config.json` 中，支持 `//` 注释：
+配置分两个入口，各司其职：
+
+### Stash 插件设置页（翻译引擎 / 目标语言 / 空闲超时）
+
+进入 **Stash → 设置 → 插件 → Scene Translate**，可直接设置三项参数：
+
+| 参数 | 说明 | 留空默认值 |
+|------|------|-----------|
+| 翻译引擎 | `google_free` / `google_api` / `microsoft` / `baidu` / `openai` / `deepl` | `google_free` |
+| 目标语言 | `zh-CN` / `zh-TW` / `en` / `ja` / `ko` 等 | `zh-CN` |
+| 空闲超时（秒） | 代理无请求时自动关闭的秒数，`0` 表示不自动关闭 | `600` |
+
+- 修改后无需重启代理，翻译按钮在页面加载/导航时即时读取最新配置
+- `google_free` 无需代理与密钥，开箱即用
+
+### config.json（代理端口 + 各引擎 API 密钥）
+
+`config.json` 仅存放代理端口和各引擎的 API 密钥（支持 `//` 注释）：
 
 ```json
 {
-  // 翻译引擎: google_free / google_api / microsoft / baidu / deepl / openai
-  "translateTool": "google_free",
-
-  // 目标语言: zh-CN, en, ja, ko ...
-  "targetLanguage": "zh-CN",
-
   // 代理端口
   "proxyPort": 9998,
 
-  // 空闲超时（秒），0 表示不自动关闭
-  "idleTimeout": 600,
-
-  // 各引擎的 API Key（按需填写）
-  ...
+  // 各引擎的 API Key（按需填写，选用对应引擎时必填）
+  "googleApiKey": "",
+  "microsoftApiKey": "",
+  "microsoftRegion": "global",
+  "baiduAppId": "",
+  "baiduSecret": "",
+  "openaiApiKey": "",
+  "openaiModel": "gpt-4o-mini",
+  "openaiBaseUrl": "",
+  "deeplApiKey": "",
+  "deeplFreeApi": false,
+  "deeplBaseUrl": ""
 }
 ```
 
 修改 `config.json` 后需重启代理生效。
-
-## 使用方式
-
-### 配置入口
-
-插件支持两种配置方式，互相同步：
-
-1. **Stash 插件设置页面（推荐）**：进入 **Stash → 设置 → 插件 → Scene Translate**，可直接修改翻译引擎、目标语言、空闲超时三个参数。修改后无需重启代理即可生效（翻译按钮在每次点击时重新读取 Stash 配置）。
-
-2. **直接编辑 config.json**：仍可手动编辑 `config.json`（支持 `//` 注释）。启动代理时，会检测两边差异并自动同步：以非空一方的值为准，写入另一方。
-
-> 首次启用插件时，`config.json` 的值会自动写入 Stash 插件配置；之后两边任一改动都会在代理启动时同步。
 
 ### 适用页面
 
@@ -106,16 +112,16 @@ DeepL 支持两种模式：
 
 - **自动启动**：Stash 加载插件时自动启动代理后台进程
 - **优雅退出**：关闭 Stash 后代理自动检测并退出（TCP 端口检测）
-- **空闲超时**：无翻译请求超过 `idleTimeout` 秒后自动关闭
+- **空闲超时**：无翻译请求超过设定秒数后自动关闭（默认 600，可在 Stash 插件页配置；每次翻译请求会动态更新计时）
 - **手动重启**：在 Stash 任务页面点击 **Start Translate Proxy** 可重启代理
-- **配置重载**：修改 `config.json` 后需重启代理才能生效
+- **配置重载**：修改 `config.json`（端口 / API 密钥）后需重启代理才能生效；翻译引擎 / 目标语言 / 空闲超时在 Stash 插件页修改，无需重启代理
 
 ## 代理 API 端点
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/config` | GET | 返回浏览器端配置（引擎、目标语言） |
-| `/translate` | POST | 翻译文本 |
+| `/config` | GET | 返回代理在线状态（引擎/语言以浏览器从 Stash 插件页传入为准） |
+| `/translate` | POST | 翻译文本（请求体含 `engine`/`targetLang`/`idleTimeout`） |
 | `/status` | GET | 查询代理状态和配置 |
 | `/shutdown` | POST | 优雅关闭代理 |
 
@@ -123,8 +129,8 @@ DeepL 支持两种模式：
 
 | 文件 | 说明 |
 |------|------|
-| `config.json` | 配置文件（支持 `//` 注释） |
+| `config.json` | 代理端口 + 各引擎 API 密钥（支持 `//` 注释） |
 | `sceneTranslate.js` | 前端脚本，注入翻译按钮 |
 | `sceneTranslate.css` | 样式 |
-| `sceneTranslate.yml` | Stash 插件定义 |
+| `sceneTranslate.yml` | Stash 插件定义（含翻译引擎/语言/超时设置项） |
 | `translateProxy.py` | Python 翻译代理（绕过 CORS） |

@@ -1,14 +1,14 @@
 /**
- * Scene Translate Plugin v2.5.2
+ * Scene Translate Plugin v2.6.0
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
- * plugin config and synced to config.json on proxy startup.
+ * plugin config only. config.json holds proxyPort and API keys.
  * google_free engine works without proxy (browser direct fallback);
  * other engines require the "Start Translate Proxy" task in plugin settings.
  */
 
-console.log("[SceneTranslate] v2.5.2 loaded");
+console.log("[SceneTranslate] v2.6.0 loaded");
 
 try {
 (function () {
@@ -72,32 +72,14 @@ try {
     });
   }
 
-  function writeStashPluginConfig(values) {
-    return callGQL(
-      "mutation ConfigurePlugin($plugin_id: ID!, $input: Map!) { configurePlugin(plugin_id: $plugin_id, input: $input) }",
-      { plugin_id: PLUGIN_ID, input: values }
-    );
-  }
-
-  // 将 Stash 配置同步到代理的 config.json（代理在线时生效，离线则忽略）
-  function syncProxyConfig(values) {
-    return fetchWithTimeout(config.proxyUrl + "/sync_config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(values),
-    }, 3000).then(function (r) { return r.json(); }).catch(function () { /* proxy offline, fine */ });
-  }
-
   // ─── Proxy Connection ──────────────────────────────────────────────
 
   function fetchProxyConfig() {
+    // 仅用于探测代理是否在线，不再从代理 /config 读取引擎/语言
+    // （这三项已由 Stash 插件页管理，代理 /config 返回的是默认值，会覆盖正确配置）
     return fetchWithTimeout(config.proxyUrl + "/config", { method: "GET" }, 3000)
     .then(function (resp) {
       if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.json();
-    }).then(function (data) {
-      if (data.translateTool) config.translateTool = data.translateTool;
-      if (data.targetLanguage) config.targetLanguage = data.targetLanguage;
       proxyOnline = true;
       return true;
     }).catch(function () {
@@ -107,40 +89,29 @@ try {
   }
 
   function loadConfig() {
-    // 优先读取 Stash 插件设置（不依赖代理在线）
+    // 仅读取 Stash 插件设置（不依赖代理在线，google_free 离线也能拿到目标语言）
     return fetchStashPluginConfig().then(function (stashCfg) {
-      var hasStashValue =
-        (stashCfg.translateTool && stashCfg.translateTool !== "") ||
-        (stashCfg.targetLanguage && stashCfg.targetLanguage !== "");
-
-      if (hasStashValue) {
-        // Stash 设置优先：应用到内存 config
-        if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
-        if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
-        if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
-          var n = parseInt(stashCfg.idleTimeout, 10);
-          if (!isNaN(n)) config.idleTimeout = n;
-        }
-        // 同时尝试同步到代理（向后兼容，代理离线则忽略）
-        fetchProxyConfig().catch(function () { /* proxy offline, fine */ });
-        return true;
+      if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
+      if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
+      if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
+        var n = parseInt(stashCfg.idleTimeout, 10);
+        if (!isNaN(n)) config.idleTimeout = n;
       }
-
-      // Stash 设置为空（首次使用）→ 尝试从代理读取并写入 Stash 实现首次同步
-      return fetchProxyConfig().then(function (online) {
-        if (online) {
-          writeStashPluginConfig({
-            translateTool: config.translateTool,
-            targetLanguage: config.targetLanguage,
-            idleTimeout: config.idleTimeout,
-          }).catch(function () { /* ignore write failure */ });
-        }
-        return true;
-      });
+      // 探测代理是否在线（离线则忽略，google_free 可走浏览器直连）
+      fetchProxyConfig().catch(function () { /* proxy offline, fine */ });
+      return true;
     }).catch(function () {
-      // GraphQL 不可用（旧版 Stash 或异常）→ 回退到代理
+      // GraphQL 不可用（旧版 Stash 或异常）→ 仅探测代理
       return fetchProxyConfig();
     });
+  }
+
+  // 更新已注入按钮的 tooltip，使其反映最新 config
+  function refreshButtonTooltips() {
+    var btns = document.querySelectorAll(".scene-translate-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].title = "Translate \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+    }
   }
 
   function ensureProxy() {
@@ -154,7 +125,7 @@ try {
     return fetch(config.proxyUrl + "/translate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text, targetLang: targetLang, engine: engine }),
+      body: JSON.stringify({ text: text, targetLang: targetLang, engine: engine, idleTimeout: config.idleTimeout }),
     }).then(function (resp) {
       if (!resp.ok) return resp.json().then(function (e) { throw new Error(e.error || "HTTP " + resp.status); });
       return resp.json();
@@ -245,14 +216,6 @@ try {
           }
           // 更新按钮 tooltip 反映最新配置
           btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
-          // 代理在线时，将 Stash 配置同步到 config.json
-          if (proxyOnline) {
-            syncProxyConfig({
-              translateTool: config.translateTool,
-              targetLanguage: config.targetLanguage,
-              idleTimeout: config.idleTimeout,
-            });
-          }
         }).catch(function () { /* GraphQL 不可用则沿用内存配置 */ });
       }).then(function () {
         // google_free 可在代理离线时走浏览器直连兜底，不强制要求代理在线
@@ -412,7 +375,8 @@ try {
   function initPlugin() {
     loadConfig().then(function () {
       setupObservers();
-
+      // 已注入的按钮刷新 tooltip，新页面注入的按钮直接用最新 config
+      refreshButtonTooltips();
       if (isScenePage()) {
         setTimeout(injectTranslateButtons, 300);
         setTimeout(injectTranslateButtons, 1000);
@@ -480,6 +444,10 @@ try {
   function onUrlChange() {
     if (!isScenePage()) { injectedSceneId = null; return; }
     injectedSceneId = null;
+    // 导航到新页面时重新读取 Stash 插件设置，确保按钮 tooltip 即时反映最新配置
+    loadConfig().then(function () {
+      refreshButtonTooltips();
+    });
     setTimeout(injectTranslateButtons, 300);
     setTimeout(injectTranslateButtons, 1000);
   }

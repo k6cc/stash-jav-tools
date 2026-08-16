@@ -6,7 +6,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 
 | 插件 | 版本 | 类型 | 说明 |
 |------|------|------|------|
-| [sceneTranslate](./sceneTranslate/) | 2.5.0 | Python + UI | 场景/图片编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
+| [sceneTranslate](./sceneTranslate/) | 2.6.0 | Python + UI | 场景/图片编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.6.0 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.0.0 | 纯 UI | 工作室合并 + StashDB 搜索更新（无需 Python） |
 
@@ -77,7 +77,7 @@ pip3 install requests
 
 ### sceneTranslate
 
-sceneTranslate 支持在 **Stash → 设置 → 插件 → Scene Translate** 中直接配置翻译引擎、目标语言、空闲超时三个参数，与 `config.json` 双向同步。
+sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置翻译引擎、目标语言、空闲超时（留空使用默认值 `google_free` / `zh-CN` / `600`）；`config.json` 仅存放代理端口与各引擎 API 密钥。
 
 1. **google_free 引擎无需启动代理**：选择 `google_free` 后刷新页面即可使用翻译按钮（代理在线时优先走代理，离线时浏览器直连 Google 兜底）
 2. **其他引擎（Google API / Microsoft / Baidu / DeepL / OpenAI）需要代理**：在 Stash「设置 → 插件 → 插件任务」中点击 **Start Translate Proxy** 启动翻译代理

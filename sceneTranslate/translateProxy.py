@@ -121,7 +121,6 @@ def get_idle_timeout():
 
 
 def start_lifecycle_monitor(server, stash_port):
-    timeout = get_idle_timeout()
     check_interval = 10
 
     def monitor():
@@ -131,6 +130,8 @@ def start_lifecycle_monitor(server, stash_port):
                 log("Stash server closed, shutting down proxy...")
                 server.shutdown()
                 break
+            # 每轮读取最新 idleTimeout（浏览器翻译请求会动态更新 _settings）
+            timeout = get_idle_timeout()
             if timeout > 0:
                 with _idle_timer_lock:
                     idle = time.time() - _last_active_time
@@ -142,8 +143,7 @@ def start_lifecycle_monitor(server, stash_port):
     threading.Thread(target=monitor, daemon=True).start()
     if stash_port:
         log(f"Monitoring Stash on port {stash_port}")
-    if timeout > 0:
-        log(f"Idle timeout: {timeout}s")
+    log(f"Idle timeout: {get_idle_timeout()}s (updated dynamically by browser)")
 
 
 def load_settings(path):
@@ -176,136 +176,6 @@ def load_settings(path):
         val = os.environ.get(env_key, "")
         if val:
             _settings[settings_key] = val
-
-
-# ─── Stash Plugin Settings Sync (Stash ↔ config.json) ───────────────────────
-# 插件设置（translateTool/targetLanguage/idleTimeout）存储在 Stash 的 config.yml 中。
-# 这里实现双向同步：
-#   - Stash 有值 → 覆盖 config.json（保留注释的字段级更新）
-#   - Stash 无值 → 用 config.json 的值写入 Stash
-# 假设本地部署无认证；如需认证请通过 stash_args 的 server_connection 传递。
-
-PLUGIN_ID = "sceneTranslate"
-SYNC_KEYS = ("translateTool", "targetLanguage", "idleTimeout")
-
-
-def _gql_call(stash_port, query, variables=None, timeout=5):
-    """调用 Stash GraphQL endpoint（本地无认证假设）。"""
-    url = f"http://127.0.0.1:{stash_port}/graphql"
-    body = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
-    req = Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urlopen(req, timeout=timeout) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-    if result.get("errors"):
-        raise RuntimeError(f"GraphQL error: {result['errors']}")
-    return result.get("data")
-
-
-def fetch_stash_plugin_config(stash_port):
-    """通过 GraphQL 读取 Stash 插件配置。"""
-    data = _gql_call(stash_port, "query { configuration { plugins } }")
-    plugins = (data or {}).get("configuration", {}).get("plugins", {}) or {}
-    return plugins.get(PLUGIN_ID, {}) or {}
-
-
-def update_stash_plugin_config(stash_port, values):
-    """通过 GraphQL mutation 写入 Stash 插件配置。"""
-    mutation = (
-        "mutation ConfigurePlugin($plugin_id: ID!, $input: Map!) "
-        "{ configurePlugin(plugin_id: $plugin_id, input: $input) }"
-    )
-    _gql_call(stash_port, mutation, {"plugin_id": PLUGIN_ID, "input": values})
-
-
-def save_config_file_fields(updates):
-    """保留注释地更新 config.json 中指定字段。
-    updates: dict[str, Any] - 要更新的字段及其新值。
-    """
-    if not _settings_path or not os.path.exists(_settings_path):
-        return
-    try:
-        with open(_settings_path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except Exception as e:
-        log(f"Warning: Could not read config.json for update: {e}")
-        return
-
-    changed = False
-    for key, new_val in updates.items():
-        if key not in SYNC_KEYS:
-            continue
-        # JSON 序列化值（字符串、整数等）
-        val_json = json.dumps(new_val, ensure=False)
-        # 匹配 "key": <old_value> 形式（容忍键前后空白、值类型变化）
-        pattern = re.compile(
-            r'("(?:' + re.escape(key) + r')"\s*:\s*)(?:"[^"]*"|\d+|-?\d+\.\d+|true|false|null)',
-            re.DOTALL,
-        )
-        new_text, n = pattern.subn(lambda m: m.group(1) + val_json, text, count=1)
-        if n > 0:
-            text = new_text
-            changed = True
-
-    if changed:
-        try:
-            with open(_settings_path, "w", encoding="utf-8") as f:
-                f.write(text)
-            log(f"Updated config.json fields: {list(updates.keys())}")
-        except Exception as e:
-            log(f"Warning: Could not write config.json: {e}")
-
-
-def sync_settings_with_stash(stash_port):
-    """Stash 插件配置与 config.json 双向同步。
-    - Stash 有值 → 用 Stash 值覆盖 _settings 与 config.json
-    - Stash 无值 → 用 _settings（来自 config.json）写入 Stash
-    """
-    if not stash_port:
-        return
-    try:
-        stash_cfg = fetch_stash_plugin_config(stash_port)
-    except Exception as e:
-        log(f"Warning: Could not fetch Stash plugin config: {e}")
-        return
-
-    # 详细日志：Stash 当前的值
-    log(f"Stash plugin config: {stash_cfg}")
-    log(f"Local _settings: tool={_settings.get('translateTool')}, lang={_settings.get('targetLanguage')}, idle={_settings.get('idleTimeout')}")
-
-    stash_has_value = bool(
-        stash_cfg.get("translateTool") or stash_cfg.get("targetLanguage")
-    )
-    log(f"stash_has_value={stash_has_value}")
-
-    if stash_has_value:
-        # Stash → config.json
-        updates = {}
-        for k in SYNC_KEYS:
-            stash_val = stash_cfg.get(k)
-            if stash_val is None or stash_val == "":
-                continue
-            if k == "idleTimeout":
-                try:
-                    stash_val = int(stash_val)
-                except (ValueError, TypeError):
-                    continue
-            if _settings.get(k) != stash_val:
-                _settings[k] = stash_val
-                updates[k] = stash_val
-        if updates:
-            save_config_file_fields(updates)
-            log(f"Synced Stash → config.json: {updates}")
-        else:
-            log("Stash and config.json already in sync (Stash → config.json direction)")
-    else:
-        # config.json → Stash（首次启用插件）
-        values = {k: _settings.get(k) for k in SYNC_KEYS if k in _settings}
-        log(f"Writing to Stash: {values}")
-        try:
-            update_stash_plugin_config(stash_port, values)
-            log(f"Synced config.json → Stash: {list(values.keys())}")
-        except Exception as e:
-            log(f"Warning: Could not write Stash plugin config: {e}")
 
 
 # ─── Translation Engines ────────────────────────────────────────────────────
@@ -511,8 +381,6 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             self._handle_translate()
         elif self.path == "/shutdown":
             self._handle_shutdown()
-        elif self.path == "/sync_config":
-            self._handle_sync_config()
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -533,31 +401,6 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             "targetLanguage": _settings.get("targetLanguage", "zh-CN"),
         })
 
-    def _handle_sync_config(self):
-        """浏览器 POST Stash 配置值 → 更新 _settings 与 config.json"""
-        try:
-            body = self._read_body()
-        except Exception as e:
-            self._send_json({"error": f"Invalid request body: {e}"}, 400)
-            return
-        updates = {}
-        for k in SYNC_KEYS:
-            val = body.get(k)
-            if val is None or val == "":
-                continue
-            if k == "idleTimeout":
-                try:
-                    val = int(val)
-                except (ValueError, TypeError):
-                    continue
-            if _settings.get(k) != val:
-                _settings[k] = val
-                updates[k] = val
-        if updates:
-            save_config_file_fields(updates)
-            log(f"Synced via /sync_config: {list(updates.keys())}")
-        self._send_json({"status": "ok", "updated": list(updates.keys())})
-
     def _handle_translate(self):
         reset_idle_timer()
         try:
@@ -566,9 +409,21 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"Invalid request body: {e}"}, 400)
             return
 
+        # 浏览器每次翻译请求都会传 Stash 插件页的 idleTimeout，动态更新代理计时
+        idle_timeout = body.get("idleTimeout")
+        if idle_timeout is not None:
+            try:
+                new_timeout = int(idle_timeout)
+                if new_timeout != _settings.get("idleTimeout"):
+                    _settings["idleTimeout"] = new_timeout
+                    log(f"Idle timeout updated from browser: {new_timeout}s")
+            except (ValueError, TypeError):
+                pass
+
         text = body.get("text", "")
-        target_lang = body.get("targetLang") or _settings.get("targetLanguage", "zh-CN")
-        engine = body.get("engine") or _settings.get("translateTool", "google_free")
+        # 翻译引擎 / 目标语言由浏览器从 Stash 插件页传入，不再读 config.json
+        target_lang = body.get("targetLang") or "zh-CN"
+        engine = body.get("engine") or "google_free"
 
         req_settings = dict(_settings)
         for key in ("googleApiKey", "microsoftApiKey", "microsoftRegion",
@@ -620,7 +475,7 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             }
         self._send_json({
             "status": "running",
-            "version": "2.3.0",
+            "version": "2.6.0",
             "currentEngine": _settings.get("translateTool", "google_free"),
             "currentLang": _settings.get("targetLanguage", "zh-CN"),
             "engines": engines_status,
@@ -725,7 +580,6 @@ def kill_proxy_on_port(port):
                 stdout = result.stdout
             for line in stdout.splitlines():
                 if f":{port}" in line:
-                    import re
                     m = re.search(r'pid=(\d+)', line)
                     if not m:
                         m = re.search(r'(\d+)/[^/\s]+$', line.strip())
@@ -861,15 +715,10 @@ def main():
             child_args += ["--port", str(args.port)]
         if args.config:
             child_args += ["--config", args.config]
-        # 传递 Stash 端口给子进程（用于 GraphQL 同步）
+        # 传递 Stash 端口给子进程（用于代理生命周期监控：Stash 关闭时自动退出）
         detected_port = detect_stash_port(stash_args)
         if detected_port:
             child_args += ["--stash-port", str(detected_port)]
-            # 在父进程执行 sync（日志对 Stash 可见，_settings 已正确加载）
-            log(f"Detected Stash on port {detected_port}, syncing settings...")
-            sync_settings_with_stash(detected_port)
-        else:
-            log("No Stash port detected (idle timeout only)")
         spawn_background_process(child_args)
 
         if wait_for_proxy(port, max_wait=15):
@@ -887,8 +736,6 @@ def main():
     _stash_port = args.stash_port or detect_stash_port(stash_args)
     if _stash_port:
         log(f"Detected Stash on port {_stash_port}")
-        # Stash 插件配置 ↔ config.json 双向同步
-        sync_settings_with_stash(_stash_port)
     else:
         log("No Stash port detected (idle timeout only)")
 
@@ -902,14 +749,12 @@ def main():
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, shutdown)
 
-    engine = _settings.get("translateTool", "google_free")
-    lang = _settings.get("targetLanguage", "zh-CN")
     log(f"")
-    log(f"  Scene Translate Proxy v2.3")
+    log(f"  Scene Translate Proxy v2.6.0")
     log(f"  http://127.0.0.1:{port}")
-    log(f"  Engine: {engine}  |  Target: {lang}")
+    log(f"  Engine/Target: supplied per-request from Stash plugin UI")
     if args.config:
-        log(f"  Config: {args.config}")
+        log(f"  Config: {args.config} (proxyPort + API keys)")
     log(f"")
 
     start_lifecycle_monitor(server, _stash_port)

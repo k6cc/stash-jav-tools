@@ -1,4 +1,4 @@
-# stash-jav-tools
+﻿# stash-jav-tools
 
 Stash 插件工具集 — Python + UI 混合插件合集。
 
@@ -6,7 +6,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 
 | 插件 | 版本 | 类型 | 说明 |
 |------|------|------|------|
-| [sceneTranslate](./sceneTranslate/) | 2.6.1 | Python + UI | 场景/图片编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
+| [sceneTranslate](./sceneTranslate/) | 2.6.4 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.6.0 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.0.0 | 纯 UI | 工作室合并 + StashDB 搜索更新（无需 Python） |
 
@@ -81,7 +81,7 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 
 1. **google_free 引擎无需启动代理**：选择 `google_free` 后刷新页面即可使用翻译按钮（代理在线时优先走代理，离线时浏览器直连 Google 兜底）
 2. **其他引擎（Google API / Microsoft / Baidu / DeepL / OpenAI）需要代理**：在 Stash「设置 → 插件 → 插件任务」中点击 **Start Translate Proxy** 启动翻译代理
-3. 进入任意场景编辑页（`/scenes/{id}`）或图片编辑页（`/images/{id}`），标题和详情字段旁会出现翻译按钮
+3. 进入任意场景编辑页（`/scenes/{id}`）、图片编辑页（`/images/{id}`）或图库编辑页（`/galleries/{id}`），标题和详情字段旁会出现翻译按钮
 4. 点击翻译按钮，将原文翻译为目标语言
 5. 支持的翻译引擎：Google Free（免费）、Google API、Microsoft、Baidu、DeepL、OpenAI
 

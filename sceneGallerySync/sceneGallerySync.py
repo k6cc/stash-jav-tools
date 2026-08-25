@@ -37,7 +37,10 @@ class SceneGallerySync:
             return
 
         if mode == "create_gallery":
-            self.__create_gallery_for_scene(scene_id)
+            # 按钮触发：图片入库由扫描负责，不做入库轮询，直接创建或立即失败
+            # stash 对插件任务失败也标 FINISHED（job 状态不可依赖），
+            # 前端通过解析本次任务写入 stash 的原始日志判定真实结果
+            return self.__create_gallery_for_scene(scene_id, wait_for_images=False)
         elif hook_type == "Scene.Update.Post":
             if not self._stash.gql_checkPluginEnabled("nfoSceneParser"):
                 log.LogInfo("nfoSceneParser not found, exiting")
@@ -271,11 +274,13 @@ class SceneGallerySync:
 
         return None
 
-    def __create_gallery_for_scene(self, scene_id):
+    def __create_gallery_for_scene(self, scene_id, wait_for_images=True):
+        # 成功返回 None，失败返回原因字符串（按钮任务据此向 stash job 报错）
+        # wait_for_images：后台路径等待图片入库（扫描可能尚未完成）；按钮路径立即判定
         scene = self._stash.gql_findScene(scene_id)
         if not scene or not scene.get("files"):
             log.LogError(f"Scene {scene_id} not found or no files")
-            return
+            return "Scene not found or no files"
 
         scene_path = scene["files"][0]["path"]
         scene_dir = os.path.dirname(scene_path)
@@ -284,7 +289,7 @@ class SceneGallerySync:
         extrafanart_path = self.__find_extrafanart_folder(scene_dir)
         if not extrafanart_path:
             log.LogInfo("No extrafanart folder, skipping")
-            return
+            return "No extrafanart folder"
 
         poster_path = self.__find_poster_file(scene_dir, scene_filename)
         fanart_paths = self.__find_fanart_files(scene_dir, scene_filename)
@@ -292,7 +297,7 @@ class SceneGallerySync:
 
         if not extrafanart_files:
             log.LogInfo("No images in extrafanart folder, skipping")
-            return
+            return "No images in extrafanart folder"
 
         all_paths = []
         if poster_path:
@@ -303,13 +308,13 @@ class SceneGallerySync:
         found = self.__find_image_ids(all_paths, scene_dir)
 
         extrafanart_ids = [found[p] for p in extrafanart_files if p in found]
-        if not extrafanart_ids:
+        if not extrafanart_ids and wait_for_images:
             found = self.__poll_for_images(scene_dir, all_paths, found)
             extrafanart_ids = [found[p] for p in extrafanart_files if p in found]
 
         if not extrafanart_ids:
             log.LogInfo("No extrafanart images in DB, skipping (use button to create later)")
-            return
+            return "Extrafanart images not indexed in Stash"
 
         poster_id = found.get(poster_path) if poster_path else None
         fanart_ids = [found[p] for p in fanart_paths if p in found]
@@ -330,13 +335,13 @@ class SceneGallerySync:
             if scene_id not in existing_scene_ids:
                 self._stash.gql_addSceneToGallery(gid, existing_scene_ids + [scene_id])
             log.LogInfo(f"Appended to existing gallery {gid}")
-            return
+            return None
 
         gallery_data = self.__build_gallery_data(scene, gallery_title)
         new_gallery = self._stash.gql_galleryCreate(gallery_data)
         if not new_gallery:
             log.LogError("Gallery create failed")
-            return
+            return "Gallery create failed"
 
         gid = new_gallery["id"]
         log.LogInfo(f"Gallery {gid} created (title={gallery_title})")
@@ -353,6 +358,7 @@ class SceneGallerySync:
         if final_extrafanart_ids:
             self._stash.gql_addGalleryImages(gid, final_extrafanart_ids)
         log.LogInfo(f"Gallery {gid} done")
+        return None
 
     def __set_cover(self, gallery_id, image_id):
         try:

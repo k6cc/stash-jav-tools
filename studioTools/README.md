@@ -1,8 +1,10 @@
-﻿# Studio Tools
+# Studio Tools
 
 Stash 工作室详情页工具集 — 纯 UI 插件（JS + CSS，无需 Python）。
 
 合并自 studioMerge v1.0.0 + studioSearch v2.2.0，两个模块共享 GraphQL 封装、URL 解析、MutationObserver、锚点按钮注入等基础设施。
+
+> v1.1.0：注入按钮改为 feather 风格线性图标（合并=蓝色 git-merge，更新=绿色 download-cloud），修复两个按钮位置随机互换的问题，并统一弹窗配色（调换/下一步/应用合并=深蓝底白字，搜索框聚焦+搜索按钮=深绿）。
 
 ## 功能
 
@@ -85,8 +87,8 @@ plugins/
 
 ## 技术细节
 
-- 两个模块共享 `fetchCurrentStudio()` 缓存，避免重复 GraphQL 查询
-- 注入按钮使用统一的 `.st-inject-btn` 样式类
+- 两个模块共享 `fetchCurrentStudio()` 缓存（缓存 pending Promise），避免重复 GraphQL 查询，并保证合并/更新按钮注入顺序稳定
+- 注入按钮使用统一的 `.st-inject-btn` 样式类（feather 风格线性 SVG 图标：`st-blue` 合并 / `st-green` 更新）
 - 模块特定样式分别使用 `sm-`（merge）和 `ss-`（search）前缀，互不冲突
 - MutationObserver + history hook 确保 SPA 路由切换时按钮正确注入/移除
 

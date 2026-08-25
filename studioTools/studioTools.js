@@ -22,6 +22,7 @@ try {
   // ===== 共享状态 =====
   var _currentStudioId = null;
   var _currentStudioData = null;
+  var _currentStudioPromise = null;
   var _observerTimer = null;
   var _mergeBtnInjected = false;
   var _searchBtnInjected = false;
@@ -92,13 +93,27 @@ try {
   function fetchCurrentStudio() {
     var id = getStudioIdFromUrl();
     if (!id) return Promise.resolve(null);
-    if (_currentStudioId === id && _currentStudioData) return Promise.resolve(_currentStudioData);
+    // 缓存 pending 的 Promise：并发调用共享同一次请求，
+    // .then 回调按注册顺序执行，保证合并/更新按钮注入顺序稳定（合并恒在前）
+    if (_currentStudioId === id && _currentStudioPromise) return _currentStudioPromise;
     _currentStudioId = id;
-    return graphql(Q_STUDIO, { id: id }).then(function (data) {
+    _currentStudioData = null;
+    _currentStudioPromise = graphql(Q_STUDIO, { id: id }).then(function (data) {
       _currentStudioData = data.data.findStudio;
       return _currentStudioData;
+    }, function (err) {
+      // 失败不缓存，下次注入可重试；仅当 URL 未切换时才清理，避免误清新缓存
+      if (_currentStudioId === id) _currentStudioPromise = null;
+      throw err;
     });
+    return _currentStudioPromise;
   }
+
+  // 注入按钮图标（feather 风格线性 SVG，规格同 sceneGallerySync）
+  var INJECT_ICONS = {
+    merge: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>',  // git-merge
+    update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>'  // download-cloud
+  };
 
   // 查找按钮注入锚点（两个模块共用）。
   // 结构锚点与界面语言无关；文本匹配仅作旧版本兜底。
@@ -248,7 +263,7 @@ try {
 
         dialog.innerHTML =
           '<h3 class="sm-title">合并工作室</h3>' +
-          '<div class="sm-warning">源工作室的场景、图片、图库、组合及子工作室将重新分配到目标工作室，合并后源工作室将被删除。</div>' +
+          '<div class="sm-warning sm-warning-info">源工作室的场景、图片、图库、组合及子工作室将重新分配到目标工作室，合并后源工作室将被删除。</div>' +
           '<div class="sm-field-group"><label class="sm-label">源工作室（将被合并并删除）</label>' + boxHtml("src", "", "") + '</div>' +
           '<div class="sm-swap-wrap"><button class="sm-swap-btn" type="button">&#8645; 调换</button></div>' +
           '<div class="sm-field-group"><label class="sm-label">目标工作室</label>' + boxHtml("dest", currentStudio.id, currentStudio.name) + '</div>' +
@@ -1299,8 +1314,8 @@ try {
         var spot = getInjectSpot();
         if (!spot) return;
         var btn = document.createElement("button");
-        btn.className = "st-inject-btn sm-btn";
-        btn.textContent = "合并";
+        btn.className = "st-inject-btn sm-btn st-blue";
+        btn.innerHTML = INJECT_ICONS.merge;
         btn.title = "将此工作室与另一个合并";
         btn.addEventListener("click", function () { showSelectDialog(studio); });
         spot.parent.insertBefore(btn, spot.before);
@@ -1346,9 +1361,9 @@ try {
         if (!spot) return;
 
         var btn = document.createElement("button");
-        btn.className = "st-inject-btn ss-search-btn";
+        btn.className = "st-inject-btn ss-search-btn st-green";
         btn.type = "button";
-        btn.textContent = "更新";
+        btn.innerHTML = INJECT_ICONS.update;
         btn.title = "从 StashDB 搜索并更新工作室信息";
         btn.addEventListener("click", function (e) {
           e.preventDefault();
@@ -1622,6 +1637,7 @@ try {
   function onUrlChange() {
     _currentStudioId = null;
     _currentStudioData = null;
+    _currentStudioPromise = null;
     _mergeBtnInjected = false;
     _searchBtnInjected = false;
     var mergeBtn = document.querySelector(".sm-btn");

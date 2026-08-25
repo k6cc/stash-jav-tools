@@ -1,25 +1,32 @@
-/* Studio Tools v1.0.0 样式
- * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
- * 注入按钮样式统一为 .st-inject-btn（原 .sm-btn 与 .ss-search-btn 完全相同，已合并）
+/* Studio Tools 样式
+ * 注入按钮样式统一为 .st-inject-btn（纯图标：蓝色=合并，绿色=更新，规格同 sceneGallerySync）
  */
 
 /* ===== 注入按钮（合并/更新按钮共用） ===== */
 .st-inject-btn {
-  margin-left: 4px !important;
-  padding: 6px 14px !important;
-  border-radius: 4px !important;
-  font-size: 13px !important;
-  cursor: pointer !important;
-  background: transparent !important;
-  color: inherit !important;
-  border: 1px solid currentColor !important;
-  opacity: 0.7 !important;
-  transition: all 0.2s !important;
+  display: inline-flex !important; align-items: center !important; justify-content: center !important;
+  margin-left: 4px !important; margin-right: 4px !important; padding: 5px 7px !important; line-height: 1 !important;
+  border-radius: 3px !important; cursor: pointer !important; vertical-align: middle !important;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease !important;
 }
-
-.st-inject-btn:hover {
-  opacity: 1 !important;
-  background: rgba(255, 255, 255, 0.1) !important;
+/* 相邻注入按钮间距收敛为 4px（避免 4+4 双边距） */
+.st-inject-btn + .st-inject-btn { margin-left: 0 !important; }
+.st-inject-btn svg { width: 18px !important; height: 18px !important; display: block !important; }
+.st-inject-btn.st-blue {
+  color: #339af0 !important; border: 1px solid rgba(51, 154, 240, 0.45) !important;
+  background: rgba(51, 154, 240, 0.06) !important;
+}
+.st-inject-btn.st-blue:hover {
+  color: #4dabf7 !important; border-color: rgba(77, 171, 247, 0.8) !important;
+  background: rgba(77, 171, 247, 0.14) !important;
+}
+.st-inject-btn.st-green {
+  color: #37b24d !important; border: 1px solid rgba(55, 178, 77, 0.45) !important;
+  background: rgba(55, 178, 77, 0.06) !important;
+}
+.st-inject-btn.st-green:hover {
+  color: #51cf66 !important; border-color: rgba(81, 207, 102, 0.8) !important;
+  background: rgba(81, 207, 102, 0.14) !important;
 }
 
 /* ================================================================== */
@@ -159,9 +166,9 @@
 .sm-swap-wrap { text-align: center !important; margin: 8px 0 !important; }
 
 .sm-swap-btn {
-  background: #333 !important;
-  color: #aaa !important;
-  border: 1px solid #444 !important;
+  background: #1864ab !important;
+  color: #fff !important;
+  border: 1px solid #1864ab !important;
   padding: 4px 14px !important;
   border-radius: 4px !important;
   font-size: 12px !important;
@@ -169,12 +176,12 @@
 }
 
 .sm-swap-btn:hover {
-  background: #444 !important;
-  color: #e0e0e0 !important;
+  background: #1c7ed6 !important;
+  color: #fff !important;
 }
 
 .sm-warning {
-  background: #3d2e00 !important;
+  background: #2b2000 !important;
   border: 1px solid #ffc107 !important;
   border-radius: 4px !important;
   padding: 10px !important;
@@ -182,6 +189,13 @@
   color: #ffe066 !important;
   margin: 14px 0 !important;
   line-height: 1.5 !important;
+}
+
+/* 第一层弹窗警告：蓝色调（第二层保持黄色） */
+.sm-warning.sm-warning-info {
+  background: #0a1e33 !important;
+  border: 1px solid #58a6ff !important;
+  color: #79c0ff !important;
 }
 
 .sm-info {
@@ -829,14 +843,14 @@
 }
 
 .sm-btn-apply {
-  background: #58a6ff !important;
-  color: #000 !important;
-  border-color: #58a6ff !important;
+  background: #1864ab !important;
+  color: #fff !important;
+  border-color: #1864ab !important;
   font-weight: 600 !important;
 }
 
 .sm-btn-apply:hover:not(:disabled) {
-  background: #79c0ff !important;
+  background: #1c7ed6 !important;
 }
 
 .sm-btn-apply:disabled {
@@ -895,7 +909,7 @@
 }
 
 .ss-search-input:focus {
-  border-color: #58a6ff;
+  border-color: #2f9e44;
 }
 
 .ss-search-input::placeholder {
@@ -907,15 +921,15 @@
   border-radius: 4px;
   font-size: 13px;
   cursor: pointer;
-  background: #58a6ff;
-  color: #000;
+  background: #2f9e44;
+  color: #fff;
   border: none;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .ss-search-submit:hover {
-  background: #79c0ff;
+  background: #37b24d;
 }
 
 .ss-search-submit:disabled {

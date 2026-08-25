@@ -196,19 +196,27 @@ try {
 
   // ─── Translate Button ─────────────────────────────────────────────
 
+  // 线性 SVG 图标（feather 风格，与 sceneGallerySync 注入按钮规格一致）
+  var ICONS = {
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>',  // 文A（lucide languages）
+    spin: '<svg class="scene-translate-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>',
+    ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    err: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+  };
+
   function createTranslateButton(inputEl, fieldName) {
     var btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "btn btn-sm btn-outline-secondary scene-translate-btn";
-    btn.textContent = "\uD83C\uDF10";
-    btn.style.cssText = "margin-left:6px;padding:2px 8px;font-size:14px;cursor:pointer;vertical-align:middle;";
+    btn.className = "btn btn-sm scene-translate-btn";
+    btn.innerHTML = ICONS.globe;
+    btn.style.cssText = "margin-left:6px;";
     btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
 
     btn.addEventListener("click", function () {
       var text = inputEl.value || "";
       if (!text.trim()) return;
       btn.disabled = true;
-      btn.textContent = "\u23F3";
+      btn.innerHTML = ICONS.spin;
 
       ensureProxy().then(function (online) {
         // 每次点击前重新读取 Stash 插件设置，确保用户在设置页改的参数立即生效
@@ -231,24 +239,24 @@ try {
       }).then(function (translated) {
         if (translated && translated !== text) {
           setNativeValue(inputEl, translated);
-          btn.textContent = "\u2713";
-          btn.classList.replace("btn-outline-secondary", "btn-success");
+          btn.innerHTML = ICONS.ok;
+          btn.classList.add("scene-translate-ok");
           setTimeout(function () {
-            btn.textContent = "\uD83C\uDF10";
-            btn.classList.replace("btn-success", "btn-outline-secondary");
+            btn.innerHTML = ICONS.globe;
+            btn.classList.remove("scene-translate-ok");
           }, 2000);
         } else {
-          btn.textContent = "\uD83C\uDF10";
+          btn.innerHTML = ICONS.globe;
         }
       }).catch(function (e) {
-        btn.textContent = "\u2717";
-        btn.classList.replace("btn-outline-secondary", "btn-danger");
+        btn.innerHTML = ICONS.err;
+        btn.classList.add("scene-translate-err");
         var msg = e.message || "Unknown error";
         btn.title = "Error: " + msg;
         console.error("[SceneTranslate] " + fieldName + " error: " + msg);
         setTimeout(function () {
-          btn.textContent = "\uD83C\uDF10";
-          btn.classList.replace("btn-danger", "btn-outline-secondary");
+          btn.innerHTML = ICONS.globe;
+          btn.classList.remove("scene-translate-err");
           btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
         }, 4000);
       }).finally(function () {

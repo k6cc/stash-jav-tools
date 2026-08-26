@@ -218,23 +218,31 @@ try {
       var mergedAliases = mergeArrays(dst.aliases || [], src.aliases || []);
       var mergedUrls = mergeArrays(dst.urls || [], src.urls || []);
       var mergedTags = mergeTags(dst.tags || [], src.tags || []);
-      var mergedRating = Math.max(dst.rating100 || 0, src.rating100 || 0) || null;
-      var mergedFav = dst.favorite || src.favorite;
-      var mergedDetails = dst.details || "";
-      if (src.details && src.details !== mergedDetails) mergedDetails += (mergedDetails ? "\n\n--- 来自 " + src.name + " ---\n\n" : "") + src.details;
+      // 简介为文本拼接合并：仅当源有内容时才生成合并值（目标+分隔+源，或仅源）；
+      // 源无内容时合并列为空并勾选目标列（详见 useMerged）
+      var mergedDetails = "";
+      if (src.details) {
+        mergedDetails = dst.details
+          ? dst.details + "\n\n--- 来自 " + src.name + " ---\n\n" + src.details
+          : src.details;
+      }
+      var srcHasStashId = (src.stash_ids || []).length > 0;
+      var dstHasStashId = (dst.stash_ids || []).length > 0;
 
       fields.name = new MergeField("name", dst.name, src.name, false);
       fields.aliases = new MergeField("aliases", dst.aliases || [], mergedAliases, !!(mergedAliases.length));
       fields.urls = new MergeField("urls", dst.urls || [], mergedUrls, !!(mergedUrls.length));
-      fields.stash_ids = new MergeField("stash_ids", dst.stash_ids || [], src.stash_ids || [], false);
+      // 单值字段（Stash ID/评分/收藏/忽略自动标签/已整理，同父工作室/图片逻辑）：
+      // 目标列=目标值，合并列=源值；两边都有勾目标，仅源有勾合并（取有值的一侧）
+      fields.stash_ids = new MergeField("stash_ids", dst.stash_ids || [], src.stash_ids || [], srcHasStashId && !dstHasStashId);
       fields.tags = new MergeField("tags", (dst.tags || []).map(function (t) { return t.id; }), mergedTags.map(function (t) { return t.id; }), !!(mergedTags.length));
-      fields.rating100 = new MergeField("rating100", dst.rating100 || null, mergedRating, !!(mergedRating));
-      fields.favorite = new MergeField("favorite", !!dst.favorite, mergedFav, !!mergedFav);
-      fields.details = new MergeField("details", dst.details || "", mergedDetails, !!(mergedDetails));
+      fields.rating100 = new MergeField("rating100", dst.rating100 != null ? dst.rating100 : null, src.rating100 != null ? src.rating100 : null, src.rating100 != null && dst.rating100 == null);
+      fields.favorite = new MergeField("favorite", !!dst.favorite, !!src.favorite, !!src.favorite && !dst.favorite);
+      fields.details = new MergeField("details", dst.details || "", mergedDetails, !!src.details);
       fields.parent_id = new MergeField("parent_id", dst.parent_studio || null, src.parent_studio || null, !!(src.parent_studio && !dst.parent_studio));
       fields.image = new MergeField("image", dstHasImage ? dst.image_path : "", srcHasImage ? src.image_path : "", srcHasImage && !dstHasImage);
-      fields.ignore_auto_tag = new MergeField("ignore_auto_tag", !!dst.ignore_auto_tag, src.ignore_auto_tag || dst.ignore_auto_tag, !!(src.ignore_auto_tag));
-      fields.organized = new MergeField("organized", !!dst.organized, dst.organized || src.organized, !!(src.organized));
+      fields.ignore_auto_tag = new MergeField("ignore_auto_tag", !!dst.ignore_auto_tag, !!src.ignore_auto_tag, !!src.ignore_auto_tag && !dst.ignore_auto_tag);
+      fields.organized = new MergeField("organized", !!dst.organized, !!src.organized, !!src.organized && !dst.organized);
 
       return fields;
     }
@@ -458,7 +466,7 @@ try {
       rows += buildRow("tags", "标签", fields, src, dst, "tags");
       rows += buildRow("rating100", "评分", fields, src, dst, "rating");
       rows += buildRow("favorite", "收藏", fields, src, dst, "checkbox");
-      rows += buildRow("details", "详情", fields, src, dst, "textarea");
+      rows += buildRow("details", "简介", fields, src, dst, "textarea");
       rows += buildRow("parent_id", "父工作室", fields, src, dst, "parent_select");
       rows += buildRow("image", "图片", fields, src, dst, "image");
       rows += buildRow("ignore_auto_tag", "忽略自动标签", fields, src, dst, "checkbox");

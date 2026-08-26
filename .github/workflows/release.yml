@@ -16,11 +16,9 @@ on:
       - "sceneGallerySync-v*.*.*"
       - "studioTools-v*.*.*"
 
-# 串行执行：多个插件 tag 同时推送时会竞争推送 stash-plugins 的 index.yml，
-# 并发推送会互相冲突导致失败，排队依次执行。
-concurrency:
-  group: release-stash-plugins
-  cancel-in-progress: false
+# 不使用 concurrency 串行：GitHub Actions 同组排队只保留最新一个 pending run，
+# 多 tag 同时推送会把中间的运行直接取消（曾导致 studioTools-v1.1.1 被 cancel）。
+# index.yml 更新步骤已做竞争安全处理（fetch + reset + push 重试），可安全并发。
 
 permissions:
   contents: write
@@ -84,25 +82,36 @@ jobs:
           cd /tmp/stash-plugins
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # awk 只更新匹配 PLUGIN_ID 的条目，避免误改其他插件
-          awk -v id="$PLUGIN_ID" -v version="$VERSION" -v date="$DATE" -v path="$PATH_URL" -v sha="$SHA" '
-          /^- id: / { in_block = ($3 == id) }
-          in_block && /^  version: / { print "  version: " version; next }
-          in_block && /^  date: / { print "  date: " date; next }
-          in_block && /^  path: / { print "  path: " path; next }
-          in_block && /^  sha256: / { print "  sha256: " sha; next }
-          { print }
-          ' plugins/main/index.yml > /tmp/index.yml && mv /tmp/index.yml plugins/main/index.yml
-          echo "=== Updated plugins/main/index.yml ==="
-          cat plugins/main/index.yml
-          git add plugins/main/index.yml
-          if git diff --cached --quiet; then
-            echo "index.yml already up to date — nothing to commit"
-          else
+          # 竞争安全：多个 release 并发推送 index.yml 时 push 可能被拒（non-fast-forward），
+          # 每次重试前 fetch + reset 到远程最新（已包含其他插件刚推的改动），再重新套用本插件的更新
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            # awk 只更新匹配 PLUGIN_ID 的条目，避免误改其他插件
+            awk -v id="$PLUGIN_ID" -v version="$VERSION" -v date="$DATE" -v path="$PATH_URL" -v sha="$SHA" '
+            /^- id: / { in_block = ($3 == id) }
+            in_block && /^  version: / { print "  version: " version; next }
+            in_block && /^  date: / { print "  date: " date; next }
+            in_block && /^  path: / { print "  path: " path; next }
+            in_block && /^  sha256: / { print "  sha256: " sha; next }
+            { print }
+            ' plugins/main/index.yml > /tmp/index.yml && mv /tmp/index.yml plugins/main/index.yml
+            git add plugins/main/index.yml
+            if git diff --cached --quiet; then
+              echo "index.yml already up to date — nothing to commit"
+              exit 0
+            fi
             git commit -m "chore: bump ${PLUGIN_ID} to ${TAG}"
-            git push
-            echo "Pushed index.yml update to stash-plugins"
-          fi
+            if git push; then
+              echo "=== Pushed index.yml update (attempt ${attempt}) ==="
+              cat plugins/main/index.yml
+              exit 0
+            fi
+            echo "⚠ push failed (attempt ${attempt}) — concurrent release detected, retrying"
+            sleep $((attempt * 5))
+          done
+          echo "✗ failed to push index.yml after 5 attempts"
+          exit 1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

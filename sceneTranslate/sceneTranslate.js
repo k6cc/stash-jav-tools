@@ -9,11 +9,14 @@
  * Proxy URL auto-detects host from Stash URL (supports Docker port mapping).
  */
 
-console.log("[SceneTranslate] v2.6.4 loaded");
-
 try {
 (function () {
   "use strict";
+
+  // 幂等守卫：Stash 的 useScript 会在插件列表变化时移除并重挂 <script> 标签导致脚本重执行，
+  // 重复执行会反复探测代理刷屏、堆积 MutationObserver、嵌套包装 pushState，跳过后续执行
+  if (window.__sceneTranslateLoaded) return;
+  window.__sceneTranslateLoaded = true;
 
   // ─── Config ────────────────────────────────────────────────────────
 

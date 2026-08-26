@@ -9,11 +9,14 @@
  * MutationObserver、history hook、锚点按钮注入。注入按钮统一使用 .st-inject-btn 样式。
  */
 
-console.log("[StudioTools] v1.0.0 loaded");
-
 try {
 (function () {
   "use strict";
+
+  // 幂等守卫：Stash 会随任务轮询的 React 重渲染周期性重执行插件脚本（PendingScript 机制），
+  // 重复执行会堆积 MutationObserver、嵌套包装 pushState，跳过后续执行
+  if (window.__studioToolsLoaded) return;
+  window.__studioToolsLoaded = true;
 
   // ===== 共享常量 =====
   var GRAPHQL_ENDPOINT = "/graphql";
@@ -236,7 +239,13 @@ try {
       return fields;
     }
 
-    function createOverlay() { return createElement("div", "sm-overlay"); }
+    function createOverlay() {
+      var el = createElement("div", "sm-overlay");
+      // 禁止从弹窗内拖动选中文本：会启动页面级原生拖拽会话，与宿主页面的全局 DnD 处理器
+      // 冲突后拖拽会话可能卡死，表现为整个页面点击无响应（选中文本/复制不受影响）
+      el.addEventListener("dragstart", function (e) { e.preventDefault(); });
+      return el;
+    }
     function createElement(tag, cls) { var el = document.createElement(tag); if (cls) el.className = cls; return el; }
 
     function iconCheck(selected) {
@@ -640,7 +649,7 @@ try {
       var html = '<div class="sm-list-merged" data-list-key="' + key + '">';
       if (arr && arr.length > 0) {
         for (var i = 0; i < arr.length; i++) {
-          html += '<div class="sm-list-item" draggable="true">' +
+          html += '<div class="sm-list-item">' +
             '<button class="sm-drag-handle" type="button">&#8801;</button>' +
             '<input type="text" class="sm-list-input" value="' + escapeAttr(arr[i]) + '">' +
             '<button class="sm-list-del" type="button">&#8722;</button>' +
@@ -712,39 +721,76 @@ try {
       return html;
     }
 
+    // 基于 Pointer Events 的列表拖拽排序（幽灵行跟随指针，其余行实时让位）。
+    // 不用 HTML5 DnD：拖拽中移动拖拽源节点会让 Chromium 重派整条 drag 事件序列，造成页面卡死；且触屏完全不可用。
+    // move/up 监听必须挂 window：insertBefore 移动拖拽项后浏览器会静默丢失指针捕获，挂元素上会收不到后续事件。
     function initListDragDrop(dialog, key, fields) {
       var container = dialog.querySelector('.sm-list-merged[data-list-key="' + key + '"]');
       if (!container) return;
-      var dragItem = null;
 
-      container.addEventListener("dragstart", function (e) {
-        var item = e.target.closest(".sm-list-item");
-        if (!item || item.classList.contains("sm-list-item-new")) return;
-        dragItem = item;
-        item.classList.add("sm-dragging");
-        e.dataTransfer.effectAllowed = "move";
-      });
-
-      container.addEventListener("dragover", function (e) {
+      container.addEventListener("pointerdown", function (e) {
+        var handle = e.target.closest(".sm-drag-handle");
+        if (!handle) return;
+        if (e.button !== undefined && e.button !== 0) return;
+        var dragItem = handle.closest(".sm-list-item");
+        if (!dragItem || dragItem.classList.contains("sm-list-item-new")) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (!dragItem) return;
-        var item = e.target.closest(".sm-list-item");
-        if (!item || item === dragItem || item.classList.contains("sm-list-item-new")) return;
-        var rect = item.getBoundingClientRect();
-        var midY = rect.top + rect.height / 2;
-        if (e.clientY < midY) container.insertBefore(dragItem, item);
-        else container.insertBefore(dragItem, item.nextSibling);
-      });
 
-      container.addEventListener("dragend", function () {
-        if (dragItem) dragItem.classList.remove("sm-dragging");
-        dragItem = null;
-        var row = container.closest(".sm-merge-row");
-        if (row && !fields[key].useMerged) {
-          fields[key].useMerged = true;
-          updateSelectBtns(row, true);
+        var moved = false;
+        var startX = e.clientX;
+        var startY = e.clientY;
+
+        // 幽灵行：克隆拖拽项为固定定位浮块跟随指针；原件半透明留在列表中占位并参与实时重排
+        var ghost = dragItem.cloneNode(true);
+        ghost.classList.add("sm-drag-ghost");
+        var origInput = dragItem.querySelector(".sm-list-input");
+        var ghostInput = ghost.querySelector(".sm-list-input");
+        if (origInput && ghostInput) ghostInput.value = origInput.value; // cloneNode 不带用户输入值
+        var rect = dragItem.getBoundingClientRect();
+        ghost.style.left = rect.left + "px";
+        ghost.style.top = rect.top + "px";
+        ghost.style.width = rect.width + "px";
+        document.body.appendChild(ghost);
+        dragItem.classList.add("sm-dragging");
+
+        // 按指针位置重排：位于某项上半区则插到该项前，否则插到其后；无命中落到末尾（添加行之前）
+        function moveItem(clientY) {
+          var items = container.querySelectorAll(".sm-list-item");
+          var ref = null;
+          for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            if (it === dragItem || it.classList.contains("sm-list-item-new")) continue;
+            var r = it.getBoundingClientRect();
+            if (clientY < r.top + r.height / 2) { ref = it; break; }
+          }
+          if (!ref) ref = container.querySelector(".sm-list-item-new");
+          if (!ref || ref === dragItem || dragItem.nextSibling === ref || ref.previousSibling === dragItem) return;
+          container.insertBefore(dragItem, ref);
+          moved = true;
         }
+
+        function onMove(ev) {
+          ghost.style.transform = "translate(" + (ev.clientX - startX) + "px," + (ev.clientY - startY) + "px)";
+          moveItem(ev.clientY);
+        }
+        function onUp() {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          ghost.remove();
+          dragItem.classList.remove("sm-dragging");
+          if (moved) {
+            var row = container.closest(".sm-merge-row");
+            if (row && !fields[key].useMerged) {
+              fields[key].useMerged = true;
+              updateSelectBtns(row, true);
+            }
+          }
+        }
+
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
       });
     }
 
@@ -761,7 +807,6 @@ try {
 
         var newItem = document.createElement("div");
         newItem.className = "sm-list-item";
-        newItem.draggable = true;
         newItem.innerHTML = '<button class="sm-drag-handle" type="button">&#8801;</button>' +
           '<input type="text" class="sm-list-input" value="' + escapeAttr(val) + '">' +
           '<button class="sm-list-del" type="button">&#8722;</button>';
@@ -1042,7 +1087,6 @@ try {
       }
       var newItem = document.createElement("div");
       newItem.className = "sm-list-item";
-      newItem.draggable = true;
       newItem.setAttribute("data-auto-alias", "true");
       newItem.innerHTML = '<button class="sm-drag-handle" type="button">&#8801;</button>' +
         '<input type="text" class="sm-list-input" value="' + escapeAttr(aliasValue) + '">' +
@@ -1384,6 +1428,8 @@ try {
 
       var panel = document.createElement("div");
       panel.className = "ss-search-panel";
+      // 同 createOverlay：禁止拖动选中文本，避免原生拖拽会话卡死页面
+      panel.addEventListener("dragstart", function (e) { e.preventDefault(); });
       panel.innerHTML =
         '<div class="ss-search-header">' +
           '<input type="text" class="ss-search-input" placeholder="输入工作室名称搜索..." value="' + escapeAttr(studio.name || "") + '">' +
@@ -1436,12 +1482,19 @@ try {
 
     function positionPanel(panel, anchorBtn) {
       var rect = anchorBtn.getBoundingClientRect();
-      var panelWidth = 480;
+      // 用实际渲染宽度计算（窄屏下 CSS 宽度为 vw 单位，不能硬编码 480）
+      var panelWidth = panel.offsetWidth || 480;
+      var margin = 12;
       var left = rect.left;
-      if (left + panelWidth > window.innerWidth - 16) left = window.innerWidth - panelWidth - 16;
-      if (left < 16) left = 16;
+      if (left + panelWidth > window.innerWidth - margin) left = window.innerWidth - panelWidth - margin;
+      if (left < margin) left = margin;
       panel.style.left = left + "px";
-      panel.style.top = (rect.bottom + 6) + "px";
+      var top = rect.bottom + 6;
+      var panelHeight = panel.offsetHeight;
+      if (top + panelHeight > window.innerHeight - margin) {
+        top = Math.max(margin, window.innerHeight - panelHeight - margin);
+      }
+      panel.style.top = top + "px";
     }
 
     function performSearch(term) {

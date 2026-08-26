@@ -1,5 +1,9 @@
-console.log("[SceneGallerySync] v1.5.0 loaded");
 (function () {
+  // 幂等守卫：Stash 会随任务轮询的 React 重渲染周期性重执行插件脚本（PendingScript 机制），
+  // 重复执行会堆积 MutationObserver、嵌套包装 pushState，跳过后续执行
+  if (window.__sceneGallerySyncLoaded) return;
+  window.__sceneGallerySyncLoaded = true;
+
   var PLUGIN_ID = "sceneGallerySync";
   var TASK_NAME = "Create Gallery for Scene";
   var injectedSceneId = null;

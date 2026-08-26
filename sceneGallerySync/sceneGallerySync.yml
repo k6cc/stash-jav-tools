@@ -1,6 +1,6 @@
 name: sceneGallerySync
 description: Automatically creates galleries for scenes with matching metadata, cover, and fanart images
-version: 1.7.0
+version: 1.7.1
 exec:
   - python
   - "{pluginDir}/sceneGallerySync.py"

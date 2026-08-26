@@ -240,7 +240,8 @@
 
 .sm-merge-grid {
   display: grid !important;
-  grid-template-columns: 120px 1fr 1fr !important;
+  /* minmax(0,1fr) 允许列收缩，防止窄屏下内容最小宽度撑爆网格被裁切 */
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) !important;
   gap: 0 !important;
   border: 1px solid #444 !important;
   border-radius: 6px !important;
@@ -291,6 +292,7 @@
   display: flex !important;
   align-items: flex-start !important;
   gap: 6px !important;
+  min-width: 0 !important;
 }
 
 .sm-merge-dest {
@@ -337,6 +339,7 @@
 
 .sm-merge-val {
   flex: 1 !important;
+  min-width: 0 !important;
   color: #ccc !important;
   word-break: break-word !important;
   line-height: 1.5 !important;
@@ -417,11 +420,13 @@
   flex-direction: column !important;
   gap: 4px !important;
   flex: 1 !important;
+  min-width: 0 !important;
 }
 
 .sm-list-item-dest {
   display: flex !important;
   align-items: center !important;
+  min-width: 0 !important;
 }
 
 .sm-list-item-dest .sm-list-input {
@@ -433,31 +438,50 @@
   background: #222 !important;
   color: #8dd89d !important;
   cursor: default !important;
+  min-width: 0 !important;
 }
 
+/* 列表项：手柄/删除按钮叠放在输入框首尾，视觉上包裹在同一个输入框内 */
 .sm-list-item {
-  display: flex !important;
-  align-items: center !important;
-  gap: 4px !important;
+  position: relative !important;
+  min-width: 0 !important;
 }
 
 .sm-list-item.sm-dragging {
   opacity: 0.5 !important;
 }
 
+/* 拖拽幽灵行：跟随指针的浮动预览（挂在 body 下，不继承 .sm-dialog * 规则，需自带字体/盒模型） */
+.sm-drag-ghost {
+  position: fixed !important;
+  z-index: 100001 !important;
+  pointer-events: none !important;
+  margin: 0 !important;
+  opacity: 0.92 !important;
+  background: #2b2b2b !important;
+  border-radius: 4px !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55) !important;
+  box-sizing: border-box !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
 .sm-drag-handle {
-  flex-shrink: 0 !important;
-  width: 20px !important;
-  height: 24px !important;
+  position: absolute !important;
+  left: 1px !important;
+  top: 1px !important;
+  bottom: 1px !important;
+  width: 16px !important;
+  touch-action: none !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  background: #333 !important;
-  border: 1px solid #444 !important;
-  border-radius: 3px !important;
+  background: #262626 !important;
+  border: none !important;
+  border-right: 1px solid #444 !important;
+  border-radius: 2px 0 0 2px !important;
   cursor: grab !important;
   color: #888 !important;
-  font-size: 14px !important;
+  font-size: 13px !important;
   padding: 0 !important;
   line-height: 1 !important;
 }
@@ -467,8 +491,8 @@
 }
 
 .sm-list-item .sm-list-input {
-  flex: 1 !important;
-  padding: 3px 6px !important;
+  width: 100% !important;
+  padding: 3px 22px 3px 20px !important;
   border: 1px solid #444 !important;
   border-radius: 3px !important;
   font-size: 12px !important;
@@ -483,18 +507,21 @@
 }
 
 .sm-list-del {
-  flex-shrink: 0 !important;
-  width: 20px !important;
-  height: 24px !important;
+  position: absolute !important;
+  right: 1px !important;
+  top: 1px !important;
+  bottom: 1px !important;
+  width: 16px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  background: #3a1a1a !important;
-  border: 1px solid #663333 !important;
-  border-radius: 3px !important;
+  background: transparent !important;
+  border: none !important;
+  border-left: 1px solid #444 !important;
+  border-radius: 0 2px 2px 0 !important;
   cursor: pointer !important;
   color: #f85149 !important;
-  font-size: 14px !important;
+  font-size: 13px !important;
   padding: 0 !important;
   line-height: 1 !important;
 }
@@ -503,7 +530,10 @@
   background: #4a2020 !important;
 }
 
+/* 添加行：无手柄/删除按钮，输入框左右留白与上方按钮等宽对齐 */
 .sm-list-item-new .sm-list-input {
+  padding-left: 20px !important;
+  padding-right: 22px !important;
   border-style: dashed !important;
   border-color: #555 !important;
   color: #888 !important;
@@ -516,6 +546,7 @@
 
 .sm-stash-dest, .sm-stash-merged {
   flex: 1 !important;
+  min-width: 0 !important;
 }
 
 .sm-stash-id-row {
@@ -569,6 +600,7 @@
 
 .sm-image-wrap {
   flex: 1 !important;
+  min-width: 0 !important;
 }
 
 .sm-image-preview {
@@ -581,6 +613,7 @@
 
 .sm-image-merged {
   flex: 1 !important;
+  min-width: 0 !important;
 }
 
 .sm-select-field {
@@ -632,12 +665,14 @@
   flex-wrap: wrap !important;
   gap: 4px !important;
   flex: 1 !important;
+  min-width: 0 !important;
   align-items: flex-start !important;
 }
 
 .sm-tags-merged {
   display: flex !important;
   flex: 1 !important;
+  min-width: 0 !important;
   border: 1px solid #444 !important;
   border-radius: 3px !important;
   background: #1a1a1a !important;
@@ -761,10 +796,13 @@
 @media (max-width: 640px) {
   .sm-dialog-merge {
     max-width: 100% !important;
-    padding: 12px !important;
+    padding: 14px !important;
+  }
+  .sm-dialog-select {
+    padding: 14px !important;
   }
   .sm-merge-grid {
-    grid-template-columns: 80px 1fr 1fr !important;
+    grid-template-columns: 80px minmax(0, 1fr) minmax(0, 1fr) !important;
   }
   .sm-merge-lbl {
     font-size: 11px !important;
@@ -777,6 +815,45 @@
     right: 0 !important;
     max-height: 50vh !important;
     border-radius: 8px 8px 0 0 !important;
+  }
+}
+
+/* 窄屏 / 触屏设备：指针拖拽手柄在小屏意义有限，隐藏并复原输入框左边距 */
+@media (max-width: 640px), (hover: none) {
+  .sm-drag-handle {
+    display: none !important;
+  }
+  .sm-list-item .sm-list-input,
+  .sm-list-item-new .sm-list-input {
+    padding-left: 6px !important;
+  }
+}
+
+/* 极窄屏幕：对比网格改为两列（字段标签整行置顶），避免双列被过度压缩 */
+@media (max-width: 480px) {
+  .sm-dialog-merge,
+  .sm-dialog-select {
+    width: 100% !important;
+    padding: 12px !important;
+    border-radius: 0 !important;
+  }
+  .sm-merge-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+  .sm-merge-grid > .sm-merge-header:first-child {
+    display: none !important;
+  }
+  .sm-merge-lbl {
+    grid-column: 1 / -1 !important;
+    border-bottom: none !important;
+  }
+  .sm-btn-row {
+    flex-wrap: wrap !important;
+    justify-content: stretch !important;
+  }
+  .sm-btn-row > button {
+    flex: 1 !important;
+    min-width: 0 !important;
   }
 }
 
@@ -1085,7 +1162,8 @@
 
 @media (max-width: 640px) {
   .ss-search-panel {
-    width: 95vw;
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
     max-height: 70vh;
   }
 

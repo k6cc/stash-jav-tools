@@ -471,7 +471,7 @@ try {
         '<div class="sm-merge-grid">' +
           '<div class="sm-merge-header"></div>' +
           '<div class="sm-merge-header sm-merge-dest-hdr">目标</div>' +
-          '<div class="sm-merge-header sm-merge-merged-hdr">合并结果</div>' +
+          '<div class="sm-merge-header sm-merge-merged-hdr">已合并</div>' +
           rows +
         '</div>' +
         '<div class="sm-warning">此操作将把源工作室的所有关联对象重新分配到目标工作室，然后删除源工作室。此操作不可撤销。</div>' +
@@ -518,8 +518,7 @@ try {
 
       initListDragDrop(dialog, "aliases", fields);
       initListDragDrop(dialog, "urls", fields);
-      initListAddItem(dialog, "aliases", fields);
-      initListAddItem(dialog, "urls", fields);
+      initListAutoGrow(dialog, fields);
       initListDeleteItem(dialog, fields);
       initTagDropdown(dialog, src, dst, fields);
       initTagDelete(dialog, fields);
@@ -663,28 +662,16 @@ try {
       return html;
     }
 
+    // Stash ID 是单一值（空或一个），无并列逻辑：取第一项渲染
     function buildStashIdsDest(stashIds) {
       if (!stashIds || stashIds.length === 0) return '<span class="sm-merge-val">无</span>';
-      var html = '<div class="sm-stash-dest">';
-      for (var i = 0; i < stashIds.length; i++) {
-        html += buildStashIdHtml(stashIds[i], "sm-stash-id-dest");
-      }
-      html += '</div>';
-      return html;
+      return '<div class="sm-stash-dest">' + buildStashIdHtml(stashIds[0], "sm-stash-id-dest") + '</div>';
     }
 
     function buildStashIdsMerged(src) {
       var displayIds = src.stash_ids || [];
-      var html = '<div class="sm-stash-merged">';
-      if (displayIds.length > 0) {
-        for (var i = 0; i < displayIds.length; i++) {
-          html += buildStashIdHtml(displayIds[i], "sm-stash-id-merged");
-        }
-      } else {
-        html += '<span class="sm-merge-val">无</span>';
-      }
-      html += '</div>';
-      return html;
+      if (displayIds.length === 0) return '<span class="sm-merge-val">无</span>';
+      return '<div class="sm-stash-merged">' + buildStashIdHtml(displayIds[0], "sm-stash-id-merged") + '</div>';
     }
 
     function buildImageDest(imageValue, studio) {
@@ -794,32 +781,60 @@ try {
       });
     }
 
-    function initListAddItem(dialog, key, fields) {
-      var container = dialog.querySelector('.sm-list-merged[data-list-key="' + key + '"]');
-      if (!container) return;
-
-      container.addEventListener("keydown", function (e) {
-        if (e.key !== "Enter") return;
+    // 列表自动增删行（别名/网址）：
+    //   末尾空行一有内容即转为正式行（补手柄/删除按钮）并在下方追加新的空行；
+    //   清空最后一行内容时自动删除该行；清空中间行则标红警告"不能为空"并禁用应用按钮。
+    // 手柄/删除按钮的事件分别是容器/弹窗级委托，动态生成的按钮自动可用。
+    function initListAutoGrow(dialog, fields) {
+      dialog.addEventListener("input", function (e) {
         var input = e.target;
-        if (!input.classList.contains("sm-list-new")) return;
-        var val = input.value.trim();
-        if (!val) return;
+        if (!input.classList.contains("sm-list-input")) return;
+        var item = input.closest(".sm-list-item");
+        if (!item) return;
+        var container = item.closest(".sm-list-merged");
+        if (!container) return;
+        var key = container.getAttribute("data-list-key");
+        if (!key || !fields[key]) return;
 
-        var newItem = document.createElement("div");
-        newItem.className = "sm-list-item";
-        newItem.innerHTML = '<button class="sm-drag-handle" type="button">&#8801;</button>' +
-          '<input type="text" class="sm-list-input" value="' + escapeAttr(val) + '">' +
-          '<button class="sm-list-del" type="button">&#8722;</button>';
-
-        var newItemRow = container.querySelector(".sm-list-item-new");
-        container.insertBefore(newItem, newItemRow);
-        input.value = "";
-
-        var row = container.closest(".sm-merge-row");
-        if (row && !fields[key].useMerged) {
-          fields[key].useMerged = true;
-          updateSelectBtns(row, true);
+        if (item.classList.contains("sm-list-item-new")) {
+          if (input.value === "") return;
+          // 转为正式行：去掉占位样式，补手柄和删除按钮
+          item.classList.remove("sm-list-item-new");
+          input.classList.remove("sm-list-new");
+          input.removeAttribute("placeholder");
+          var handle = document.createElement("button");
+          handle.className = "sm-drag-handle";
+          handle.type = "button";
+          handle.innerHTML = "&#8801;";
+          item.insertBefore(handle, item.firstChild);
+          var del = document.createElement("button");
+          del.className = "sm-list-del";
+          del.type = "button";
+          del.innerHTML = "&#8722;";
+          item.appendChild(del);
+          // 追加新的空行，保证末尾始终留一个空输入框
+          var newRow = document.createElement("div");
+          newRow.className = "sm-list-item sm-list-item-new";
+          newRow.innerHTML = '<input type="text" class="sm-list-input sm-list-new" placeholder="添加...">';
+          container.appendChild(newRow);
+          updateApplyBtnState(dialog);
+          return;
         }
+
+        if (input.value === "") {
+          // 下方没有其他正式行 → 最后一行，自动删除；否则是中间行，标红警告
+          var next = item.nextElementSibling;
+          var isLast = true;
+          while (next) {
+            if (!next.classList.contains("sm-list-item-new")) { isLast = false; break; }
+            next = next.nextElementSibling;
+          }
+          if (isLast) item.remove();
+          else item.classList.add("sm-list-item-empty");
+        } else {
+          item.classList.remove("sm-list-item-empty");
+        }
+        updateApplyBtnState(dialog);
       });
     }
 
@@ -832,6 +847,8 @@ try {
         var listContainer = item.closest(".sm-list-merged");
         var listKey = listContainer ? listContainer.getAttribute("data-list-key") : null;
         item.remove();
+        // 删掉的可能是带"不能为空"警告的行，需要重新校验应用按钮
+        updateApplyBtnState(dialog);
 
         if (listKey && fields[listKey]) {
           var row = listContainer.closest(".sm-merge-row");
@@ -919,7 +936,7 @@ try {
       var html = '<div class="sm-tags-dest">';
       for (var i = 0; i < tagIds.length; i++) {
         var found = allTags.find(function (t) { return t.id === tagIds[i]; });
-        if (found) html += '<span class="sm-tag-pill-dest">' + escapeHtml(found.name) + '</span>';
+        if (found) html += '<span class="sm-tag-pill-dest"><span class="sm-tag-name">' + escapeHtml(found.name) + '</span></span>';
       }
       html += '</div>';
       return html;
@@ -933,7 +950,7 @@ try {
       for (var i = 0; i < tagIds.length; i++) {
         var found = allTags.find(function (t) { return t.id === tagIds[i]; });
         if (found) {
-          html += '<span class="sm-tag-pill" data-id="' + found.id + '" data-name="' + escapeAttr(found.name) + '">' + escapeHtml(found.name) + '<span class="sm-tag-del">&times;</span></span>';
+          html += '<span class="sm-tag-pill" data-id="' + found.id + '" data-name="' + escapeAttr(found.name) + '"><span class="sm-tag-name">' + escapeHtml(found.name) + '</span><span class="sm-tag-del">&times;</span></span>';
         }
       }
       html += '</div>';
@@ -1045,7 +1062,7 @@ try {
             pill.className = "sm-tag-pill";
             pill.setAttribute("data-id", tagId);
             pill.setAttribute("data-name", tagName);
-            pill.innerHTML = escapeHtml(tagName) + '<span class="sm-tag-del">&times;</span>';
+            pill.innerHTML = '<span class="sm-tag-name">' + escapeHtml(tagName) + '</span><span class="sm-tag-del">&times;</span>';
             var pillsArea = tagsContainer.querySelector(".sm-tags-pills");
             pillsArea.appendChild(pill);
             selectedIds.push(tagId);
@@ -1136,7 +1153,10 @@ try {
       var applyBtn = dialog.querySelector(".sm-btn-apply");
       if (!applyBtn) return;
       var nameInput = dialog.querySelector('[data-field="name"]');
-      applyBtn.disabled = !(nameInput && nameInput.value.trim());
+      var nameOk = !!(nameInput && nameInput.value.trim());
+      // 存在被清空的中间列表行（红字警告）时禁用应用；第一层弹窗无列表，不受影响
+      var listOk = !dialog.querySelector(".sm-list-item-empty");
+      applyBtn.disabled = !(nameOk && listOk);
     }
 
     function collectListValues(dialog, listKey) {

@@ -125,7 +125,7 @@
   font-size: 14px !important;
   padding: 8px 10px !important;
   outline: none !important;
-  min-width: 60px !important;
+  min-width: 0 !important;
   border-radius: 4px 0 0 4px !important;
 }
 
@@ -165,10 +165,11 @@
 
 .sm-swap-wrap { text-align: center !important; margin: 8px 0 !important; }
 
+/* 调换按钮：与下拉悬浮窗选中项同色系（蓝底蓝字） */
 .sm-swap-btn {
-  background: #1864ab !important;
-  color: #fff !important;
-  border: 1px solid #1864ab !important;
+  background: #1a2a3a !important;
+  color: #79c0ff !important;
+  border: 1px solid #2a4a6a !important;
   padding: 4px 14px !important;
   border-radius: 4px !important;
   font-size: 12px !important;
@@ -176,8 +177,9 @@
 }
 
 .sm-swap-btn:hover {
-  background: #1c7ed6 !important;
-  color: #fff !important;
+  background: #1a3a5c !important;
+  color: #a3d1ff !important;
+  border-color: #2a5a8a !important;
 }
 
 .sm-warning {
@@ -243,9 +245,6 @@
   /* minmax(0,1fr) 允许列收缩，防止窄屏下内容最小宽度撑爆网格被裁切 */
   grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) !important;
   gap: 0 !important;
-  border: 1px solid #444 !important;
-  border-radius: 6px !important;
-  overflow: hidden !important;
   margin-bottom: 14px !important;
 }
 
@@ -255,7 +254,6 @@
   font-weight: 600 !important;
   text-transform: uppercase !important;
   letter-spacing: 0.5px !important;
-  background: #1a1a1a !important;
   color: #888 !important;
   border-bottom: 1px solid #444 !important;
 }
@@ -283,7 +281,6 @@
 .sm-merge-lbl {
   font-weight: 500 !important;
   color: #aaa !important;
-  background: #222 !important;
   display: flex !important;
   align-items: center !important;
 }
@@ -293,14 +290,6 @@
   align-items: flex-start !important;
   gap: 6px !important;
   min-width: 0 !important;
-}
-
-.sm-merge-dest {
-  background: #1a2a1a !important;
-}
-
-.sm-merge-merged {
-  background: #1a2a3a !important;
 }
 
 .sm-select-btn {
@@ -356,6 +345,8 @@
 
 .sm-input {
   width: 100% !important;
+  /* min-width:0：作为列内 flex 子项允许收缩到列宽以下（input 固有宽度 ~170px） */
+  min-width: 0 !important;
   padding: 4px 8px !important;
   border: 1px solid #444 !important;
   border-radius: 3px !important;
@@ -506,6 +497,23 @@
   border-color: #58a6ff !important;
 }
 
+/* 中间行被清空：红边框 + 行内红字警告（置于 focus 规则之后，聚焦时警告依然可见） */
+.sm-list-item.sm-list-item-empty .sm-list-input {
+  border-color: rgba(240, 62, 62, 0.65) !important;
+}
+
+.sm-list-item.sm-list-item-empty::after {
+  content: "不能为空";
+  position: absolute !important;
+  right: 24px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  color: #f03e3e !important;
+  font-size: 11px !important;
+  white-space: nowrap !important;
+  pointer-events: none !important;
+}
+
 .sm-list-del {
   position: absolute !important;
   right: 1px !important;
@@ -549,10 +557,12 @@
   min-width: 0 !important;
 }
 
+/* Stash ID 行：endpoint 徽章在上、ID 值链接在其下方垂直堆叠 */
 .sm-stash-id-row {
   display: flex !important;
-  align-items: center !important;
-  gap: 6px !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 2px !important;
   padding: 2px 0 !important;
   line-height: 1.4 !important;
 }
@@ -619,6 +629,10 @@
 .sm-select-field {
   display: flex !important;
   align-items: center !important;
+  /* flex:1 + min-width:0：作为合并结果列（flex 容器）的子项可随列宽收缩，
+     否则输入框固有宽度（~170px）成为收缩下限，极窄屏会整体撑出列外 */
+  flex: 1 !important;
+  min-width: 0 !important;
   border: 1px solid #444 !important;
   border-radius: 3px !important;
   background: #1a1a1a !important;
@@ -635,7 +649,8 @@
   padding: 4px 8px !important;
   cursor: pointer !important;
   outline: none !important;
-  min-width: 60px !important;
+  /* min-width: 0 允许极窄屏下随列收缩（旧版 60px 固有宽度会撑爆网格列） */
+  min-width: 0 !important;
   border-radius: 3px 0 0 3px !important;
 }
 
@@ -685,9 +700,19 @@
   flex-wrap: wrap !important;
   gap: 4px !important;
   flex: 1 !important;
+  /* min-width:0：允许整个标签区随列宽收缩，长标签由 pill 自身截断，
+     否则最宽 pill（nowrap）成为下限把右侧"全部删除/下拉"按钮挤出框外 */
+  min-width: 0 !important;
   align-items: flex-start !important;
   padding: 4px !important;
   min-height: 28px !important;
+}
+
+/* 标签名独立 span：超长时省略号截断，pill 不撑破容器 */
+.sm-tag-name {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .sm-tag-pill-dest {
@@ -700,6 +725,7 @@
   font-size: 11px !important;
   color: #8dd89d !important;
   white-space: nowrap !important;
+  max-width: 100% !important;
 }
 
 .sm-tag-pill {
@@ -713,11 +739,14 @@
   color: #79c0ff !important;
   white-space: nowrap !important;
   gap: 2px !important;
+  max-width: 100% !important;
 }
 
 .sm-tag-del {
   display: inline-flex !important;
   align-items: center !important;
+  /* 收缩时 × 按钮不被压缩，截断只发生在标签名上 */
+  flex-shrink: 0 !important;
   justify-content: center !important;
   width: 14px !important;
   height: 14px !important;
@@ -818,9 +847,10 @@
   }
 }
 
-/* 窄屏 / 触屏设备：指针拖拽手柄在小屏意义有限，隐藏并复原输入框左边距 */
+/* 窄屏 / 触屏设备：指针拖拽手柄和标签"清空"按钮在小屏意义有限，隐藏并复原输入框左边距 */
 @media (max-width: 640px), (hover: none) {
-  .sm-drag-handle {
+  .sm-drag-handle,
+  .sm-tag-clear-btn {
     display: none !important;
   }
   .sm-list-item .sm-list-input,

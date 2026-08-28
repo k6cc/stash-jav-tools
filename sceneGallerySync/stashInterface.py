@@ -134,6 +134,31 @@ class StashInterface:
                 return p.get("enabled", True)
         return False
 
+    def gql_findScenesWithoutGallery(self, page_size=500):
+        # 分页拉取所有场景，返回未关联图库场景的 (id, path) 列表
+        # stash 各版本 SceneFilterType 无稳定的 has_gallery 过滤器，客户端过滤保证兼容
+        q = """query($f:FindFilterType){findScenes(filter:$f){count scenes{id files{path} galleries{id}}}}"""
+        result = []
+        page = 1
+        while True:
+            data = self.__gql(q, {"f": {
+                "per_page": page_size, "page": page, "sort": "path",
+            }}).get("findScenes", {})
+            scenes = data.get("scenes", [])
+            if not scenes:
+                break
+            for s in scenes:
+                if s.get("galleries"):
+                    continue
+                files = s.get("files") or []
+                if not files:
+                    continue
+                result.append((s["id"], files[0]["path"]))
+            if len(scenes) < page_size:
+                break
+            page += 1
+        return result
+
     def gql_findImagesInDirectory(self, dir_path):
         # 同时查询 ImageFile 和 VideoFile 类型，因为 .gif 会被 Stash 当作 VideoFile 存储
         q = """query($f:ImageFilterType){findImages(image_filter:$f,filter:{per_page:-1}){images{id visual_files{...on ImageFile{path}...on VideoFile{path}}}}}"""

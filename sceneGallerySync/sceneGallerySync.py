@@ -29,18 +29,21 @@ class SceneGallerySync:
         hook_type = self._stash.get_hook_type()
         log.LogInfo(f"mode={mode} hook={hook_type} scene_id={scene_id}")
 
-        if not scene_id:
-            log.LogWarning("No scene_id")
-            return
-
         if hook_type == "Scene.Create.Post":
             return
 
         if mode == "create_gallery":
+            if not scene_id:
+                # 任务界面直接点击（无 scene_id）：批量处理所有未关联图库的场景
+                return self.__batch_create_galleries()
             # 按钮触发：图片入库由扫描负责，不做入库轮询，直接创建或立即失败
             # stash 对插件任务失败也标 FINISHED（job 状态不可依赖），
             # 前端通过解析本次任务写入 stash 的原始日志判定真实结果
             return self.__create_gallery_for_scene(scene_id, wait_for_images=False)
+
+        if not scene_id:
+            log.LogWarning("No scene_id")
+            return
         elif hook_type == "Scene.Update.Post":
             if not self._stash.gql_checkPluginEnabled("nfoSceneParser"):
                 log.LogInfo("nfoSceneParser not found, exiting")
@@ -273,6 +276,49 @@ class SceneGallerySync:
                         return g
 
         return None
+
+    def __batch_create_galleries(self):
+        # 任务界面批量模式：为所有未关联图库的场景创建并关联图库
+        # 串行逐个处理（单任务单请求，不派生子进程、不做入库轮询），不拥堵 stash
+        # 等同后台创建逻辑但不等待图片入库（入库是扫描期间的事情）
+        scenes = self._stash.gql_findScenesWithoutGallery()
+        total = len(scenes)
+        log.LogInfo(f"Batch: {total} scenes without gallery")
+        if not total:
+            return
+
+        ok = no_folder = no_images = not_indexed = failed = 0
+        for idx, (scene_id, scene_path) in enumerate(scenes, 1):
+            try:
+                # 文件系统预检查：无 extrafanart 文件夹或无图片的场景不发任何 GQL 请求
+                scene_dir = os.path.dirname(scene_path)
+                extrafanart_path = self.__find_extrafanart_folder(scene_dir)
+                if not extrafanart_path:
+                    no_folder += 1
+                elif not self.__list_extrafanart_files(extrafanart_path):
+                    no_images += 1
+                else:
+                    result = self.__create_gallery_for_scene(scene_id, wait_for_images=False)
+                    if result is None:
+                        ok += 1
+                    elif result == "Extrafanart images not indexed in Stash":
+                        not_indexed += 1
+                        log.LogInfo(f"[{idx}/{total}] scene {scene_id} skipped: {result}")
+                    else:
+                        failed += 1
+                        log.LogWarning(f"[{idx}/{total}] scene {scene_id} failed: {result}")
+            except Exception as e:
+                failed += 1
+                log.LogError(f"[{idx}/{total}] scene {scene_id} error: {repr(e)}")
+            if idx % 50 == 0:
+                log.LogInfo(
+                    f"Progress: {idx}/{total} (ok={ok} no_folder={no_folder} "
+                    f"no_images={no_images} not_indexed={not_indexed} failed={failed})"
+                )
+        log.LogInfo(
+            f"Batch done: total={total} created/updated={ok} no_folder={no_folder} "
+            f"no_images={no_images} not_indexed={not_indexed} failed={failed}"
+        )
 
     def __create_gallery_for_scene(self, scene_id, wait_for_images=True):
         # 成功返回 None，失败返回原因字符串（按钮任务据此向 stash job 报错）

@@ -1,3 +1,13 @@
-﻿# Build artifacts
-*.zip
+# Python 运行时产物
+__pycache__/
+*.pyc
 
+# 备份/临时文件
+*_original.js
+*_v*.js
+*.tmp
+*.bak
+
+# 系统文件
+Thumbs.db
+Desktop.ini

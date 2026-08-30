@@ -868,7 +868,7 @@ def main():
         signal.signal(signal.SIGTERM, shutdown)
 
     log(f"")
-    log(f"  Scene Translate Proxy v2.9.1")
+    log(f"  Scene Translate Proxy v2.9.2")
     log(f"  http://{bind_host}:{port}")
     if in_docker:
         log(f"  Docker detected: bound to 0.0.0.0 (requires -p {port}:{port})")

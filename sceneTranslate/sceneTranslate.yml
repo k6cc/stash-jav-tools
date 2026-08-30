@@ -41,14 +41,14 @@ ui:
 # 留空时浏览器使用默认值: google_free / zh-CN / 600
 settings:
   translateTool:
-    displayName: 翻译引擎
-    description: "可选值: google_free / google_api / microsoft / baidu / openai / deepl。默认 google_free(无需代理与密钥)；选用其他引擎需在 config.json 配置对应 API 密钥"
+    displayName: "翻译引擎 / Engine"
+    description: "google_free / google_api / microsoft / baidu / openai / deepl。默认 google_free(免代理免密钥)，其余需在 config.json 配置 API 密钥 / Default google_free (no proxy or key required); other engines need API key in config.json"
     type: STRING
   targetLanguage:
-    displayName: 目标语言
-    description: "如 zh-CN(简体中文) zh-TW(繁体中文) en(英语) ja(日语) ko(韩语)。留空默认 zh-CN"
+    displayName: "目标语言 / Language"
+    description: "如 zh-CN zh-TW en ja ko，留空默认 zh-CN / e.g. zh-CN zh-TW en ja ko, default zh-CN"
     type: STRING
   idleTimeout:
-    displayName: 空闲超时（秒）
-    description: "代理无翻译请求时自动关闭的秒数，0 表示不自动关闭。留空默认 600"
+    displayName: "空闲超时(秒) / Idle timeout (s)"
+    description: "代理空闲自动关闭秒数，0 不自动关闭，默认 600 / Proxy auto-shutdown after idle seconds, 0 = never, default 600"
     type: STRING

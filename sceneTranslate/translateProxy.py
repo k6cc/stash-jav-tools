@@ -504,6 +504,16 @@ def is_proxy_running(port):
         return False
 
 
+def is_our_proxy(port):
+    """检查端口上运行的是否为本翻译代理(通过 /status 响应判断)。"""
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/status", timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("status") == "running" and "version" in data
+    except Exception:
+        return False
+
+
 def shutdown_proxy_via_http(port):
     try:
         req = Request(f"http://127.0.0.1:{port}/shutdown", data=b"", method="POST")
@@ -539,7 +549,40 @@ def is_running_in_docker():
         return False
 
 
-def read_stash_plugin_port(stash_port):
+def _stash_auth_headers(stash_input):
+    """从插件任务 stdin 的 server_connection 提取认证头(优先 session cookie)。
+
+    Stash 开启密码保护时 GraphQL 需要认证,任务输入里自带 session cookie。
+    """
+    sc = (stash_input or {}).get("server_connection") or {}
+    cookie = sc.get("SessionCookie") or {}
+    name, value = cookie.get("Name"), cookie.get("Value")
+    if name and value:
+        return {"Cookie": f"{name}={value}"}
+    return {}
+
+
+def _stash_api_key(stash_input):
+    """从 Stash 配置目录(config.yml)读取 api_key,作为 cookie 失效时的兜底认证。
+
+    server_connection.Dir 即 Stash 配置文件所在目录。
+    """
+    sc = (stash_input or {}).get("server_connection") or {}
+    cfg_dir = sc.get("Dir") or ""
+    if not cfg_dir:
+        return None
+    try:
+        with open(os.path.join(cfg_dir, "config.yml"), "r", encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"^\s*api_key:\s*[\"']?([A-Za-z0-9._~-]+)", line)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def read_stash_plugin_port(stash_port, stash_input=None):
     """Read proxyPort from Stash plugin settings via GraphQL (read-only).
 
     Stash plugin page is the single source of truth for the port; config.json
@@ -547,25 +590,38 @@ def read_stash_plugin_port(stash_port):
     """
     if not stash_port:
         return None
-    try:
-        req = Request(
-            f"http://127.0.0.1:{stash_port}/graphql",
-            data=json.dumps({"query": "query { configuration { plugins } }"}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+    headers = {"Content-Type": "application/json"}
+    headers.update(_stash_auth_headers(stash_input))
+    # 认证链: session cookie > config.yml api_key;密码保护的 Stash 未认证会 401
+    auth_sets = [headers]
+    api_key = _stash_api_key(stash_input)
+    if api_key:
+        auth_sets.append({**headers, "ApiKey": api_key})
+    for auth_headers in auth_sets:
+        try:
+            req = Request(
+                f"http://127.0.0.1:{stash_port}/graphql",
+                data=json.dumps({"query": "query { configuration { plugins } }"}).encode("utf-8"),
+                headers=auth_headers,
+                method="POST",
+            )
+            with urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            continue
         plugins = ((data.get("data") or {}).get("configuration") or {}).get("plugins") or {}
         raw = (plugins.get("sceneTranslate") or {}).get("proxyPort")
         if raw is None or str(raw).strip() == "":
             return None
-        port = int(raw)
+        try:
+            port = int(raw)
+        except (ValueError, TypeError):
+            return None
         if 1 <= port < 65536:
             return port
         return None
-    except Exception:
-        return None
+    log("Could not read proxyPort from Stash plugin settings (GraphQL auth failed), falling back to config.json")
+    return None
 
 
 def detect_stash_port(stash_input=None):
@@ -731,7 +787,7 @@ def main():
     port = args.port
     port_source = "command line"
     if not port:
-        port = read_stash_plugin_port(_stash_port)
+        port = read_stash_plugin_port(_stash_port, stash_args)
         if port:
             port_source = "Stash plugin settings"
     if not port:
@@ -762,6 +818,17 @@ def main():
         if is_proxy_running(port):
             log(f"Proxy still running on port {port}, cannot start")
             return
+
+        # 改端口重启时,旧代理仍监听旧端口(config.json 兜底端口),一并关闭防止泄漏
+        if args.restart:
+            try:
+                old_port = int(_settings.get("proxyPort", 9998))
+            except (ValueError, TypeError):
+                old_port = 9998
+            if old_port != port and is_our_proxy(old_port):
+                log(f"Port changed {old_port} -> {port}, shutting down old proxy on port {old_port}...")
+                if not shutdown_proxy_via_http(old_port):
+                    kill_proxy_on_port(old_port)
 
         child_args = [os.path.abspath(__file__), "--detach", "--port", str(port)]
         if args.config:
@@ -801,7 +868,7 @@ def main():
         signal.signal(signal.SIGTERM, shutdown)
 
     log(f"")
-    log(f"  Scene Translate Proxy v2.9.0")
+    log(f"  Scene Translate Proxy v2.9.1")
     log(f"  http://{bind_host}:{port}")
     if in_docker:
         log(f"  Docker detected: bound to 0.0.0.0 (requires -p {port}:{port})")

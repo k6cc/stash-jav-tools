@@ -2,7 +2,7 @@
 
 Stash 插件 — 在场景、图片和图库编辑页面添加一键翻译按钮，支持翻译标题和详情。
 
-> v2.9.0：新增插件页「代理端口」设置 — 端口改为插件页统一管理（浏览器与代理启动均读取），CSP 放行任意端口，config.json 的 proxyPort 降级为兜底；改端口后重新运行「Start Translate Proxy」即可。
+> v2.9.1：修复密码保护的 Stash 下代理启动不读插件页端口的问题 — GraphQL 改用任务自带的 session cookie 认证（失败时用 config.yml 的 api_key 兜底）；换端口重启时同步关闭旧端口代理。
 
 ## 支持的翻译引擎
 

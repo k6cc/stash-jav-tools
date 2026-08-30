@@ -475,7 +475,7 @@ class TranslateProxyHandler(BaseHTTPRequestHandler):
             }
         self._send_json({
             "status": "running",
-            "version": "2.6.4",
+            "version": "2.9.2",
             "currentEngine": _settings.get("translateTool", "google_free"),
             "currentLang": _settings.get("targetLanguage", "zh-CN"),
             "engines": engines_status,

@@ -25,33 +25,35 @@ Stash 插件 — 在场景、图片和图库编辑页面添加一键翻译按钮
 ├── sceneTranslate.css
 ├── sceneTranslate.yml
 ├── translateProxy.py
-└── config.json          ← 代理端口 + 各引擎 API 密钥
+└── config.json          ← 各引擎 API 密钥（端口兜底值）
 ```
 
 ## 配置
 
 配置分两个入口，各司其职：
 
-### Stash 插件设置页（翻译引擎 / 目标语言 / 空闲超时）
+### Stash 插件设置页（翻译引擎 / 目标语言 / 空闲超时 / 代理端口）
 
-进入 **Stash → 设置 → 插件 → Scene Translate**，可直接设置三项参数：
+进入 **Stash → 设置 → 插件 → Scene Translate**，可直接设置四项参数：
 
 | 参数 | 说明 | 留空默认值 |
 |------|------|-----------|
 | 翻译引擎 | `google_free` / `google_api` / `microsoft` / `baidu` / `openai` / `deepl` | `google_free` |
 | 目标语言 | `zh-CN` / `zh-TW` / `en` / `ja` / `ko` 等 | `zh-CN` |
 | 空闲超时（秒） | 代理无请求时自动关闭的秒数，`0` 表示不自动关闭 | `600` |
+| 代理端口 | 翻译代理监听端口，修改后需在插件任务里重新运行「Start Translate Proxy」；Docker 需同步映射该端口 | `9998` |
 
-- 修改后无需重启代理，翻译按钮在页面加载/导航时即时读取最新配置
+- 翻译引擎 / 目标语言 / 空闲超时修改后无需重启代理，翻译按钮在页面加载/导航时即时读取最新配置
+- 代理端口是浏览器与代理的统一约定：浏览器 JS 与 Python 代理启动时都读本设置，改端口只需在插件页改一处
 - `google_free` 无需代理与密钥，开箱即用
 
-### config.json（代理端口 + 各引擎 API 密钥）
+### config.json（各引擎 API 密钥）
 
-`config.json` 仅存放代理端口和各引擎的 API 密钥（支持 `//` 注释）：
+`config.json` 仅存放各引擎的 API 密钥（支持 `//` 注释）；`proxyPort` 仅在插件页未设置端口时作兜底：
 
 ```json
 {
-  // 代理端口
+  // 代理端口（兜底值，以 Stash 插件页的「代理端口」为准）
   "proxyPort": 9998,
 
   // 各引擎的 API Key（按需填写，选用对应引擎时必填）

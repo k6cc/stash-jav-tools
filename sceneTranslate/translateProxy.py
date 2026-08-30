@@ -539,6 +539,35 @@ def is_running_in_docker():
         return False
 
 
+def read_stash_plugin_port(stash_port):
+    """Read proxyPort from Stash plugin settings via GraphQL (read-only).
+
+    Stash plugin page is the single source of truth for the port; config.json
+    proxyPort is only a fallback. Returns None on any failure/empty/invalid.
+    """
+    if not stash_port:
+        return None
+    try:
+        req = Request(
+            f"http://127.0.0.1:{stash_port}/graphql",
+            data=json.dumps({"query": "query { configuration { plugins } }"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        plugins = ((data.get("data") or {}).get("configuration") or {}).get("plugins") or {}
+        raw = (plugins.get("sceneTranslate") or {}).get("proxyPort")
+        if raw is None or str(raw).strip() == "":
+            return None
+        port = int(raw)
+        if 1 <= port < 65536:
+            return port
+        return None
+    except Exception:
+        return None
+
+
 def detect_stash_port(stash_input=None):
     if stash_input:
         try:
@@ -695,7 +724,19 @@ def main():
 
     load_settings(args.config)
 
-    port = args.port or int(_settings.get("proxyPort", 9998))
+    global _stash_port
+    _stash_port = args.stash_port or detect_stash_port(stash_args)
+
+    # 端口优先级: --port 参数 > Stash 插件页 proxyPort > config.json proxyPort > 9998
+    port = args.port
+    port_source = "command line"
+    if not port:
+        port = read_stash_plugin_port(_stash_port)
+        if port:
+            port_source = "Stash plugin settings"
+    if not port:
+        port = int(_settings.get("proxyPort", 9998))
+        port_source = "config.json"
 
     # ── Launcher mode (exec or task): start background child and exit ──
     # Stash exec/task should not run the server directly — spawn a background
@@ -722,19 +763,16 @@ def main():
             log(f"Proxy still running on port {port}, cannot start")
             return
 
-        child_args = [os.path.abspath(__file__), "--detach"]
-        if args.port:
-            child_args += ["--port", str(args.port)]
+        child_args = [os.path.abspath(__file__), "--detach", "--port", str(port)]
         if args.config:
             child_args += ["--config", args.config]
         # 传递 Stash 端口给子进程（用于代理生命周期监控：Stash 关闭时自动退出）
-        detected_port = detect_stash_port(stash_args)
-        if detected_port:
-            child_args += ["--stash-port", str(detected_port)]
+        if _stash_port:
+            child_args += ["--stash-port", str(_stash_port)]
         spawn_background_process(child_args)
 
         if wait_for_proxy(port, max_wait=15):
-            log(f"Proxy started successfully on port {port}")
+            log(f"Proxy started successfully on port {port} (from {port_source})")
         else:
             log(f"Warning: Proxy may not have started on port {port}")
         return
@@ -744,8 +782,6 @@ def main():
         log(f"Proxy already running on port {port}, exiting")
         return
 
-    global _stash_port
-    _stash_port = args.stash_port or detect_stash_port(stash_args)
     if _stash_port:
         log(f"Detected Stash on port {_stash_port}")
     else:
@@ -765,7 +801,7 @@ def main():
         signal.signal(signal.SIGTERM, shutdown)
 
     log(f"")
-    log(f"  Scene Translate Proxy v2.6.4")
+    log(f"  Scene Translate Proxy v2.9.0")
     log(f"  http://{bind_host}:{port}")
     if in_docker:
         log(f"  Docker detected: bound to 0.0.0.0 (requires -p {port}:{port})")

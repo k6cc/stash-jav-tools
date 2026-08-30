@@ -1,9 +1,9 @@
 /**
- * Scene Translate Plugin v2.8.0
+ * Scene Translate Plugin v2.9.0
  *
  * Adds one-click translate buttons to scene & image edit pages.
- * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
- * plugin config only. config.json holds proxyPort and API keys.
+ * Settings (translateTool/targetLanguage/idleTimeout/proxyPort) are stored in
+ * Stash plugin config only. config.json holds API keys (proxyPort is fallback).
  * google_free engine works without proxy (browser direct fallback);
  * other engines require the "Start Translate Proxy" task in plugin settings.
  * Proxy URL auto-detects host from Stash URL (supports Docker port mapping).
@@ -118,6 +118,22 @@ try {
     });
   }
 
+  // 应用插件页设置到内存 config（loadConfig 与每次点击前共用）
+  function applyStashConfig(stashCfg) {
+    if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
+    if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
+    if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
+      var n = parseInt(stashCfg.idleTimeout, 10);
+      if (!isNaN(n)) config.idleTimeout = n;
+    }
+    if (stashCfg.proxyPort !== undefined && stashCfg.proxyPort !== null && String(stashCfg.proxyPort).trim() !== "") {
+      var p = parseInt(stashCfg.proxyPort, 10);
+      if (!isNaN(p) && p > 0 && p < 65536) {
+        config.proxyUrl = "http://" + _proxyHost + ":" + p;
+      }
+    }
+  }
+
   // ─── Proxy Connection ──────────────────────────────────────────────
 
   function fetchProxyConfig() {
@@ -137,12 +153,7 @@ try {
   function loadConfig() {
     // 仅读取 Stash 插件设置（不依赖代理在线，google_free 离线也能拿到目标语言）
     return fetchStashPluginConfig().then(function (stashCfg) {
-      if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
-      if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
-      if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
-        var n = parseInt(stashCfg.idleTimeout, 10);
-        if (!isNaN(n)) config.idleTimeout = n;
-      }
+      applyStashConfig(stashCfg);
       // 探测代理是否在线（离线则忽略，google_free 可走浏览器直连）
       fetchProxyConfig().catch(function () { /* proxy offline, fine */ });
       return true;
@@ -262,12 +273,7 @@ try {
       ensureProxy().then(function (online) {
         // 每次点击前重新读取 Stash 插件设置，确保用户在设置页改的参数立即生效
         return fetchStashPluginConfig().then(function (stashCfg) {
-          if (stashCfg.translateTool) config.translateTool = stashCfg.translateTool;
-          if (stashCfg.targetLanguage) config.targetLanguage = stashCfg.targetLanguage;
-          if (stashCfg.idleTimeout !== undefined && stashCfg.idleTimeout !== null) {
-            var n = parseInt(stashCfg.idleTimeout, 10);
-            if (!isNaN(n)) config.idleTimeout = n;
-          }
+          applyStashConfig(stashCfg);
           // 更新按钮 tooltip 反映最新配置
           btn.title = tc("翻译 " + fieldName, "Translate " + fieldName) + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
         }).catch(function () { /* GraphQL 不可用则沿用内存配置 */ });

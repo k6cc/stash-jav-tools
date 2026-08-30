@@ -9,6 +9,42 @@
   var injectedSceneId = null;
   var _observerTimer = null;
 
+  // ─── i18n：跟随 Stash 界面语言 ─────────────────────────────────────
+  // 经 PluginApi 在 React 树内挂一个渲染 null 的桥接组件，读取 IntlProvider 的 locale。
+  // patch 点必须是 "App"（AppContainer，包裹全部页面内容）：不能用 "PluginRoutes"，
+  // 它位于 <Switch> 内，URL 命中正常路由时不会被渲染。
+  // PluginApi 不可用时 tc() 回退中文（本插件文案原本即中文）。
+  var _intlLocale = "";
+
+  (function initIntlBridge() {
+    try {
+      var api = window.PluginApi;
+      if (!api || !api.React || !api.patch || !api.libraries || !api.libraries.Intl) return;
+      var React = api.React;
+      function IntlBridge() {
+        var intl = api.libraries.Intl.useIntl();
+        React.useEffect(function () {
+          _intlLocale = intl.locale || "";
+        });
+        return null;
+      }
+      api.patch.before("App", function (props) {
+        return [{
+          children: React.createElement(React.Fragment, null,
+            React.createElement(IntlBridge),
+            props.children)
+        }];
+      });
+    } catch (e) {
+      console.warn("[SGS] i18n bridge unavailable:", e);
+    }
+  })();
+
+  // 自定义句（语言包中无对应 key）：中文语言用中文，其余语言用英文；语言未知时按中文兜底
+  function tc(zh, en) {
+    return (_intlLocale && !/^zh/i.test(_intlLocale)) ? en : zh;
+  }
+
   function callGQL(query, variables) {
     return fetch("/graphql", {
       method: "POST",
@@ -101,19 +137,22 @@
       .catch(function () { return null; });
   }
 
+  // 值为 [中文, 英文]，mapReason 调用时按当前界面语言取词（Stash 切语言后无需刷新即可生效）
   var FAIL_REASONS = {
-    "No extrafanart folder": "未找到 extrafanart 文件夹",
-    "No images in extrafanart folder": "extrafanart 文件夹中没有图片",
-    "Extrafanart images not indexed in Stash": "图片尚未入库（请先扫描）",
-    "Scene not found or no files": "未找到场景或场景无文件",
-    "Gallery create failed": "图库创建失败"
+    "No extrafanart folder": ["未找到 extrafanart 文件夹", "No extrafanart folder found"],
+    "No images in extrafanart folder": ["extrafanart 文件夹中没有图片", "No images in extrafanart folder"],
+    "Extrafanart images not indexed in Stash": ["图片尚未入库（请先扫描）", "Extrafanart images not indexed in Stash (scan first)"],
+    "Scene not found or no files": ["未找到场景或场景无文件", "Scene not found or no files"],
+    "Gallery create failed": ["图库创建失败", "Gallery creation failed"]
   };
 
   function mapReason(s) {
     if (!s) return "";
     s = String(s).trim();
     for (var k in FAIL_REASONS) {
-      if (FAIL_REASONS.hasOwnProperty(k) && s.indexOf(k) !== -1) return FAIL_REASONS[k];
+      if (FAIL_REASONS.hasOwnProperty(k) && s.indexOf(k) !== -1) {
+        return tc(FAIL_REASONS[k][0], FAIL_REASONS[k][1]);
+      }
     }
     return s;
   }
@@ -182,11 +221,11 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-sm sgs-btn sgs-btn-icon";
-    btn.title = "创建图库";
+    btn.title = tc("创建图库", "Create Gallery");
     btn.innerHTML = ICONS.idle;
     btn.onclick = function () {
       btn.disabled = true;
-      btn.title = "创建中...";
+      btn.title = tc("创建中...", "Creating...");
       btn.className = "btn btn-sm sgs-btn sgs-btn-icon";
       btn.innerHTML = ICONS.loading;
 
@@ -196,7 +235,7 @@
         btn.innerHTML = ok ? ICONS.ok : ICONS.err;
         setTimeout(function () {
           btn.className = "btn btn-sm sgs-btn sgs-btn-icon";
-          btn.title = "创建图库";
+          btn.title = tc("创建图库", "Create Gallery");
           btn.innerHTML = ICONS.idle;
           btn.disabled = false;
         }, ms || (ok ? 5000 : 8000));
@@ -204,7 +243,7 @@
 
       runTask(sceneId).then(function (jobId) {
         // 旧版 stash 无 job_id：退回「已提交」提示
-        if (!jobId) { finish(true, "任务已提交"); return; }
+        if (!jobId) { finish(true, tc("任务已提交", "Task submitted")); return; }
         pollJob(jobId, function (status, error) {
           if (status === "FINISHED") {
             // job 恒报 FINISHED，解析日志确认真实结果；日志入库比 job 结束略慢，重试几次
@@ -214,27 +253,27 @@
                 attempts++;
                 if (!result && attempts < 3) { setTimeout(check, 1000); return; }
                 if (result === "OK") {
-                  finish(true, "图库已创建/更新");
+                  finish(true, tc("图库已创建/更新", "Gallery created/updated"));
                 } else if (result) {
-                  finish(false, "创建失败：" + mapReason(result));
+                  finish(false, tc("创建失败：", "Creation failed: ") + mapReason(result));
                 } else {
-                  finish(true, "任务已结束，详情请查看日志");
+                  finish(true, tc("任务已结束，详情请查看日志", "Task finished, check the logs for details"));
                 }
               });
             })();
           } else if (status === "FAILED") {
             var reason = mapReason(error);
-            finish(false, "创建失败：" + (reason || "详情请查看日志"));
+            finish(false, tc("创建失败：", "Creation failed: ") + (reason || tc("详情请查看日志", "Check the logs for details")));
           } else if (status === "CANCELLED") {
-            finish(false, "任务已取消");
+            finish(false, tc("任务已取消", "Task cancelled"));
           } else {
             // TIMEOUT / MISSING / ERROR：任务可能仍在后台执行
-            finish(true, "任务仍在执行，请稍后在任务页查看结果");
+            finish(true, tc("任务仍在执行，请稍后在任务页查看结果", "Task still running, check the Tasks page later"));
           }
         });
       }).catch(function (e) {
         console.error("[SGS]", e);
-        finish(false, "提交失败", 3000);
+        finish(false, tc("提交失败", "Submission failed"), 3000);
       });
     };
     target.appendChild(document.createTextNode(" "));

@@ -86,6 +86,51 @@ try {
     return String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // ===== i18n：跟随 Stash 界面语言 =====
+  // 经 PluginApi 在 React 树内挂一个渲染 null 的桥接组件，读取 IntlProvider 的扁平 messages。
+  // patch 点必须是 "App"（AppContainer，包裹全部页面内容）：不能用 "PluginRoutes"，
+  // 它位于 <Switch> 内，URL 命中 studios/scenes 等正常路由时 Switch 只渲染匹配的 Route，
+  // PluginRoutes 不会被渲染，桥接组件随之失效。
+  // 弹窗每次打开时重新取词，Stash 切换语言后自动生效；PluginApi 不可用时全部回退中文。
+  var _intlMessages = null;
+  var _intlLocale = "";
+
+  (function initIntlBridge() {
+    try {
+      var api = window.PluginApi;
+      if (!api || !api.React || !api.patch || !api.libraries || !api.libraries.Intl) return;
+      var React = api.React;
+      function IntlBridge() {
+        var intl = api.libraries.Intl.useIntl();
+        React.useEffect(function () {
+          _intlMessages = intl.messages || null;
+          _intlLocale = intl.locale || "";
+        });
+        return null;
+      }
+      api.patch.before("App", function (props) {
+        return [{
+          children: React.createElement(React.Fragment, null,
+            React.createElement(IntlBridge),
+            props.children)
+        }];
+      });
+    } catch (e) {
+      console.warn("[StudioTools] i18n bridge unavailable, falling back to Chinese:", e);
+    }
+  })();
+
+  // 官方译法：优先取 Stash 语言包 key（如 "actions.cancel"），缺失或未取到时回退中文
+  function t(key, zhFallback) {
+    var msg = _intlMessages && _intlMessages[key];
+    return (typeof msg === "string" && msg) ? msg : zhFallback;
+  }
+
+  // 自定义句（语言包中无对应 key）：中文语言用中文，其余语言用英文；语言未知时按中文兜底
+  function tc(zh, en) {
+    return (_intlLocale && !/^zh/i.test(_intlLocale)) ? en : zh;
+  }
+
   function getStudioIdFromUrl() {
     var m = window.location.pathname.match(/\/studios\/(\d+)/) || window.location.hash.match(/\/studios\/(\d+)/);
     return m ? m[1] : null;
@@ -273,18 +318,18 @@ try {
 
         function boxHtml(role, value, name) {
           return '<div class="sm-combobox" data-role="' + role + '" data-value="' + escapeAttr(value) + '">' +
-            '<input type="text" class="sm-combobox-input" value="' + escapeAttr(name) + '" placeholder="请选择或输入搜索...">' +
+            '<input type="text" class="sm-combobox-input" value="' + escapeAttr(name) + '" placeholder="' + escapeAttr(tc("请选择或输入搜索...", "Select or type to search...")) + '">' +
             '<button class="sm-combobox-btn" type="button">&#9662;</button>' +
             '</div>';
         }
 
         dialog.innerHTML =
-          '<h3 class="sm-title">合并工作室</h3>' +
-          '<div class="sm-warning sm-warning-info">源工作室的场景、图片、图库、组合及子工作室将重新分配到目标工作室，合并后源工作室将被删除。</div>' +
-          '<div class="sm-field-group"><label class="sm-label">源工作室（将被合并并删除）</label>' + boxHtml("src", "", "") + '</div>' +
-          '<div class="sm-swap-wrap"><button class="sm-swap-btn" type="button">&#8645; 调换</button></div>' +
-          '<div class="sm-field-group"><label class="sm-label">目标工作室</label>' + boxHtml("dest", currentStudio.id, currentStudio.name) + '</div>' +
-          '<div class="sm-btn-row"><button class="sm-btn-apply" disabled>下一步</button><button class="sm-btn-cancel">取消</button></div>';
+          '<h3 class="sm-title">' + tc("合并工作室", "Merge Studios") + '</h3>' +
+          '<div class="sm-warning sm-warning-info">' + tc("源工作室的场景、图片、图库、组合及子工作室将重新分配到目标工作室，合并后源工作室将被删除。", "Scenes, images, galleries, groups and subsidiary studios of the source studio will be reassigned to the destination studio, and the source studio will be deleted after the merge.") + '</div>' +
+          '<div class="sm-field-group"><label class="sm-label">' + tc("源工作室（将被合并并删除）", "Source studio (will be merged and deleted)") + '</label>' + boxHtml("src", "", "") + '</div>' +
+          '<div class="sm-swap-wrap"><button class="sm-swap-btn" type="button">&#8645; ' + t("actions.swap", "调换") + '</button></div>' +
+          '<div class="sm-field-group"><label class="sm-label">' + tc("目标工作室", "Destination studio") + '</label>' + boxHtml("dest", currentStudio.id, currentStudio.name) + '</div>' +
+          '<div class="sm-btn-row"><button class="sm-btn-apply" disabled>' + t("actions.next_action", "下一步") + '</button><button class="sm-btn-cancel">' + t("actions.cancel", "取消") + '</button></div>';
 
         overlay.appendChild(dialog);
         document.body.appendChild(overlay);
@@ -312,7 +357,7 @@ try {
               html += '<div class="sm-tag-dropdown-item" data-id="' + s.id + '" data-name="' + escapeAttr(s.name) + '">' + escapeHtml(s.name) + '</div>';
               matched++;
             }
-            if (matched === 0) html = '<div class="sm-tag-dropdown-empty">无匹配工作室</div>';
+            if (matched === 0) html = '<div class="sm-tag-dropdown-empty">' + tc("无匹配工作室", "No matching studios") + '</div>';
             listDiv.innerHTML = html;
           }
 
@@ -410,7 +455,7 @@ try {
     function loadAndShowMergeDialog(src, dst) {
       var overlay = createOverlay();
       var dialog = createElement("div", "sm-dialog");
-      dialog.innerHTML = '<div class="sm-loading">加载中...</div>';
+      dialog.innerHTML = '<div class="sm-loading">' + tc("加载中...", "Loading...") + '</div>';
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
 
@@ -434,7 +479,7 @@ try {
         showMergeDialog(src, dst, counts, results[5], results[6]);
       }).catch(function (err) {
         document.body.removeChild(overlay);
-        alert("加载失败：" + err.message);
+        alert(tc("加载失败：", "Failed to load: ") + err.message);
       });
     }
 
@@ -445,11 +490,11 @@ try {
 
       var countsHtml = '<div class="sm-counts">';
       var items = [
-        { label: "场景", count: counts.scenes },
-        { label: "图片", count: counts.images },
-        { label: "图库", count: counts.galleries },
-        { label: "组合", count: counts.groups },
-        { label: "子工作室", count: counts.childStudios }
+        { label: t("scenes", "场景"), count: counts.scenes },
+        { label: t("images", "图片"), count: counts.images },
+        { label: t("galleries", "图库"), count: counts.galleries },
+        { label: t("groups", "组合"), count: counts.groups },
+        { label: t("subsidiary_studios", "子工作室"), count: counts.childStudios }
       ];
       for (var i = 0; i < items.length; i++) {
         if (items[i].count > 0) {
@@ -459,31 +504,35 @@ try {
       countsHtml += '</div>';
 
       var rows = "";
-      rows += buildRow("name", "名称", fields, src, dst, "input");
-      rows += buildRow("aliases", "别名", fields, src, dst, "aliases");
-      rows += buildRow("urls", "网址", fields, src, dst, "urls");
-      rows += buildRow("stash_ids", "Stash ID", fields, src, dst, "stash_ids");
-      rows += buildRow("tags", "标签", fields, src, dst, "tags");
-      rows += buildRow("rating100", "评分", fields, src, dst, "rating");
-      rows += buildRow("favorite", "收藏", fields, src, dst, "checkbox");
-      rows += buildRow("details", "简介", fields, src, dst, "textarea");
-      rows += buildRow("parent_id", "父工作室", fields, src, dst, "parent_select");
-      rows += buildRow("image", "图片", fields, src, dst, "image");
-      rows += buildRow("ignore_auto_tag", "忽略自动标签", fields, src, dst, "checkbox");
-      rows += buildRow("organized", "已整理", fields, src, dst, "checkbox");
+      rows += buildRow("name", t("name", "名称"), fields, src, dst, "input");
+      rows += buildRow("aliases", t("aliases", "别名"), fields, src, dst, "aliases");
+      rows += buildRow("urls", t("urls", "网址"), fields, src, dst, "urls");
+      rows += buildRow("stash_ids", t("stash_id", "Stash ID"), fields, src, dst, "stash_ids");
+      rows += buildRow("tags", t("tags", "标签"), fields, src, dst, "tags");
+      rows += buildRow("rating100", t("rating", "评分"), fields, src, dst, "rating");
+      rows += buildRow("favorite", t("favourite", "收藏"), fields, src, dst, "checkbox");
+      rows += buildRow("details", t("details", "简介"), fields, src, dst, "textarea");
+      rows += buildRow("parent_id", t("parent_studios", "父工作室"), fields, src, dst, "parent_select");
+      rows += buildRow("image", t("images", "图片"), fields, src, dst, "image");
+      rows += buildRow("ignore_auto_tag", t("ignore_auto_tag", "忽略自动标签"), fields, src, dst, "checkbox");
+      rows += buildRow("organized", t("organized", "已整理"), fields, src, dst, "checkbox");
 
       dialog.innerHTML =
-        '<h3 class="sm-title">合并工作室</h3>' +
-        '<div class="sm-info">将 <strong>' + escapeHtml(src.name) + '</strong> 合并到 <strong>' + escapeHtml(dst.name) + '</strong></div>' +
+        '<h3 class="sm-title">' + tc("合并工作室", "Merge Studios") + '</h3>' +
+        '<div class="sm-info">' + tc('将 <strong>' + escapeHtml(src.name) + '</strong> 合并到 <strong>' + escapeHtml(dst.name) + '</strong>',
+                                      'Merge <strong>' + escapeHtml(src.name) + '</strong> into <strong>' + escapeHtml(dst.name) + '</strong>') + '</div>' +
         countsHtml +
         '<div class="sm-merge-grid">' +
           '<div class="sm-merge-header"></div>' +
-          '<div class="sm-merge-header sm-merge-dest-hdr">目标</div>' +
-          '<div class="sm-merge-header sm-merge-merged-hdr">已合并</div>' +
+          '<div class="sm-merge-header sm-merge-dest-hdr">' + t("dialogs.merge.destination", "目标") + '</div>' +
+          '<div class="sm-merge-header sm-merge-merged-hdr">' + t("dialogs.merge.combined", "已合并") + '</div>' +
           rows +
         '</div>' +
-        '<div class="sm-warning">此操作将把源工作室的所有关联对象重新分配到目标工作室，然后删除源工作室。此操作不可撤销。</div>' +
-        '<div class="sm-btn-row"><button class="sm-btn-apply">应用合并</button><button class="sm-btn-cancel">取消</button></div>';
+        '<div class="sm-warning">' + tc("此操作将把源工作室的所有关联对象重新分配到目标工作室，然后删除源工作室。此操作不可撤销。", "This will reassign all related objects of the source studio to the destination studio, then delete the source studio. This action cannot be undone.") + '</div>' +
+        '<div class="sm-btn-row"><button class="sm-btn-apply">' + t("actions.merge", "应用合并") + '</button><button class="sm-btn-cancel">' + t("actions.cancel", "取消") + '</button></div>';
+
+      // 列表空行红字警告文案（CSS 伪元素读取该变量，未设置时默认中文）
+      dialog.style.setProperty("--sm-empty-warn", '"' + tc("不能为空", "Cannot be empty") + '"');
 
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
@@ -537,17 +586,17 @@ try {
 
       applyBtn.addEventListener("click", function () {
         applyBtn.disabled = true;
-        applyBtn.textContent = "合并中...";
+        applyBtn.textContent = tc("合并中...", "Merging...");
 
         collectAndMerge(src, dst, fields, dialog)
           .then(function () {
-            applyBtn.textContent = "合并成功！";
+            applyBtn.textContent = tc("合并成功！", "Merged successfully!");
             setTimeout(function () { document.body.removeChild(overlay); window.location.reload(); }, 1000);
           })
           .catch(function (err) {
             applyBtn.disabled = false;
-            applyBtn.textContent = "应用合并";
-            alert("合并失败：" + err.message);
+            applyBtn.textContent = t("actions.merge", "应用合并");
+            alert(tc("合并失败：", "Merge failed: ") + err.message);
           });
       });
     }
@@ -643,7 +692,7 @@ try {
     }
 
     function buildListDest(arr) {
-      if (!arr || arr.length === 0) return '<span class="sm-merge-val">无</span>';
+      if (!arr || arr.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       var html = '<div class="sm-list-dest">';
       for (var i = 0; i < arr.length; i++) {
         html += '<div class="sm-list-item-dest"><input type="text" class="sm-list-input" readonly value="' + escapeAttr(arr[i]) + '"></div>';
@@ -664,7 +713,7 @@ try {
         }
       }
       html += '<div class="sm-list-item sm-list-item-new">' +
-        '<input type="text" class="sm-list-input sm-list-new" placeholder="添加...">' +
+        '<input type="text" class="sm-list-input sm-list-new" placeholder="' + escapeAttr(t("actions.add", "添加") + '...') + '">' +
       '</div>';
       html += '</div>';
       return html;
@@ -672,36 +721,36 @@ try {
 
     // Stash ID 是单一值（空或一个），无并列逻辑：取第一项渲染
     function buildStashIdsDest(stashIds) {
-      if (!stashIds || stashIds.length === 0) return '<span class="sm-merge-val">无</span>';
+      if (!stashIds || stashIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       return '<div class="sm-stash-dest">' + buildStashIdHtml(stashIds[0], "sm-stash-id-dest") + '</div>';
     }
 
     function buildStashIdsMerged(src) {
       var displayIds = src.stash_ids || [];
-      if (displayIds.length === 0) return '<span class="sm-merge-val">无</span>';
+      if (displayIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       return '<div class="sm-stash-merged">' + buildStashIdHtml(displayIds[0], "sm-stash-id-merged") + '</div>';
     }
 
     function buildImageDest(imageValue, studio) {
       if (imageValue) {
-        return '<div class="sm-image-wrap"><img class="sm-image-preview" src="' + escapeAttr(studio.image_path) + '" alt="目标图片"></div>';
+        return '<div class="sm-image-wrap"><img class="sm-image-preview" src="' + escapeAttr(studio.image_path) + '" alt="' + escapeAttr(tc("目标图片", "Destination image")) + '"></div>';
       }
-      return '<span class="sm-merge-val">无</span>';
+      return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
     }
 
     function buildImageMerged(imageValue, src) {
       var html = '<div class="sm-image-merged">';
       if (imageValue) {
-        html += '<div class="sm-image-wrap"><img class="sm-image-preview" src="' + escapeAttr(src.image_path) + '" alt="源图片"></div>';
+        html += '<div class="sm-image-wrap"><img class="sm-image-preview" src="' + escapeAttr(src.image_path) + '" alt="' + escapeAttr(tc("源图片", "Source image")) + '"></div>';
       } else {
-        html += '<span class="sm-merge-val">无</span>';
+        html += '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       }
       html += '</div>';
       return html;
     }
 
     function buildParentDest(parentStudio) {
-      if (!parentStudio) return '<span class="sm-merge-val">无</span>';
+      if (!parentStudio) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       return '<input type="text" class="sm-input" readonly value="' + escapeAttr(parentStudio.name) + '">';
     }
 
@@ -710,7 +759,7 @@ try {
       var parentId = parent ? parent.id : "";
       var parentName = parent ? parent.name : "";
       var html = '<div class="sm-select-field" data-field="parent_id" data-value="' + escapeAttr(parentId) + '">';
-      html += '<input type="text" class="sm-select-field-input" readonly value="' + escapeAttr(parentName) + '" placeholder="无">';
+      html += '<input type="text" class="sm-select-field-input" readonly value="' + escapeAttr(parentName) + '" placeholder="' + escapeAttr(t("none", "无")) + '">';
       html += '<button class="sm-select-field-btn" type="button">&#9662;</button>';
       html += '</div>';
       return html;
@@ -823,7 +872,7 @@ try {
           // 追加新的空行，保证末尾始终留一个空输入框
           var newRow = document.createElement("div");
           newRow.className = "sm-list-item sm-list-item-new";
-          newRow.innerHTML = '<input type="text" class="sm-list-input sm-list-new" placeholder="添加...">';
+          newRow.innerHTML = '<input type="text" class="sm-list-input sm-list-new" placeholder="' + escapeAttr(t("actions.add", "添加") + '...') + '">';
           container.appendChild(newRow);
           updateApplyBtnState(dialog);
           return;
@@ -882,7 +931,7 @@ try {
 
           var dropdown = document.createElement("div");
           dropdown.className = "sm-studio-dropdown";
-          var searchHtml = '<input type="text" class="sm-tag-search" placeholder="搜索工作室...">';
+          var searchHtml = '<input type="text" class="sm-tag-search" placeholder="' + escapeAttr(tc("搜索工作室...", "Search studios...")) + '">';
           var listHtml = '<div class="sm-tag-dropdown-list"></div>';
           dropdown.innerHTML = searchHtml + listHtml;
           fieldWrap.appendChild(dropdown);
@@ -891,13 +940,13 @@ try {
           var listDiv = dropdown.querySelector(".sm-tag-dropdown-list");
 
           function renderList(filter) {
-            var html = '<div class="sm-tag-dropdown-item" data-id="" data-name="">（无）</div>';
+            var html = '<div class="sm-tag-dropdown-item" data-id="" data-name="">' + tc("（无）", "(None)") + '</div>';
             for (var i = 0; i < filtered.length; i++) {
               var s = filtered[i];
               if (filter && s.name.toLowerCase().indexOf(filter.toLowerCase()) === -1) continue;
               html += '<div class="sm-tag-dropdown-item" data-id="' + s.id + '" data-name="' + escapeAttr(s.name) + '">' + escapeHtml(s.name) + '</div>';
             }
-            if (!html) html = '<div class="sm-tag-dropdown-empty">无匹配工作室</div>';
+            if (!html) html = '<div class="sm-tag-dropdown-empty">' + tc("无匹配工作室", "No matching studios") + '</div>';
             listDiv.innerHTML = html;
           }
 
@@ -940,7 +989,7 @@ try {
 
     function buildTagsDest(src, dst, tagIds) {
       var allTags = getAllTags(src, dst);
-      if (!tagIds || tagIds.length === 0) return '<span class="sm-merge-val">无</span>';
+      if (!tagIds || tagIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
       var html = '<div class="sm-tags-dest">';
       for (var i = 0; i < tagIds.length; i++) {
         var found = allTags.find(function (t) { return t.id === tagIds[i]; });
@@ -963,9 +1012,9 @@ try {
       }
       html += '</div>';
       if (tagIds.length > 0) {
-        html += '<button class="sm-tag-clear-btn" type="button" title="删除所有标签">&times;</button>';
+        html += '<button class="sm-tag-clear-btn" type="button" title="' + escapeAttr(tc("删除所有标签", "Remove all tags")) + '">&times;</button>';
       }
-      html += '<button class="sm-tag-dropdown-btn" type="button" title="选择标签">&#9662;</button>';
+      html += '<button class="sm-tag-dropdown-btn" type="button" title="' + escapeAttr(tc("选择标签", "Select tags")) + '">&#9662;</button>';
       html += '</div>';
       return html;
     }
@@ -1012,7 +1061,7 @@ try {
         var btn = document.createElement("button");
         btn.className = "sm-tag-clear-btn";
         btn.type = "button";
-        btn.title = "删除所有标签";
+        btn.title = tc("删除所有标签", "Remove all tags");
         btn.innerHTML = "&times;";
         container.insertBefore(btn, dropdownBtn);
       } else if (pills.length === 0 && existingBtn) {
@@ -1036,7 +1085,7 @@ try {
         loadAllTags().then(function (allTags) {
           var dropdown = document.createElement("div");
           dropdown.className = "sm-tag-dropdown";
-          var searchHtml = '<input type="text" class="sm-tag-search" placeholder="搜索标签...">';
+          var searchHtml = '<input type="text" class="sm-tag-search" placeholder="' + escapeAttr(tc("搜索标签...", "Search tags...")) + '">';
           var listHtml = '<div class="sm-tag-dropdown-list"></div>';
           dropdown.innerHTML = searchHtml + listHtml;
           tagsContainer.appendChild(dropdown);
@@ -1052,7 +1101,7 @@ try {
               if (filter && tag.name.toLowerCase().indexOf(filter.toLowerCase()) === -1) continue;
               html += '<div class="sm-tag-dropdown-item" data-id="' + tag.id + '" data-name="' + escapeAttr(tag.name) + '">' + escapeHtml(tag.name) + '</div>';
             }
-            if (!html) html = '<div class="sm-tag-dropdown-empty">无匹配标签</div>';
+            if (!html) html = '<div class="sm-tag-dropdown-empty">' + tc("无匹配标签", "No matching tags") + '</div>';
             listDiv.innerHTML = html;
           }
 
@@ -1388,7 +1437,7 @@ try {
         var btn = document.createElement("button");
         btn.className = "st-inject-btn sm-btn st-blue";
         btn.innerHTML = INJECT_ICONS.merge;
-        btn.title = "将此工作室与另一个合并";
+        btn.title = tc("将此工作室与另一个合并", "Merge this studio with another");
         btn.addEventListener("click", function () { showSelectDialog(studio); });
         spot.parent.insertBefore(btn, spot.before);
         _mergeBtnInjected = true;
@@ -1436,7 +1485,7 @@ try {
         btn.className = "st-inject-btn ss-search-btn st-green";
         btn.type = "button";
         btn.innerHTML = INJECT_ICONS.update;
-        btn.title = "从 StashDB 搜索并更新工作室信息";
+        btn.title = tc("从 StashDB 搜索并更新工作室信息", "Search StashDB and update studio info");
         btn.addEventListener("click", function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -1460,10 +1509,10 @@ try {
       panel.addEventListener("dragstart", function (e) { e.preventDefault(); });
       panel.innerHTML =
         '<div class="ss-search-header">' +
-          '<input type="text" class="ss-search-input" placeholder="输入工作室名称搜索..." value="' + escapeAttr(studio.name || "") + '">' +
-          '<button class="ss-search-submit" type="button">搜索</button>' +
+          '<input type="text" class="ss-search-input" placeholder="' + escapeAttr(tc("输入工作室名称搜索...", "Enter studio name to search...")) + '" value="' + escapeAttr(studio.name || "") + '">' +
+          '<button class="ss-search-submit" type="button">' + t("actions.search", "搜索") + '</button>' +
         '</div>' +
-        '<div class="ss-results"><div class="ss-results-empty">输入名称后点击搜索</div></div>';
+        '<div class="ss-results"><div class="ss-results-empty">' + tc("输入名称后点击搜索", "Type a name and click Search") + '</div></div>';
 
       document.body.appendChild(panel);
       positionPanel(panel, anchorBtn);
@@ -1477,16 +1526,16 @@ try {
         var term = (input.value || "").trim();
         if (!term) return;
         submitBtn.disabled = true;
-        submitBtn.textContent = "搜索中...";
-        resultsDiv.innerHTML = '<div class="ss-results-loading">正在搜索 StashDB...</div>';
+        submitBtn.textContent = tc("搜索中...", "Searching...");
+        resultsDiv.innerHTML = '<div class="ss-results-loading">' + tc("正在搜索 StashDB...", "Searching StashDB...") + '</div>';
 
         performSearch(term).then(function (results) {
           renderResults(resultsDiv, results, studio);
         }).catch(function (err) {
-          resultsDiv.innerHTML = '<div class="ss-results-error">搜索失败: ' + escapeHtml(err.message) + '</div>';
+          resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("搜索失败: ", "Search failed: ") + escapeHtml(err.message) + '</div>';
         }).then(function () {
           submitBtn.disabled = false;
-          submitBtn.textContent = "搜索";
+          submitBtn.textContent = t("actions.search", "搜索");
         });
       }
 
@@ -1538,7 +1587,7 @@ try {
 
     function renderResults(container, results, studio) {
       if (!results || results.length === 0) {
-        container.innerHTML = '<div class="ss-results-empty">未找到匹配的工作室</div>';
+        container.innerHTML = '<div class="ss-results-empty">' + tc("未找到匹配的工作室", "No matching studios found") + '</div>';
         return;
       }
 
@@ -1549,15 +1598,15 @@ try {
         var urls = r.urls || [];
         var imageHtml = r.image
           ? '<img class="ss-result-image" src="' + escapeAttr(r.image) + '" alt="">'
-          : '<div class="ss-result-placeholder">无图</div>';
+          : '<div class="ss-result-placeholder">' + tc("无图", "No image") + '</div>';
 
         html += '<div class="ss-result-item" data-index="' + i + '">' +
           imageHtml +
           '<div class="ss-result-info">' +
             '<div class="ss-result-name">' + escapeHtml(r.name || "") + '</div>' +
-            (aliases.length > 0 ? '<div class="ss-result-aliases">别名: ' + escapeHtml(aliases.join(", ")) + '</div>' : '') +
+            (aliases.length > 0 ? '<div class="ss-result-aliases">' + t("aliases", "别名") + ': ' + escapeHtml(aliases.join(", ")) + '</div>' : '') +
             (urls.length > 0 ? '<div class="ss-result-urls">' + escapeHtml(urls.join(", ")) + '</div>' : '') +
-            (r.parent && r.parent.name ? '<div class="ss-result-parent">上级: ' + escapeHtml(r.parent.name) + '</div>' : '') +
+            (r.parent && r.parent.name ? '<div class="ss-result-parent">' + t("parent_studio", "上级") + ': ' + escapeHtml(r.parent.name) + '</div>' : '') +
             (r.remote_site_id ? '<div class="ss-result-stashid">Stash ID: ' + escapeHtml(r.remote_site_id) + '</div>' : '') +
           '</div>' +
         '</div>';
@@ -1581,7 +1630,7 @@ try {
       var image = result.image || "";
       var stashId = result.remote_site_id || "";
 
-      showProgress("正在更新工作室...");
+      showProgress(tc("正在更新工作室...", "Updating studio..."));
 
       var input = { id: studio.id, name: name, aliases: aliases, urls: urls };
 
@@ -1615,13 +1664,13 @@ try {
       }
 
       Promise.all(promises).then(function () {
-        showProgress("正在写入数据库...");
+        showProgress(tc("正在写入数据库...", "Writing to database..."));
         return graphql(M_UPDATE, { input: input });
       }).then(function () {
-        showProgress("更新成功，正在刷新页面...");
+        showProgress(tc("更新成功，正在刷新页面...", "Updated successfully, refreshing page..."));
         setTimeout(window.location.reload.bind(window.location), 800);
       }).catch(function (err) {
-        showProgress("更新失败: " + err.message, true);
+        showProgress(tc("更新失败: ", "Update failed: ") + err.message, true);
         setTimeout(hideProgress, 3000);
       });
     }

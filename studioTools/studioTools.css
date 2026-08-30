@@ -503,7 +503,8 @@
 }
 
 .sm-list-item.sm-list-item-empty::after {
-  content: "不能为空";
+  /* 文案由 JS 按界面语言经 --sm-empty-warn 注入（见 studioTools.js showMergeDialog），未设置时默认中文 */
+  content: var(--sm-empty-warn, "不能为空");
   position: absolute !important;
   right: 24px !important;
   top: 50% !important;

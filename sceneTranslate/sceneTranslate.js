@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.6.4
+ * Scene Translate Plugin v2.8.0
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout) are stored in Stash
@@ -34,6 +34,44 @@ try {
   var proxyOnline = false;
   var injectedSceneId = null;
   var _observerTimer = null;
+
+  // ─── i18n：跟随 Stash 界面语言 ─────────────────────────────────────
+  // 经 PluginApi 在 React 树内挂一个渲染 null 的桥接组件，读取 IntlProvider 的 context。
+  // patch 点必须是 "App"（AppContainer，包裹全部页面内容）：不能用 "PluginRoutes"，
+  // 它位于 <Switch> 内，URL 命中正常路由时不会被渲染。
+  // PluginApi 不可用时 tc() 回退英文（本插件文案原本即英文）。
+  var _intlMessages = null;
+  var _intlLocale = "";
+
+  (function initIntlBridge() {
+    try {
+      var api = window.PluginApi;
+      if (!api || !api.React || !api.patch || !api.libraries || !api.libraries.Intl) return;
+      var React = api.React;
+      function IntlBridge() {
+        var intl = api.libraries.Intl.useIntl();
+        React.useEffect(function () {
+          _intlMessages = intl.messages || null;
+          _intlLocale = intl.locale || "";
+        });
+        return null;
+      }
+      api.patch.before("App", function (props) {
+        return [{
+          children: React.createElement(React.Fragment, null,
+            React.createElement(IntlBridge),
+            props.children)
+        }];
+      });
+    } catch (e) {
+      console.warn("[SceneTranslate] i18n bridge unavailable:", e);
+    }
+  })();
+
+  // 自定义句（语言包中无对应 key）：中文语言用中文，其余语言用英文；语言未知时按英文兜底
+  function tc(zh, en) {
+    return (_intlLocale && !/^zh/i.test(_intlLocale)) ? en : zh;
+  }
 
   // ─── Cross-browser fetch with timeout ─────────────────────────────
 
@@ -118,7 +156,7 @@ try {
   function refreshButtonTooltips() {
     var btns = document.querySelectorAll(".scene-translate-btn");
     for (var i = 0; i < btns.length; i++) {
-      btns[i].title = "Translate \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+      btns[i].title = tc("翻译", "Translate") + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
     }
   }
 
@@ -213,7 +251,7 @@ try {
     btn.className = "btn btn-sm scene-translate-btn";
     btn.innerHTML = ICONS.globe;
     btn.style.cssText = "margin-left:6px;";
-    btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+    btn.title = tc("翻译 " + fieldName, "Translate " + fieldName) + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
 
     btn.addEventListener("click", function () {
       var text = inputEl.value || "";
@@ -231,12 +269,12 @@ try {
             if (!isNaN(n)) config.idleTimeout = n;
           }
           // 更新按钮 tooltip 反映最新配置
-          btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+          btn.title = tc("翻译 " + fieldName, "Translate " + fieldName) + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
         }).catch(function () { /* GraphQL 不可用则沿用内存配置 */ });
       }).then(function () {
         // google_free 可在代理离线时走浏览器直连兜底，不强制要求代理在线
         if (!proxyOnline && config.translateTool !== "google_free") {
-          throw new Error("Proxy not running! Click 'Start Translate Proxy' in plugin settings.");
+          throw new Error(tc("代理未运行！请在插件设置中运行「启动翻译代理」任务。", "Proxy not running! Click 'Start Translate Proxy' in plugin settings."));
         }
         return translateText(text, config.targetLanguage);
       }).then(function (translated) {
@@ -254,13 +292,13 @@ try {
       }).catch(function (e) {
         btn.innerHTML = ICONS.err;
         btn.classList.add("scene-translate-err");
-        var msg = e.message || "Unknown error";
-        btn.title = "Error: " + msg;
+        var msg = e.message || tc("未知错误", "Unknown error");
+        btn.title = tc("错误：", "Error: ") + msg;
         console.error("[SceneTranslate] " + fieldName + " error: " + msg);
         setTimeout(function () {
           btn.innerHTML = ICONS.globe;
           btn.classList.remove("scene-translate-err");
-          btn.title = "Translate " + fieldName + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
+          btn.title = tc("翻译 " + fieldName, "Translate " + fieldName) + " \u2192 " + config.targetLanguage + " [" + config.translateTool + "]";
         }, 4000);
       }).finally(function () {
         btn.disabled = false;

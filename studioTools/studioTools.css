@@ -1141,11 +1141,16 @@
   flex-shrink: 0;
 }
 
-/* 「全部」模式：无结果/超时/失败源的一行淡字提示 */
+/* 「全部」模式：无结果/超时/失败源的一行淡字提示（带分隔线与相邻组隔开） */
 .ss-src-status {
   padding: 6px 10px;
   color: #666;
   font-size: 12px;
+  border-bottom: 1px solid #333;
+}
+
+.ss-src-status:last-child {
+  border-bottom: none;
 }
 
 .ss-results {

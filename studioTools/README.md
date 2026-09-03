@@ -4,7 +4,7 @@ Stash 工作室详情页工具集 — 纯 UI 插件（JS + CSS，无需 Python�
 
 合并自 studioMerge v1.0.0 + studioSearch v2.2.0，两个模块共享 GraphQL 封装、URL 解析、MutationObserver、锚点按钮注入等基础设施。
 
-> v1.5.0：新增「全部」搜索模式（多源并发搜索，每源 8s 超时，流式渲染并标注来源）；合并对话框 Stash ID 支持多实例值。
+> v1.5.1：「全部」搜索模式下无结果/超时/失败源的状态行增加分隔线，与相邻组隔开。
 
 ## 功能
 

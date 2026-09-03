@@ -1,6 +1,6 @@
 name: Studio Tools
 description: Studio page toolkit - merge studios and search/update from stashdb/theporndb/javstash.
-version: 1.5.0
+version: 1.5.1
 url: https://discourse.stashapp.cc/t/studio-tools/13862
 ui:
   javascript:

@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.0
+ * Studio Tools v1.5.1
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）

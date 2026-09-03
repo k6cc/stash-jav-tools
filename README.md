@@ -8,7 +8,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 |------|------|------|------|
 | [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
-| [studioTools](./studioTools/) | 1.4.0 | 纯 UI | 工作室合并 + 多源搜索更新 stashdb/theporndb/javstash（无需 Python） |
+| [studioTools](./studioTools/) | 1.5.0 | 纯 UI | 工作室合并 + 多源搜索更新 stashdb/theporndb/javstash（无需 Python） |
 
 ## 安装
 
@@ -102,7 +102,7 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 1. 进入任意工作室详情页
 2. 操作栏「自动标签」按钮旁会注入两个按钮：
    - **合并** — 将当前工作室合并到另一个工作室（ScrapeDialog 风格双列对比）
-   - **更新** — 从 stashdb/theporndb/javstash 搜索并更新工作室信息（名称/别名/链接/图片/Stash ID/上级工作室，可切换源）
+   - **更新** — 从 stashdb/theporndb/javstash 搜索并更新工作室信息（可切换单源或「全部」并发搜索）
 3. 点击对应按钮按提示操作
 
 详细说明见 [studioTools/README.md](./studioTools/README.md)。

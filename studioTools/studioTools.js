@@ -1,9 +1,9 @@
 /**
- * Studio Tools v1.4.0
+ * Studio Tools v1.5.0
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
- * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格）
- * - Stash-Box 搜索：支持 stashdb/theporndb/javstash 三源切换，搜索并更新工作室信息
+ * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
+ * - Stash-Box 搜索：stashdb/theporndb/javstash + 自定义实例多源切换，「全部」并发搜索（每源 8s 超时，流式分组渲染）
  *
  * 两个模块共享：graphql、escapeHtml/escapeAttr、URL 解析、fetchCurrentStudio、
  * MutationObserver、history hook、锚点按钮注入。注入按钮统一使用 .st-inject-btn 样式。
@@ -29,6 +29,8 @@ try {
     { key: "javstash", label: "javstash", host: "javstash.org" }
   ];
   var SOURCE_STORAGE_KEY = "studioTools.searchSource";
+  var SOURCE_ALL = "__all__";        // 「全部」聚合选项的保留 key
+  var SEARCH_TIMEOUT_MS = 8000;      // 「全部」模式下每源搜索超时
 
   // ===== 共享状态 =====
   var _currentStudioId = null;
@@ -267,6 +269,21 @@ try {
     function mergeArrays(dst, src) { var r = dst.slice(); for (var i = 0; i < src.length; i++) { if (r.indexOf(src[i]) === -1) r.push(src[i]); } return r; }
     function mergeTags(dst, src) { var r = dst.slice(); for (var i = 0; i < src.length; i++) { if (!r.find(function(t) { return t.id === src[i].id; })) r.push(src[i]); } return r; }
 
+    // Stash ID 多值合并：「已合并」列默认显示源工作室的值；仅当源有值时，
+    // 目标独有的实例（源没有的 endpoint）追加到尾部；源为空则整列为空（不兜底目标值）；
+    // 同 endpoint 冲突时源值仍显示在合并列（勾「目标」列即保留目标值）
+    function mergeStashIds(dst, src) {
+      var r = (src || []).slice();
+      if (r.length === 0) return r;
+      var dstList = dst || [];
+      var srcEps = {};
+      for (var i = 0; i < r.length; i++) srcEps[getStashIdEndpoint(r[i])] = true;
+      for (var j = 0; j < dstList.length; j++) {
+        if (!srcEps[getStashIdEndpoint(dstList[j])]) r.push(dstList[j]);
+      }
+      return r;
+    }
+
     function computeMergeFields(src, dst, srcHasImage, dstHasImage) {
       var fields = {};
       var mergedAliases = mergeArrays(dst.aliases || [], src.aliases || []);
@@ -280,15 +297,16 @@ try {
           ? dst.details + "\n\n--- 来自 " + src.name + " ---\n\n" + src.details
           : src.details;
       }
-      var srcHasStashId = (src.stash_ids || []).length > 0;
-      var dstHasStashId = (dst.stash_ids || []).length > 0;
+      // Stash ID 多值：「已合并」列 = 源的值（源有值时追加目标独有实例，源为空则整列为空）。
+      // 源带来目标没有的实例时自动勾「已合并」列（长度差恰等于源新增实例数）；
+      // 同源冲突或源无新实例时勾「目标」列（目标值优先，源值仍显示在合并列可手动改选）
+      var mergedStashIds = mergeStashIds(dst.stash_ids, src.stash_ids);
+      var stashIdsUseMerged = mergedStashIds.length > (dst.stash_ids || []).length;
 
       fields.name = new MergeField("name", dst.name, src.name, false);
       fields.aliases = new MergeField("aliases", dst.aliases || [], mergedAliases, !!(mergedAliases.length));
       fields.urls = new MergeField("urls", dst.urls || [], mergedUrls, !!(mergedUrls.length));
-      // 单值字段（Stash ID/评分/收藏/忽略自动标签/已整理，同父工作室/图片逻辑）：
-      // 目标列=目标值，合并列=源值；两边都有勾目标，仅源有勾合并（取有值的一侧）
-      fields.stash_ids = new MergeField("stash_ids", dst.stash_ids || [], src.stash_ids || [], srcHasStashId && !dstHasStashId);
+      fields.stash_ids = new MergeField("stash_ids", dst.stash_ids || [], mergedStashIds, stashIdsUseMerged);
       fields.tags = new MergeField("tags", (dst.tags || []).map(function (t) { return t.id; }), mergedTags.map(function (t) { return t.id; }), !!(mergedTags.length));
       fields.rating100 = new MergeField("rating100", dst.rating100 != null ? dst.rating100 : null, src.rating100 != null ? src.rating100 : null, src.rating100 != null && dst.rating100 == null);
       fields.favorite = new MergeField("favorite", !!dst.favorite, !!src.favorite, !!src.favorite && !dst.favorite);
@@ -661,7 +679,7 @@ try {
 
         case "stash_ids":
           destContent = buildStashIdsDest(field.destValue);
-          mergedContent = buildStashIdsMerged(src);
+          mergedContent = buildStashIdsMerged(field.mergedValue);
           break;
 
         case "tags":
@@ -728,16 +746,19 @@ try {
       return html;
     }
 
-    // Stash ID 是单一值（空或一个），无并列逻辑：取第一项渲染
+    // Stash ID 多值（每实例一个）：全部渲染，目标/已合并列各显示自己的完整列表
     function buildStashIdsDest(stashIds) {
       if (!stashIds || stashIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
-      return '<div class="sm-stash-dest">' + buildStashIdHtml(stashIds[0], "sm-stash-id-dest") + '</div>';
+      var html = '<div class="sm-stash-dest">';
+      for (var i = 0; i < stashIds.length; i++) html += buildStashIdHtml(stashIds[i], "sm-stash-id-dest");
+      return html + '</div>';
     }
 
-    function buildStashIdsMerged(src) {
-      var displayIds = src.stash_ids || [];
-      if (displayIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
-      return '<div class="sm-stash-merged">' + buildStashIdHtml(displayIds[0], "sm-stash-id-merged") + '</div>';
+    function buildStashIdsMerged(stashIds) {
+      if (!stashIds || stashIds.length === 0) return '<span class="sm-merge-val">' + t("none", "无") + '</span>';
+      var html = '<div class="sm-stash-merged">';
+      for (var i = 0; i < stashIds.length; i++) html += buildStashIdHtml(stashIds[i], "sm-stash-id-merged");
+      return html + '</div>';
     }
 
     function buildImageDest(imageValue, studio) {
@@ -1295,7 +1316,7 @@ try {
         : dst.urls || [];
 
       var stashIds = fields.stash_ids.useMerged
-        ? src.stash_ids || []
+        ? fields.stash_ids.mergedValue
         : dst.stash_ids || [];
 
       var tagIds;
@@ -1497,6 +1518,51 @@ try {
       try { return new URL(endpoint).host; } catch (e) { return endpoint || ""; }
     }
 
+    // 「元数据提供者」中排除内置三源后的自定义实例，按 host 排序
+    function getCustomBoxes(boxes) {
+      var customs = [];
+      for (var c = 0; c < (boxes || []).length; c++) {
+        var ep = (boxes[c].endpoint || "").toLowerCase();
+        if (!ep) continue;
+        var isBuiltin = false;
+        for (var b = 0; b < SEARCH_SOURCES.length; b++) {
+          if (ep.indexOf(SEARCH_SOURCES[b].host) !== -1) { isBuiltin = true; break; }
+        }
+        if (!isBuiltin) customs.push(boxes[c]);
+      }
+      customs.sort(function (a, b) { return getEndpointHost(a.endpoint).localeCompare(getEndpointHost(b.endpoint)); });
+      return customs;
+    }
+
+    // 「全部」模式下实际参与搜索的源：内置三源（仅已配置）+ 自定义实例，顺序与源按钮一致
+    function getAvailableSources(boxes) {
+      var list = [];
+      for (var i = 0; i < SEARCH_SOURCES.length; i++) {
+        var box = findSourceBox(boxes, SEARCH_SOURCES[i].key);
+        if (box) list.push({ key: SEARCH_SOURCES[i].key, label: SEARCH_SOURCES[i].label, box: box });
+      }
+      var customs = getCustomBoxes(boxes);
+      for (var d = 0; d < customs.length; d++) {
+        list.push({ key: customs[d].endpoint, label: customs[d].name || getEndpointHost(customs[d].endpoint), box: customs[d] });
+      }
+      return list;
+    }
+
+    // 每源搜索超时包装：超时以 err.timeout = true 标记，与普通错误区分
+    function withTimeout(promise, ms) {
+      return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () {
+          var e = new Error("timeout");
+          e.timeout = true;
+          reject(e);
+        }, ms);
+        promise.then(
+          function (v) { clearTimeout(timer); resolve(v); },
+          function (err) { clearTimeout(timer); reject(err); }
+        );
+      });
+    }
+
     function inject() {
       if (!isStudioDetailPage()) { _searchBtnInjected = false; return; }
       if (_searchBtnInjected || document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
@@ -1543,9 +1609,11 @@ try {
       // 同 createOverlay：禁止拖动选中文本，避免原生拖拽会话卡死页面
       panel.addEventListener("dragstart", function (e) { e.preventDefault(); });
 
-      // 内置三源按钮（固定顺序），key 为短标识
+      // 「全部」按钮（方案 B：同款按钮 + 分隔线）+ 内置三源（固定顺序）
       var sourceLabels = {};
-      var sourcesHtml = "";
+      var sourcesHtml =
+        '<button type="button" class="ss-source-btn ss-source-all" data-source="' + SOURCE_ALL + '">' + tc("全部", "All") + '</button>' +
+        '<span class="ss-sep"></span>';
       for (var i = 0; i < SEARCH_SOURCES.length; i++) {
         sourceLabels[SEARCH_SOURCES[i].key] = SEARCH_SOURCES[i].label;
         sourcesHtml += '<button type="button" class="ss-source-btn" data-source="' + SEARCH_SOURCES[i].key + '">' + SEARCH_SOURCES[i].label + '</button>';
@@ -1553,17 +1621,7 @@ try {
 
       // 自定义 Stash-box 实例：排除内置三源后按 host 排序追加到后方
       // key 用 endpoint 本身（天然唯一稳定，删除入口后重加同地址仍能从 localStorage 恢复选择）
-      var customs = [];
-      for (var c = 0; c < boxes.length; c++) {
-        var ep = (boxes[c].endpoint || "").toLowerCase();
-        if (!ep) continue;
-        var isBuiltin = false;
-        for (var b = 0; b < SEARCH_SOURCES.length; b++) {
-          if (ep.indexOf(SEARCH_SOURCES[b].host) !== -1) { isBuiltin = true; break; }
-        }
-        if (!isBuiltin) customs.push(boxes[c]);
-      }
-      customs.sort(function (a, b) { return getEndpointHost(a.endpoint).localeCompare(getEndpointHost(b.endpoint)); });
+      var customs = getCustomBoxes(boxes);
       for (var d = 0; d < customs.length; d++) {
         var label = customs[d].name || getEndpointHost(customs[d].endpoint);
         sourceLabels[customs[d].endpoint] = label;
@@ -1586,9 +1644,11 @@ try {
       var submitBtn = panel.querySelector(".ss-search-submit");
       var resultsDiv = panel.querySelector(".ss-results");
 
-      // ===== 搜索源选择（未配置入口的源显示但不可选） =====
+      // ===== 搜索源选择（未配置入口的源显示但不可选；「全部」需至少一个源可用） =====
       var sourceBtns = panel.querySelectorAll(".ss-source-btn");
       var selectedSource = null;
+      var availableSources = getAvailableSources(boxes);
+      var hasAnySource = availableSources.length > 0;
 
       function selectSource(key, remember) {
         selectedSource = key;
@@ -1604,7 +1664,8 @@ try {
       for (var j = 0; j < sourceBtns.length; j++) {
         (function (btn) {
           var key = btn.getAttribute("data-source");
-          if (findSourceBox(boxes, key)) {
+          var usable = key === SOURCE_ALL ? hasAnySource : !!findSourceBox(boxes, key);
+          if (usable) {
             if (!firstAvailable) firstAvailable = key;
             btn.addEventListener("click", function (e) {
               e.preventDefault();
@@ -1618,11 +1679,26 @@ try {
         })(sourceBtns[j]);
       }
 
-      // 记住上一次的选择；已保存的源不可用时回退到第一个可用源
+      // 记住上一次的选择；已保存的源不可用时回退到第一个可用源（「全部」在最前，默认即全部）
       var savedKey = null;
       try { savedKey = localStorage.getItem(SOURCE_STORAGE_KEY); } catch (e) { /* ignore */ }
-      if (savedKey && findSourceBox(boxes, savedKey)) selectSource(savedKey, false);
+      if (savedKey === SOURCE_ALL && hasAnySource) selectSource(SOURCE_ALL, false);
+      else if (savedKey && findSourceBox(boxes, savedKey)) selectSource(savedKey, false);
       else if (firstAvailable) selectSource(firstAvailable, false);
+
+      // ===== 结果点击委托：条目随源流式插入，统一由一个监听器分发 =====
+      var currentResults = {};  // sourceKey -> results[]
+
+      resultsDiv.addEventListener("click", function (e) {
+        var item = e.target.closest(".ss-result-item");
+        if (!item) return;
+        var key = item.getAttribute("data-source");
+        var idx = parseInt(item.getAttribute("data-index"), 10);
+        var list = currentResults[key];
+        if (!list || !list[idx]) return;
+        closeSearchPanel();
+        applyResult(list[idx], studio, key);
+      });
 
       function doSearch() {
         var term = (input.value || "").trim();
@@ -1633,16 +1709,31 @@ try {
         }
         submitBtn.disabled = true;
         submitBtn.textContent = tc("搜索中...", "Searching...");
-        resultsDiv.innerHTML = '<div class="ss-results-loading">' + tc("正在搜索 ", "Searching ") + escapeHtml(sourceLabels[selectedSource] || selectedSource) + '...</div>';
+        currentResults = {};
 
-        performSearch(term, selectedSource).then(function (results) {
-          renderResults(resultsDiv, results, studio, selectedSource);
-        }).catch(function (err) {
-          resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("搜索失败: ", "Search failed: ") + escapeHtml(err.message) + '</div>';
-        }).then(function () {
-          submitBtn.disabled = false;
-          submitBtn.textContent = t("actions.search", "搜索");
-        });
+        if (selectedSource === SOURCE_ALL) {
+          if (!hasAnySource) {
+            resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("需要添加API密钥", "API key required") + '</div>';
+            submitBtn.disabled = false;
+            submitBtn.textContent = t("actions.search", "搜索");
+            return;
+          }
+          searchAllSources(term, availableSources, resultsDiv, currentResults, function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = t("actions.search", "搜索");
+          });
+        } else {
+          resultsDiv.innerHTML = '<div class="ss-results-loading">' + tc("正在搜索 ", "Searching ") + escapeHtml(sourceLabels[selectedSource] || selectedSource) + '...</div>';
+          performSearch(term, selectedSource).then(function (results) {
+            currentResults[selectedSource] = results;
+            renderResults(resultsDiv, results, selectedSource, sourceLabels[selectedSource] || selectedSource, false);
+          }).catch(function (err) {
+            resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("搜索失败: ", "Search failed: ") + escapeHtml(err.message) + '</div>';
+          }).then(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = t("actions.search", "搜索");
+          });
+        }
       }
 
       submitBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); doSearch(); });
@@ -1690,42 +1781,102 @@ try {
       });
     }
 
-    function renderResults(container, results, studio, sourceKey) {
+    // 单条结果 HTML；withBadge 为 true 时名称行右端显示源名 badge（仅「全部」模式）
+    function buildResultItemHtml(r, i, key, label, withBadge) {
+      var aliases = r.aliases ? r.aliases.split(",").map(function (a) { return a.trim(); }).filter(Boolean) : [];
+      var urls = r.urls || [];
+      var imageHtml = r.image
+        ? '<img class="ss-result-image" src="' + escapeAttr(r.image) + '" alt="">'
+        : '<div class="ss-result-placeholder">' + tc("无图", "No image") + '</div>';
+      var nameHtml = withBadge
+        ? '<div class="ss-result-name-row">' +
+            '<div class="ss-result-name">' + escapeHtml(r.name || "") + '</div>' +
+            '<span class="ss-result-badge">' + escapeHtml(label) + '</span>' +
+          '</div>'
+        : '<div class="ss-result-name">' + escapeHtml(r.name || "") + '</div>';
+
+      return '<div class="ss-result-item" data-source="' + escapeAttr(key) + '" data-index="' + i + '">' +
+        imageHtml +
+        '<div class="ss-result-info">' +
+          nameHtml +
+          (aliases.length > 0 ? '<div class="ss-result-aliases">' + t("aliases", "别名") + ': ' + escapeHtml(aliases.join(", ")) + '</div>' : '') +
+          (urls.length > 0 ? '<div class="ss-result-urls">' + escapeHtml(urls.join(", ")) + '</div>' : '') +
+          (r.parent && r.parent.name ? '<div class="ss-result-parent">' + t("parent_studio", "上级") + ': ' + escapeHtml(r.parent.name) + '</div>' : '') +
+          (r.remote_site_id ? '<div class="ss-result-stashid">Stash ID: ' + escapeHtml(r.remote_site_id) + '</div>' : '') +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderResults(container, results, sourceKey, label, withBadge) {
       if (!results || results.length === 0) {
         container.innerHTML = '<div class="ss-results-empty">' + tc("未找到匹配的工作室", "No matching studios found") + '</div>';
         return;
       }
-
       var html = "";
-      for (var i = 0; i < results.length; i++) {
-        var r = results[i];
-        var aliases = r.aliases ? r.aliases.split(",").map(function (a) { return a.trim(); }).filter(Boolean) : [];
-        var urls = r.urls || [];
-        var imageHtml = r.image
-          ? '<img class="ss-result-image" src="' + escapeAttr(r.image) + '" alt="">'
-          : '<div class="ss-result-placeholder">' + tc("无图", "No image") + '</div>';
-
-        html += '<div class="ss-result-item" data-index="' + i + '">' +
-          imageHtml +
-          '<div class="ss-result-info">' +
-            '<div class="ss-result-name">' + escapeHtml(r.name || "") + '</div>' +
-            (aliases.length > 0 ? '<div class="ss-result-aliases">' + t("aliases", "别名") + ': ' + escapeHtml(aliases.join(", ")) + '</div>' : '') +
-            (urls.length > 0 ? '<div class="ss-result-urls">' + escapeHtml(urls.join(", ")) + '</div>' : '') +
-            (r.parent && r.parent.name ? '<div class="ss-result-parent">' + t("parent_studio", "上级") + ': ' + escapeHtml(r.parent.name) + '</div>' : '') +
-            (r.remote_site_id ? '<div class="ss-result-stashid">Stash ID: ' + escapeHtml(r.remote_site_id) + '</div>' : '') +
-          '</div>' +
-        '</div>';
-      }
+      for (var i = 0; i < results.length; i++) html += buildResultItemHtml(results[i], i, sourceKey, label, withBadge);
       container.innerHTML = html;
+    }
 
-      var items = container.querySelectorAll(".ss-result-item");
-      for (var j = 0; j < items.length; j++) {
-        items[j].addEventListener("click", function () {
-          var idx = parseInt(this.getAttribute("data-index"), 10);
-          closeSearchPanel();
-          applyResult(results[idx], studio, sourceKey);
-        });
+    // 「全部」模式：并发搜索所有可用源（每源 8s 超时），结果按源顺序流式插入；
+    // 空结果/超时源保留一行淡字，未配置 API 的源不参与（availableSources 已过滤）。
+    // resultsStore 被原地写入（sourceKey -> results[]），供结果点击委托读取。
+    function searchAllSources(term, availableSources, resultsDiv, resultsStore, onAllSettled) {
+      resultsDiv.innerHTML = "";
+      var slotEls = {};      // 每源占位节点，按源顺序插入，完成后原地替换为结果/状态行
+      var pendingKeys = [];
+
+      for (var i = 0; i < availableSources.length; i++) {
+        var slot = document.createElement("div");
+        slot.className = "ss-src-slot";
+        resultsDiv.appendChild(slot);
+        slotEls[availableSources[i].key] = slot;
+        pendingKeys.push(availableSources[i].key);
       }
+
+      var searchingLine = document.createElement("div");
+      searchingLine.className = "ss-results-loading";
+      resultsDiv.appendChild(searchingLine);
+
+      function syncSearchingLine() {
+        if (pendingKeys.length === 0) { searchingLine.remove(); return; }
+        var labels = [];
+        for (var i = 0; i < pendingKeys.length; i++) {
+          var s = availableSources.find(function (x) { return x.key === pendingKeys[i]; });
+          if (s) labels.push(s.label);
+        }
+        searchingLine.textContent = tc("正在搜索 ", "Searching ") + labels.join("/") + "…";
+      }
+      syncSearchingLine();
+
+      function fillSlot(source, results, err) {
+        var slot = slotEls[source.key];
+        if (results && results.length > 0) {
+          resultsStore[source.key] = results;
+          var html = "";
+          for (var i = 0; i < results.length; i++) html += buildResultItemHtml(results[i], i, source.key, source.label, true);
+          slot.insertAdjacentHTML("beforebegin", html);
+          slot.remove();
+        } else {
+          var msg;
+          if (err) msg = err.timeout ? tc("超时", "timed out") : tc("搜索失败", "failed");
+          else msg = tc("无结果", "no results");
+          slot.className = "ss-src-status";
+          slot.textContent = source.label + "：" + msg;
+        }
+      }
+
+      var remaining = availableSources.length;
+      availableSources.forEach(function (source) {
+        withTimeout(performSearch(term, source.key), SEARCH_TIMEOUT_MS)
+          .then(function (results) { fillSlot(source, results, null); })
+          .catch(function (err) { fillSlot(source, null, err); })
+          .then(function () {
+            pendingKeys = pendingKeys.filter(function (k) { return k !== source.key; });
+            syncSearchingLine();
+            remaining--;
+            if (remaining === 0 && onAllSettled) onAllSettled();
+          });
+      });
     }
 
     function applyResult(result, studio, sourceKey) {

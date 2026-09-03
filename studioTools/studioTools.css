@@ -1102,6 +1102,52 @@
   cursor: not-allowed;
 }
 
+/* 「全部」按钮与单源按钮之间的分隔线 */
+.ss-sep {
+  width: 1px;
+  height: 16px;
+  background: #444;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+/* 「全部」模式：结果名称行 + 源名 badge。
+ * 名称可收缩（min-width:0 + 省略号），badge 永不压缩变形，极窄屏不溢出 */
+.ss-result-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.ss-result-name-row .ss-result-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss-result-badge {
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 3px;
+  color: #999;
+  background: #262626;
+  border: 1px solid #3a3a3a;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 「全部」模式：无结果/超时/失败源的一行淡字提示 */
+.ss-src-status {
+  padding: 6px 10px;
+  color: #666;
+  font-size: 12px;
+}
+
 .ss-results {
   overflow-y: auto;
   flex: 1;

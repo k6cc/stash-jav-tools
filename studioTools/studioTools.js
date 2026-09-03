@@ -1,9 +1,9 @@
 /**
- * Studio Tools v1.3.1
+ * Studio Tools v1.4.0
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格）
- * - StashDB 搜索：一键搜索并更新工作室信息
+ * - Stash-Box 搜索：支持 stashdb/theporndb/javstash 三源切换，搜索并更新工作室信息
  *
  * 两个模块共享：graphql、escapeHtml/escapeAttr、URL 解析、fetchCurrentStudio、
  * MutationObserver、history hook、锚点按钮注入。注入按钮统一使用 .st-inject-btn 样式。
@@ -22,6 +22,14 @@ try {
   var GRAPHQL_ENDPOINT = "/graphql";
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
 
+  // Search 模块可选搜索源（均为 Stash-Box 实例，host 用于匹配「元数据提供者」中已配置的入口）
+  var SEARCH_SOURCES = [
+    { key: "stashdb", label: "stashdb", host: "stashdb.org" },
+    { key: "theporndb", label: "theporndb", host: "theporndb.net" },
+    { key: "javstash", label: "javstash", host: "javstash.org" }
+  ];
+  var SOURCE_STORAGE_KEY = "studioTools.searchSource";
+
   // ===== 共享状态 =====
   var _currentStudioId = null;
   var _currentStudioData = null;
@@ -31,8 +39,9 @@ try {
   var _searchBtnInjected = false;
   var _allTagsCache = null;
   var _allStudiosCache = null;
-  var _stashBoxConfig = null;
+  var _stashBoxes = null;
   var _searchPanel = null;
+  var _searchPanelSeq = 0;
 
   // 合并两个模块所需的全部字段
   var Q_STUDIO = "query FindStudio($id: ID!) { findStudio(id: $id) { id name aliases urls details rating100 favorite image_path stash_ids { endpoint stash_id } parent_studio { id name } tags { id name } ignore_auto_tag organized } }";
@@ -60,13 +69,13 @@ try {
     });
   }
 
-  function stashdbGraphql(query, variables, apiKey) {
-    return fetch(STASHDB_ENDPOINT, {
+  function stashdbGraphql(query, variables, endpoint, apiKey) {
+    return fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "ApiKey": apiKey },
       body: JSON.stringify({ query: query, variables: variables || {} })
     }).then(function (resp) {
-      if (!resp.ok) throw new Error("StashDB HTTP " + resp.status);
+      if (!resp.ok) throw new Error("Stash-Box HTTP " + resp.status);
       return resp.json();
     }).then(function (data) {
       if (data.errors && data.errors.length > 0) throw new Error(data.errors[0].message);
@@ -1463,13 +1472,29 @@ try {
 
     var M_UPDATE = "mutation StudioUpdate($input: StudioUpdateInput!) { studioUpdate(input: $input) { id name } }";
 
-    function getStashBoxConfig() {
-      if (_stashBoxConfig) return Promise.resolve(_stashBoxConfig);
+    function getStashBoxes() {
+      if (_stashBoxes) return Promise.resolve(_stashBoxes);
       return graphql(Q_CONFIGURATION, {}).then(function (data) {
-        var boxes = (((data.data || {}).configuration || {}).general || {}).stashBoxes || [];
-        _stashBoxConfig = boxes.length > 0 ? boxes[0] : null;
-        return _stashBoxConfig;
-      }).catch(function () { return null; });
+        _stashBoxes = (((data.data || {}).configuration || {}).general || {}).stashBoxes || [];
+        return _stashBoxes;
+      }).catch(function () { return []; });
+    }
+
+    // 按搜索源 key 匹配「元数据提供者」中已配置的 Stash-box 入口：
+    // 内置三源 key（stashdb 等）按 host 子串匹配；自定义实例 key 即 endpoint 本身，全等匹配
+    function findSourceBox(boxes, sourceKey) {
+      for (var i = 0; i < (boxes || []).length; i++) {
+        var ep = boxes[i].endpoint || "";
+        if (ep === sourceKey) return boxes[i];
+        for (var j = 0; j < SEARCH_SOURCES.length; j++) {
+          if (SEARCH_SOURCES[j].key === sourceKey && ep.toLowerCase().indexOf(SEARCH_SOURCES[j].host) !== -1) return boxes[i];
+        }
+      }
+      return null;
+    }
+
+    function getEndpointHost(endpoint) {
+      try { return new URL(endpoint).host; } catch (e) { return endpoint || ""; }
     }
 
     function inject() {
@@ -1485,7 +1510,7 @@ try {
         btn.className = "st-inject-btn ss-search-btn st-green";
         btn.type = "button";
         btn.innerHTML = INJECT_ICONS.update;
-        btn.title = tc("从 StashDB 搜索并更新工作室信息", "Search StashDB and update studio info");
+        btn.title = tc("从 stashdb/theporndb/javstash 搜索并更新工作室信息", "Search stashdb/theporndb/javstash and update studio info");
         btn.addEventListener("click", function (e) {
           e.preventDefault();
           e.stopPropagation();
@@ -1497,21 +1522,60 @@ try {
     }
 
     function closeSearchPanel() {
+      // 递增序号使 showSearchPanel 中 pending 的建面板回调失效（双击/异步竞态）
+      _searchPanelSeq++;
       if (_searchPanel) { _searchPanel.remove(); _searchPanel = null; }
     }
 
     function showSearchPanel(anchorBtn, studio) {
       closeSearchPanel();
+      // 先取已配置的提供者再建面板：源按钮的可用态（置灰）初始化时就确定，避免闪烁
+      var seq = _searchPanelSeq;
+      getStashBoxes().then(function (boxes) {
+        if (seq !== _searchPanelSeq) return;
+        buildSearchPanel(anchorBtn, studio, boxes || []);
+      });
+    }
 
+    function buildSearchPanel(anchorBtn, studio, boxes) {
       var panel = document.createElement("div");
       panel.className = "ss-search-panel";
       // 同 createOverlay：禁止拖动选中文本，避免原生拖拽会话卡死页面
       panel.addEventListener("dragstart", function (e) { e.preventDefault(); });
+
+      // 内置三源按钮（固定顺序），key 为短标识
+      var sourceLabels = {};
+      var sourcesHtml = "";
+      for (var i = 0; i < SEARCH_SOURCES.length; i++) {
+        sourceLabels[SEARCH_SOURCES[i].key] = SEARCH_SOURCES[i].label;
+        sourcesHtml += '<button type="button" class="ss-source-btn" data-source="' + SEARCH_SOURCES[i].key + '">' + SEARCH_SOURCES[i].label + '</button>';
+      }
+
+      // 自定义 Stash-box 实例：排除内置三源后按 host 排序追加到后方
+      // key 用 endpoint 本身（天然唯一稳定，删除入口后重加同地址仍能从 localStorage 恢复选择）
+      var customs = [];
+      for (var c = 0; c < boxes.length; c++) {
+        var ep = (boxes[c].endpoint || "").toLowerCase();
+        if (!ep) continue;
+        var isBuiltin = false;
+        for (var b = 0; b < SEARCH_SOURCES.length; b++) {
+          if (ep.indexOf(SEARCH_SOURCES[b].host) !== -1) { isBuiltin = true; break; }
+        }
+        if (!isBuiltin) customs.push(boxes[c]);
+      }
+      customs.sort(function (a, b) { return getEndpointHost(a.endpoint).localeCompare(getEndpointHost(b.endpoint)); });
+      for (var d = 0; d < customs.length; d++) {
+        var label = customs[d].name || getEndpointHost(customs[d].endpoint);
+        sourceLabels[customs[d].endpoint] = label;
+        sourcesHtml += '<button type="button" class="ss-source-btn ss-source-custom" data-source="' + escapeAttr(customs[d].endpoint) + '" title="' + escapeAttr(customs[d].endpoint) + '">' + escapeHtml(label) + '</button>';
+      }
+
       panel.innerHTML =
         '<div class="ss-search-header">' +
           '<input type="text" class="ss-search-input" placeholder="' + escapeAttr(tc("输入工作室名称搜索...", "Enter studio name to search...")) + '" value="' + escapeAttr(studio.name || "") + '">' +
           '<button class="ss-search-submit" type="button">' + t("actions.search", "搜索") + '</button>' +
         '</div>' +
+        '<div class="ss-source-row">' + sourcesHtml + '</div>' +
         '<div class="ss-results"><div class="ss-results-empty">' + tc("输入名称后点击搜索", "Type a name and click Search") + '</div></div>';
 
       document.body.appendChild(panel);
@@ -1522,15 +1586,57 @@ try {
       var submitBtn = panel.querySelector(".ss-search-submit");
       var resultsDiv = panel.querySelector(".ss-results");
 
+      // ===== 搜索源选择（未配置入口的源显示但不可选） =====
+      var sourceBtns = panel.querySelectorAll(".ss-source-btn");
+      var selectedSource = null;
+
+      function selectSource(key, remember) {
+        selectedSource = key;
+        if (remember) {
+          try { localStorage.setItem(SOURCE_STORAGE_KEY, key); } catch (e) { /* 隐私模式等场景静默忽略 */ }
+        }
+        for (var k = 0; k < sourceBtns.length; k++) {
+          sourceBtns[k].classList.toggle("ss-source-active", sourceBtns[k].getAttribute("data-source") === key);
+        }
+      }
+
+      var firstAvailable = null;
+      for (var j = 0; j < sourceBtns.length; j++) {
+        (function (btn) {
+          var key = btn.getAttribute("data-source");
+          if (findSourceBox(boxes, key)) {
+            if (!firstAvailable) firstAvailable = key;
+            btn.addEventListener("click", function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              selectSource(key, true);
+            });
+          } else {
+            btn.disabled = true;
+            btn.title = tc("需要在 Stash「设置 → 元数据提供者」中添加该源", "Add this provider in Stash Settings > Metadata Providers first");
+          }
+        })(sourceBtns[j]);
+      }
+
+      // 记住上一次的选择；已保存的源不可用时回退到第一个可用源
+      var savedKey = null;
+      try { savedKey = localStorage.getItem(SOURCE_STORAGE_KEY); } catch (e) { /* ignore */ }
+      if (savedKey && findSourceBox(boxes, savedKey)) selectSource(savedKey, false);
+      else if (firstAvailable) selectSource(firstAvailable, false);
+
       function doSearch() {
         var term = (input.value || "").trim();
         if (!term) return;
+        if (!selectedSource) {
+          resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("需要添加API密钥", "API key required") + '</div>';
+          return;
+        }
         submitBtn.disabled = true;
         submitBtn.textContent = tc("搜索中...", "Searching...");
-        resultsDiv.innerHTML = '<div class="ss-results-loading">' + tc("正在搜索 StashDB...", "Searching StashDB...") + '</div>';
+        resultsDiv.innerHTML = '<div class="ss-results-loading">' + tc("正在搜索 ", "Searching ") + escapeHtml(sourceLabels[selectedSource] || selectedSource) + '...</div>';
 
-        performSearch(term).then(function (results) {
-          renderResults(resultsDiv, results, studio);
+        performSearch(term, selectedSource).then(function (results) {
+          renderResults(resultsDiv, results, studio, selectedSource);
         }).catch(function (err) {
           resultsDiv.innerHTML = '<div class="ss-results-error">' + tc("搜索失败: ", "Search failed: ") + escapeHtml(err.message) + '</div>';
         }).then(function () {
@@ -1574,18 +1680,17 @@ try {
       panel.style.top = top + "px";
     }
 
-    function performSearch(term) {
-      return getStashBoxConfig().then(function (config) {
-        var source = config && config.endpoint
-          ? { stash_box_endpoint: config.endpoint }
-          : { stash_box_index: 0 };
-        return graphql(Q_SCRAPE_STUDIO, { source: source, input: { query: term } });
+    function performSearch(term, sourceKey) {
+      return getStashBoxes().then(function (boxes) {
+        var box = findSourceBox(boxes, sourceKey);
+        if (!box || !box.endpoint) throw new Error(tc("需要添加API密钥", "API key required"));
+        return graphql(Q_SCRAPE_STUDIO, { source: { stash_box_endpoint: box.endpoint }, input: { query: term } });
       }).then(function (data) {
         return (data.data || {}).scrapeSingleStudio || [];
       });
     }
 
-    function renderResults(container, results, studio) {
+    function renderResults(container, results, studio, sourceKey) {
       if (!results || results.length === 0) {
         container.innerHTML = '<div class="ss-results-empty">' + tc("未找到匹配的工作室", "No matching studios found") + '</div>';
         return;
@@ -1618,12 +1723,19 @@ try {
         items[j].addEventListener("click", function () {
           var idx = parseInt(this.getAttribute("data-index"), 10);
           closeSearchPanel();
-          applyResult(results[idx], studio);
+          applyResult(results[idx], studio, sourceKey);
         });
       }
     }
 
-    function applyResult(result, studio) {
+    function applyResult(result, studio, sourceKey) {
+      getStashBoxes().then(function (boxes) {
+        applyResultWithBox(result, studio, findSourceBox(boxes, sourceKey) || {});
+      });
+    }
+
+    function applyResultWithBox(result, studio, box) {
+      var sourceEndpoint = box.endpoint || STASHDB_ENDPOINT;
       var name = result.name || "";
       var aliases = result.aliases ? result.aliases.split(",").map(function (a) { return a.trim(); }).filter(Boolean) : [];
       var urls = result.urls || [];
@@ -1639,9 +1751,9 @@ try {
           return { endpoint: s.endpoint, stash_id: s.stash_id };
         });
         var hasNew = existingStashIds.some(function (s) {
-          return s.stash_id === stashId && s.endpoint === STASHDB_ENDPOINT;
+          return s.stash_id === stashId && s.endpoint === sourceEndpoint;
         });
-        if (!hasNew) existingStashIds.push({ endpoint: STASHDB_ENDPOINT, stash_id: stashId });
+        if (!hasNew) existingStashIds.push({ endpoint: sourceEndpoint, stash_id: stashId });
         input.stash_ids = existingStashIds;
       }
 
@@ -1658,7 +1770,7 @@ try {
           if (parentId !== undefined) input.parent_id = parentId;
         }));
       } else if (name) {
-        promises.push(findParentStudioId(name).then(function (parentId) {
+        promises.push(findParentStudioId(name, box).then(function (parentId) {
           if (parentId !== undefined) input.parent_id = parentId;
         }));
       }
@@ -1675,11 +1787,9 @@ try {
       });
     }
 
-    function findParentStudioId(studioName) {
-      return getStashBoxConfig().then(function (config) {
-        if (!config || !config.api_key) return undefined;
-        return stashdbGraphql(Q_STASHDB_SEARCH_STUDIO, { term: studioName }, config.api_key);
-      }).then(function (data) {
+    function findParentStudioId(studioName, box) {
+      if (!box || !box.endpoint || !box.api_key) return Promise.resolve(undefined);
+      return stashdbGraphql(Q_STASHDB_SEARCH_STUDIO, { term: studioName }, box.endpoint, box.api_key).then(function (data) {
         if (!data) return undefined;
         var studios = (data.data || {}).searchStudio || [];
         if (studios.length === 0) return undefined;

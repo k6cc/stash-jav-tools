@@ -29,6 +29,15 @@
   background: rgba(81, 207, 102, 0.14) !important;
 }
 
+/* ===== 共用：输入框选中高亮 =====
+ * 覆盖 Stash 全局 ::selection（灰底深字，自动全选时难以辨认）为灰底白字；
+ * 仅覆盖打开时自动全选的两处输入框（搜索面板、合并对话框下拉框） */
+.ss-search-input::selection,
+.sm-combobox-input::selection {
+  background: #666;
+  color: #fff;
+}
+
 /* ================================================================== */
 /* Merge 模块样式（sm- 前缀）                                          */
 /* ================================================================== */
@@ -1043,6 +1052,53 @@
 .ss-search-submit:disabled {
   background: #444;
   color: #888;
+  cursor: not-allowed;
+}
+
+/* ===== 搜索源选择行 ===== */
+.ss-source-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 9px;
+  border-bottom: 1px solid #444;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 未选中：灰字；选中：白字 + 深色底 + 绿框（与搜索框聚焦色一致）；未配置入口：置灰不可选 */
+.ss-source-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  background: transparent;
+  color: #888;
+  border: 1px solid transparent;
+  font-family: inherit;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.ss-source-btn:hover:not(:disabled):not(.ss-source-active) {
+  color: #c9c9c9;
+  border-color: #555;
+}
+
+.ss-source-btn.ss-source-active {
+  color: #fff;
+  background: rgba(47, 158, 68, 0.2);
+  border-color: #2f9e44;
+  font-weight: 600;
+}
+
+/* 自定义 Stash-box 实例选中态：白色边框 + 纯黑背景，与内置三源区分 */
+.ss-source-btn.ss-source-custom.ss-source-active {
+  background: #000;
+  border-color: #fff;
+}
+
+.ss-source-btn:disabled {
+  color: #555;
   cursor: not-allowed;
 }
 

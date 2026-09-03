@@ -4,7 +4,9 @@ name: release
 #   1. 从 tag 提取插件名和版本号（sceneTranslate-v2.3.0 → sceneTranslate + 2.3.0）
 #   2. 打包对应子目录的 zip
 #   3. 计算 sha256 + 北京时间戳 + 下载 URL
-#   4. clone stash-plugins 仓库 → awk 更新 index.yml → push
+#   4. clone stash-plugins 仓库 → 同一 commit 更新 index.yml + README 版本表 → push
+#      （单次 push 只触发一次 Pages 部署；stash-plugins 侧 sync-readme.yml 保留作兜底，
+#        README 已同步时其幂等检查不会再产生 commit）
 #   5. 创建 GitHub Release（上传 zip）
 # 需要 STASH_PLUGINS_TOKEN secret（PAT with repo scope）跨仓库 push。
 # secret 未设置时跳过 index.yml 更新，仅创建 release。
@@ -18,7 +20,7 @@ on:
 
 # 不使用 concurrency 串行：GitHub Actions 同组排队只保留最新一个 pending run，
 # 多 tag 同时推送会把中间的运行直接取消（曾导致 studioTools-v1.1.1 被 cancel）。
-# index.yml 更新步骤已做竞争安全处理（fetch + reset + push 重试），可安全并发。
+# index.yml + README 更新步骤已做竞争安全处理（fetch + reset + push 重试），可安全并发。
 
 permissions:
   contents: write
@@ -63,7 +65,7 @@ jobs:
           echo "date     : $TS"
           echo "path     : $PATH_URL"
 
-      - name: Update stash-plugins index.yml
+      - name: Update stash-plugins index.yml and README
         env:
           PLUGIN_ID: ${{ steps.ver.outputs.plugin_id }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -82,8 +84,10 @@ jobs:
           cd /tmp/stash-plugins
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # 竞争安全：多个 release 并发推送 index.yml 时 push 可能被拒（non-fast-forward），
-          # 每次重试前 fetch + reset 到远程最新（已包含其他插件刚推的改动），再重新套用本插件的更新
+          # 竞争安全：多个 release 并发推送时 push 可能被拒（non-fast-forward），
+          # 每次重试前 fetch + reset 到远程最新（已包含其他插件刚推的改动），
+          # 再重新套用本插件的 index.yml 更新与 README 同步。
+          # index.yml 与 README 版本表放同一个 commit：一次 push 只触发一次 Pages 部署
           for attempt in 1 2 3 4 5; do
             git fetch origin main
             git reset --hard origin/main
@@ -96,14 +100,17 @@ jobs:
             in_block && /^  sha256: / { print "  sha256: " sha; next }
             { print }
             ' plugins/main/index.yml > /tmp/index.yml && mv /tmp/index.yml plugins/main/index.yml
-            git add plugins/main/index.yml
+            # 从 index.yml 同步 README 版本表（复用仓库自带脚本，幂等）；
+            # 失败不阻塞 index.yml 提交，README 由 stash-plugins 的 sync-readme.yml 兜底
+            python3 scripts/sync_readme.py || echo "⚠ sync_readme.py failed — README left to fallback workflow"
+            git add plugins/main/index.yml README.md
             if git diff --cached --quiet; then
-              echo "index.yml already up to date — nothing to commit"
+              echo "index.yml and README.md already up to date — nothing to commit"
               exit 0
             fi
             git commit -m "chore: bump ${PLUGIN_ID} to ${TAG}"
             if git push; then
-              echo "=== Pushed index.yml update (attempt ${attempt}) ==="
+              echo "=== Pushed index.yml + README update (attempt ${attempt}) ==="
               cat plugins/main/index.yml
               exit 0
             fi

@@ -4,7 +4,7 @@ Stash 工作室详情页工具集 — 纯 UI 插件（JS + CSS，无需 Python�
 
 合并自 studioMerge v1.0.0 + studioSearch v2.2.0，两个模块共享 GraphQL 封装、URL 解析、MutationObserver、锚点按钮注入等基础设施。
 
-> v1.5.1：「全部」搜索模式下无结果/超时/失败源的状态行增加分隔线，与相邻组隔开。
+> v1.5.2：搜索源名称显示优化 — stashdb→StashDB、theporndb→ThePornDB、javstash→JAVStash（按钮、来源徽标、tooltip 等全部生效位置）。
 
 ## 功能
 
@@ -26,11 +26,11 @@ Stash 工作室详情页工具集 — 纯 UI 插件（JS + CSS，无需 Python�
 
 ### 多源搜索更新（Search）
 
-在工作室详情页注入「更新」按钮，从 stashdb / theporndb / javstash 搜索并更新工作室信息：
+在工作室详情页注入「更新」按钮，从 StashDB / ThePornDB / JAVStash 搜索并更新工作室信息：
 
 - 搜索框自动填充当前工作室名称，可修改后搜索
 
-- 搜索框下方可切换搜索源：内置 stashdb/theporndb/javstash + 「元数据提供者」中配置的其他 Stash-box 实例（按域名排序追加，显示名称优先），选择自动记忆
+- 搜索框下方可切换搜索源：内置 StashDB/ThePornDB/JAVStash + 「元数据提供者」中配置的其他 Stash-box 实例（按域名排序追加，显示名称优先），选择自动记忆
 
 - 「全部」模式：所有可用源并发搜索（每源 8s 超时），结果按源顺序流式渲染并在名称右侧标注来源；空结果/超时源保留一行淡字提示
 
@@ -80,7 +80,7 @@ plugins/
 | --------------------- | ----------- | --------------------------------------------------------- |
 | **Stash**             | 是           | v0.25+                                                    |
 | **现代浏览器**             | 是           | Chrome、Firefox、Safari、Edge                                |
-| **Stash-box API Key** | Search 模块需要 | 设置 → 元数据提供者 → Stash-box 端点（stashdb/theporndb/javstash 任一） |
+| **Stash-box API Key** | Search 模块需要 | 设置 → 元数据提供者 → Stash-box 端点（StashDB/ThePornDB/JAVStash 任一） |
 
 > 纯 UI 插件（仅 JS + CSS），无需 Python。
 

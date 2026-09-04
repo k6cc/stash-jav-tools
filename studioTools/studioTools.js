@@ -1,9 +1,9 @@
 /**
- * Studio Tools v1.5.1
+ * Studio Tools v1.5.2
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
- * - Stash-Box 搜索：stashdb/theporndb/javstash + 自定义实例多源切换，「全部」并发搜索（每源 8s 超时，流式分组渲染）
+ * - Stash-Box 搜索：StashDB/ThePornDB/JAVStash + 自定义实例多源切换，「全部」并发搜索（每源 8s 超时，流式分组渲染）
  *
  * 两个模块共享：graphql、escapeHtml/escapeAttr、URL 解析、fetchCurrentStudio、
  * MutationObserver、history hook、锚点按钮注入。注入按钮统一使用 .st-inject-btn 样式。
@@ -24,9 +24,9 @@ try {
 
   // Search 模块可选搜索源（均为 Stash-Box 实例，host 用于匹配「元数据提供者」中已配置的入口）
   var SEARCH_SOURCES = [
-    { key: "stashdb", label: "stashdb", host: "stashdb.org" },
-    { key: "theporndb", label: "theporndb", host: "theporndb.net" },
-    { key: "javstash", label: "javstash", host: "javstash.org" }
+    { key: "stashdb", label: "StashDB", host: "stashdb.org" },
+    { key: "theporndb", label: "ThePornDB", host: "theporndb.net" },
+    { key: "javstash", label: "JAVStash", host: "javstash.org" }
   ];
   var SOURCE_STORAGE_KEY = "studioTools.searchSource";
   var SOURCE_ALL = "__all__";        // 「全部」聚合选项的保留 key
@@ -1576,7 +1576,7 @@ try {
         btn.className = "st-inject-btn ss-search-btn st-green";
         btn.type = "button";
         btn.innerHTML = INJECT_ICONS.update;
-        btn.title = tc("从 stashdb/theporndb/javstash 搜索并更新工作室信息", "Search stashdb/theporndb/javstash and update studio info");
+        btn.title = tc("从 StashDB/ThePornDB/JAVStash 搜索并更新工作室信息", "Search StashDB/ThePornDB/JAVStash and update studio info");
         btn.addEventListener("click", function (e) {
           e.preventDefault();
           e.stopPropagation();

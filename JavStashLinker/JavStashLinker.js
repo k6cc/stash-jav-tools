@@ -577,34 +577,54 @@
     var total = toApply.length;
     var APPLY_BATCH = 50;  // submit in batches to avoid blocking main thread
     var batchIdx = 0;
+    var _logFlushTimer = null;
+    var _logPending = 0;  // number of lines not yet flushed to DOM
+
+    function appendLogLine(msg) {
+      _state.log.push(msg);
+      _logPending++;
+      // Batch DOM writes via rAF to avoid layout thrashing
+      if (!_logFlushTimer) {
+        _logFlushTimer = requestAnimationFrame(function () {
+          _logFlushTimer = null;
+          var logBox = document.querySelector(".jsm-log");
+          if (!logBox || _logPending === 0) return;
+          var frag = document.createDocumentFragment();
+          var totalLines = _state.log.length;
+          var startIdx = totalLines - _logPending;
+          for (var i = startIdx; i < totalLines; i++) {
+            frag.appendChild(el("div", null, _state.log[i]));
+          }
+          logBox.appendChild(frag);
+          logBox.scrollTop = logBox.scrollHeight;
+          _logPending = 0;
+        });
+      }
+    }
 
     function processBatch() {
       var end = Math.min(batchIdx + APPLY_BATCH, toApply.length);
       for (var i = batchIdx; i < end; i++) {
-        (function (m, idx) {
-          addLogBatch("[" + (idx + 1) + "/" + total + "] " + m.jsPerf.name + "...");
+        (function (m) {
           applyMatchCached(m.localPerformer, m.jsPerf).then(function () {
             applied++;
-            addLogBatch("  OK");
             // Mark all match keys for this performer as applied
             var keys = keyMap[m.localPerformer.id] || [m.key];
             var a = Object.assign({}, _state.applied);
             for (var k = 0; k < keys.length; k++) a[keys[k]] = true;
             _state.applied = a;
+            appendLogLine("[" + (done + 1) + "/" + total + "] " + m.jsPerf.name + " " + tc("成功", "OK"));
           }).catch(function (e) {
             errors++;
-            addLogBatch("  " + tc("错误", "ERROR") + ": " + (e.message || e));
+            appendLogLine("[" + (done + 1) + "/" + total + "] " + m.jsPerf.name + " " + tc("失败", "FAIL") + ": " + (e.message || e));
           }).then(function () {
             done++;
             updateProgressDOM(done, total, m.jsPerf.name);
-            if (done % 10 === 0) {
-              flushLogTail();
-            }
             if (done >= total) {
               finishApply();
             }
           });
-        })(toApply[i], i);
+        })(toApply[i]);
       }
       batchIdx = end;
       if (batchIdx < toApply.length) {
@@ -612,21 +632,25 @@
       }
     }
 
-    function flushLogTail() {
-      var start = _state.log.length - 10;
-      if (start >= 0) {
-        for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
-      }
-    }
-
     function finishApply() {
-      // Flush all remaining log lines
-      var logBox = document.querySelector(".jsm-log");
-      if (logBox) {
-        var already = logBox.children.length;
-        for (var k = already; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+      // Ensure all pending log lines are flushed
+      if (_logFlushTimer) {
+        cancelAnimationFrame(_logFlushTimer);
+        _logFlushTimer = null;
       }
-      addLog(tc("=== 应用完成: ", "=== Apply complete: ") + applied + tc(" 成功, ", " applied, ") + errors + tc(" 错误", " errors") + " ===");
+      var logBox = document.querySelector(".jsm-log");
+      if (logBox && _logPending > 0) {
+        var totalLines = _state.log.length;
+        var startIdx = totalLines - _logPending;
+        for (var j = startIdx; j < totalLines; j++) {
+          logBox.appendChild(el("div", null, _state.log[j]));
+        }
+        logBox.scrollTop = logBox.scrollHeight;
+        _logPending = 0;
+      }
+      appendLogLine(tc("=== 应用完成: ", "=== Apply complete: ") + applied + tc(" 成功, ", " OK, ") + errors + tc(" 失败", " failed") + " ===");
+      // Final flush
+      if (_logFlushTimer) { cancelAnimationFrame(_logFlushTimer); _logFlushTimer = null; }
       setState({ applying: false, applyDone: true, appliedCount: applied, scanProgress: null });
     }
 

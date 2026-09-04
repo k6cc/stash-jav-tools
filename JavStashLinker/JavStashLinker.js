@@ -520,70 +520,130 @@
   }
 
   function handleApply() {
-    var toApply = [];
+    var rawItems = [];
 
-    // Collect high-confidence matches only (not dismissed) — pass cached localPerformer
+    // Collect high-confidence matches only (not dismissed)
     getAllMatches().forEach(function (m) {
       if (!m.dismissed && m.confidence === "high") {
-        toApply.push({ localPerformer: m.localPerformer, jsPerf: m.javstashPerformer, key: m.key });
+        rawItems.push({ localPerformer: m.localPerformer, jsPerf: m.javstashPerformer, key: m.key });
       }
     });
 
-    // Collect manual matches — find the local performer object
+    // Collect manual matches
     getAllUnmatched().forEach(function (u) {
       var localId = _state.manualSelected[u.key];
       if (localId) {
         var lp = u.unmatchedLocal.find(function (p) { return p.id === localId; });
         if (lp) {
-          toApply.push({ localPerformer: lp, jsPerf: u.javstashPerformer, key: u.key });
+          rawItems.push({ localPerformer: lp, jsPerf: u.javstashPerformer, key: u.key });
         }
       }
     });
 
-    if (toApply.length === 0) {
+    if (rawItems.length === 0) {
       alert(tc("没有可应用的匹配", "No matches to apply"));
       return;
     }
 
-    if (!confirm(tc("确认应用 " + toApply.length + " 个匹配？将更新演员 stash_id 和别名。",
-                    "Apply " + toApply.length + " matches? This will update performer stash_ids and aliases."))) return;
+    // Deduplicate by local performer ID (multiple scenes may match same performer)
+    var seen = {};
+    var toApply = [];
+    var keyMap = {};  // localPerformerId -> array of match keys
+    for (var i = 0; i < rawItems.length; i++) {
+      var item = rawItems[i];
+      var pid = item.localPerformer.id;
+      if (!seen[pid]) {
+        seen[pid] = true;
+        toApply.push(item);
+        keyMap[pid] = [item.key];
+      } else {
+        keyMap[pid].push(item.key);
+      }
+    }
 
-    setState({ applying: true, log: [], applyDone: false, scanProgress: { current: 0, total: toApply.length, title: "" } });
+    if (!confirm(tc("确认应用 " + toApply.length + " 个演员？将更新演员 stash_id 和别名。",
+                    "Apply " + toApply.length + " performers? This will update performer stash_ids and aliases."))) return;
+
+    // Set state WITHOUT triggering full render — just update progress DOM directly
+    _state.applying = true;
+    _state.log = [];
+    _state.applyDone = false;
+    _state.scanProgress = { current: 0, total: toApply.length, title: "" };
+    renderApplyProgress();
 
     var applied = 0;
     var errors = 0;
     var done = 0;
     var total = toApply.length;
+    var APPLY_BATCH = 50;  // submit in batches to avoid blocking main thread
+    var batchIdx = 0;
 
-    // Submit all to local rate limiter (5 concurrent, no spacing)
-    var promises = toApply.map(function (m) {
-      addLogBatch("[" + (done + 1) + "/" + total + "] " + m.jsPerf.name + "...");
-      return applyMatchCached(m.localPerformer, m.jsPerf).then(function () {
-        applied++;
-        addLogBatch("  OK");
-        var a = Object.assign({}, _state.applied);
-        a[m.key] = true;
-        _state.applied = a;
-      }).catch(function (e) {
-        errors++;
-        addLogBatch("  " + tc("错误", "ERROR") + ": " + (e.message || e));
-      }).then(function () {
-        done++;
-        updateProgressDOM(done, total, m.jsPerf.name);
-        if (done % 10 === 0) {
-          var start = _state.log.length - 10;
-          if (start >= 0) {
-            for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
-          }
-        }
-      });
-    });
+    function processBatch() {
+      var end = Math.min(batchIdx + APPLY_BATCH, toApply.length);
+      for (var i = batchIdx; i < end; i++) {
+        (function (m, idx) {
+          addLogBatch("[" + (idx + 1) + "/" + total + "] " + m.jsPerf.name + "...");
+          applyMatchCached(m.localPerformer, m.jsPerf).then(function () {
+            applied++;
+            addLogBatch("  OK");
+            // Mark all match keys for this performer as applied
+            var keys = keyMap[m.localPerformer.id] || [m.key];
+            var a = Object.assign({}, _state.applied);
+            for (var k = 0; k < keys.length; k++) a[keys[k]] = true;
+            _state.applied = a;
+          }).catch(function (e) {
+            errors++;
+            addLogBatch("  " + tc("错误", "ERROR") + ": " + (e.message || e));
+          }).then(function () {
+            done++;
+            updateProgressDOM(done, total, m.jsPerf.name);
+            if (done % 10 === 0) {
+              flushLogTail();
+            }
+            if (done >= total) {
+              finishApply();
+            }
+          });
+        })(toApply[i], i);
+      }
+      batchIdx = end;
+      if (batchIdx < toApply.length) {
+        setTimeout(processBatch, 0);  // yield to main thread
+      }
+    }
 
-    Promise.all(promises).then(function () {
-      _state.log.forEach(function (line) { appendLogDOM(line); });
+    function flushLogTail() {
+      var start = _state.log.length - 10;
+      if (start >= 0) {
+        for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+      }
+    }
+
+    function finishApply() {
+      // Flush all remaining log lines
+      var logBox = document.querySelector(".jsm-log");
+      if (logBox) {
+        var already = logBox.children.length;
+        for (var k = already; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+      }
       addLog(tc("=== 应用完成: ", "=== Apply complete: ") + applied + tc(" 成功, ", " applied, ") + errors + tc(" 错误", " errors") + " ===");
       setState({ applying: false, applyDone: true, appliedCount: applied, scanProgress: null });
-    });
+    }
+
+    processBatch();
+  }
+
+  // Lightweight apply start: replace tab content with log view, NO full render (no card rebuild)
+  function renderApplyProgress() {
+    var content = document.querySelector(".jsm-content");
+    if (content) {
+      content.innerHTML = "";
+      var logEl = el("div", "jsm-log");
+      logEl.style.minHeight = "300px";
+      content.appendChild(logEl);
+    }
+    // Reset progress bar (already exists in DOM from previous render)
+    updateProgressDOM(0, _state.scanProgress.total, "");
   }
 
   // ==================== Derived Data ====================

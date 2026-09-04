@@ -1,0 +1,31 @@
+name: JavStashLinker
+description: Batch match JAVStash performer IDs via scene-based reverse lookup, stash_id matching, and alias matching
+version: 1.0.0
+url: https://discourse.stashapp.cc/
+errLog: info
+
+exec:
+  - python
+  - "{pluginDir}/JavStashLinker.py"
+
+interface: raw
+
+tasks:
+  - name: "Batch Scan"
+    description: "Scan all scenes with JAVStash IDs and output match results to match_results.json"
+    defaultArgs:
+      mode: batch_scan
+  - name: "Apply High-Confidence Matches"
+    description: "Apply auto-matched performers (high confidence only) from last batch scan"
+    defaultArgs:
+      mode: apply_auto
+
+ui:
+  javascript:
+    - JavStashLinker.js
+  css:
+    - JavStashLinker.css
+  csp:
+    connect-src:
+      - "https://javstash.org"
+      - "https://stashdb.org"

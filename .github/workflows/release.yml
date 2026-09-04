@@ -1,6 +1,6 @@
 name: release
 
-# 发布 sceneTranslate / sceneGallerySync / studioTools 插件：
+# 发布 sceneTranslate / sceneGallerySync / studioTools / JavStashLinker 插件：
 #   1. 从 tag 提取插件名和版本号（sceneTranslate-v2.3.0 → sceneTranslate + 2.3.0）
 #   2. 打包对应子目录的 zip
 #   3. 计算 sha256 + 北京时间戳 + 下载 URL
@@ -17,6 +17,7 @@ on:
       - "sceneTranslate-v*.*.*"
       - "sceneGallerySync-v*.*.*"
       - "studioTools-v*.*.*"
+      - "JavStashLinker-v*.*.*"
 
 # 不使用 concurrency 串行：GitHub Actions 同组排队只保留最新一个 pending run，
 # 多 tag 同时推送会把中间的运行直接取消（曾导致 studioTools-v1.1.1 被 cancel）。

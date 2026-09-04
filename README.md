@@ -9,6 +9,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
+| [JavStashLinker](./JavStashLinker/) | 1.0.0 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 |
 
 ## 安装
 
@@ -38,6 +39,7 @@ plugins/
   sceneTranslate/      # 解压 sceneTranslate-vX.Y.Z.zip
   sceneGallerySync/    # 解压 sceneGallerySync-vX.Y.Z.zip
   studioTools/         # 解压 studioTools-vX.Y.Z.zip
+  JavStashLinker/      # 解压 JavStashLinker-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -47,6 +49,7 @@ plugins/
 | sceneTranslate | 需要 | 需要 | 不需要 |
 | sceneGallerySync | 需要 | 需要 | 不需要 |
 | studioTools | 不需要 | 不需要 | Search 模块需要（StashDB/ThePornDB/JAVStash 任一） |
+| JavStashLinker | 需要 | 需要 | JAVStash |
 
 ### Docker 部署
 
@@ -107,6 +110,18 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 
 详细说明见 [studioTools/README.md](./studioTools/README.md)。
 
+### JavStashLinker
+
+1. 确保已在 Stash「设置 → 元数据提供者」中配置 JAVStash 端点和 API Key
+2. 点击导航栏右侧的链接图标，打开匹配面板
+3. 点击「开始扫描」— 自动扫描所有含 JAVStash 场景 ID 的场景，反查演员列表
+4. 在「自动匹配」标签页查看 high 置信度匹配（单演员场景 + 番号确认名称匹配）
+5. 在「待审核」标签页审核 medium 置信度匹配（纯名称/别名匹配）
+6. 在「未匹配」标签页为多演员场景手动选择本地演员
+7. 点击「应用全部」批量应用 high 置信度匹配，或逐条点击「应用」按钮
+
+详细说明见 [JavStashLinker/README.md](./JavStashLinker/README.md)。
+
 ## 插件列表
 
 | 插件 | 类型 | 触发方式 |
@@ -114,6 +129,7 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 | sceneTranslate | Python + UI | 手动任务 + 场景/图片编辑页按钮 |
 | sceneGallerySync | Python + UI | Scene.Update.Post 钩子 + 手动按钮 |
 | studioTools | 纯 UI | 工作室详情页按钮 |
+| JavStashLinker | Python + UI | 导航栏按钮 + 手动任务 |
 
 ## License
 

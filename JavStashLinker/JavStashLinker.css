@@ -94,6 +94,17 @@
   border-color: #228be6 !important;
 }
 
+.jsm-sentinel {
+  text-align: center !important;
+  padding: 12px !important;
+  color: #666 !important;
+  font-size: 12px !important;
+}
+
+.jsm-chunked {
+  width: 100% !important;
+}
+
 .jsm-nav-btn-icon svg {
   display: block !important;
 }

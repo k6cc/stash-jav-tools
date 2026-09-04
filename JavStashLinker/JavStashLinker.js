@@ -106,6 +106,81 @@
       });
   }
 
+  // ==================== Rate Limiter (240/min = 4/s) ====================
+
+  function createRateLimiter(maxConcurrent, minIntervalMs) {
+    var queue = [];
+    var active = 0;
+    var lastDispatch = 0;
+
+    function tryDispatch() {
+      if (queue.length === 0 || active >= maxConcurrent) return;
+      var now = Date.now();
+      var wait = Math.max(0, lastDispatch + minIntervalMs - now);
+      if (wait > 0) {
+        setTimeout(tryDispatch, wait);
+        return;
+      }
+      var task = queue.shift();
+      active++;
+      lastDispatch = Date.now();
+      task.fn().then(function (r) {
+        active--;
+        task.resolve(r);
+        tryDispatch();
+      }).catch(function (e) {
+        active--;
+        task.reject(e);
+        tryDispatch();
+      });
+    }
+
+    return {
+      submit: function (fn) {
+        return new Promise(function (resolve, reject) {
+          queue.push({ fn: fn, resolve: resolve, reject: reject });
+          tryDispatch();
+        });
+      },
+      pending: function () { return queue.length + active; },
+    };
+  }
+
+  var _jsRateLimiter = createRateLimiter(4, 250);   // JAVStash: 4 concurrent, 250ms spacing
+  var _localRateLimiter = createRateLimiter(5, 0);   // Local Stash: 5 concurrent, no spacing
+
+  // ==================== Render Throttle ====================
+
+  var _renderTimer = null;
+
+  function requestRender() {
+    if (_renderTimer) return;
+    _renderTimer = setTimeout(function () {
+      _renderTimer = null;
+      render();
+    }, 200);
+  }
+
+  function updateProgressDOM(current, total, title) {
+    var bar = document.querySelector(".jsm-progress-bar");
+    var titleEl = document.querySelector(".jsm-progress-title");
+    if (bar) {
+      var pct = Math.round((current / total) * 100);
+      bar.style.width = pct + "%";
+      bar.textContent = current + " / " + total;
+    }
+    if (titleEl) titleEl.textContent = title;
+  }
+
+  function appendLogDOM(msg) {
+    var logBox = document.querySelector(".jsm-log");
+    if (logBox) {
+      var line = el("div", null, msg);
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+  }
+
   // ==================== Data Queries ====================
 
   function getScenesWithJavstashId() {
@@ -115,7 +190,7 @@
 
     function fetchPage() {
       return callGQL(
-        "query($filter: FindFilterType!) { findScenes(filter: $filter) { count scenes { id title code performers { id name alias_list stash_ids { endpoint stash_id } } stash_ids { endpoint stash_id } } } }",
+        "query($filter: FindFilterType!) { findScenes(filter: $filter) { count scenes { id title code performers { id name alias_list urls stash_ids { endpoint stash_id } } stash_ids { endpoint stash_id } } } }",
         { filter: { per_page: PAGE_SIZE, page: page, sort: "path" } }
       ).then(function (data) {
         var result = data.findScenes;
@@ -151,13 +226,6 @@
       "query($id: ID!) { findScene(id: $id) { id title code performers { as performer { id name disambiguation aliases urls { url } } } } }",
       { id: sceneId }
     ).then(function (data) { return data.findScene; });
-  }
-
-  function getPerformer(id) {
-    return callGQL(
-      "query($id: ID!) { findPerformer(id: $id) { id name alias_list urls stash_ids { endpoint stash_id } } }",
-      { id: id }
-    ).then(function (data) { return data.findPerformer; });
   }
 
   function updatePerformer(id, stashIds, aliasArray, urls) {
@@ -294,40 +362,39 @@
 
   var _appliedPerformers = {}; // track local performer IDs already applied
 
-  function applyMatch(localPerformerId, jsPerf) {
-    // Skip if already applied this performer in this session
+  // Use cached performer data from scan (stash_ids, alias_list, urls)
+  function applyMatchCached(localPerformer, jsPerf) {
+    var localPerformerId = localPerformer.id;
     if (_appliedPerformers[localPerformerId]) {
       return Promise.resolve();
     }
 
-    return getPerformer(localPerformerId).then(function (perf) {
-      if (!perf) throw new Error("Performer not found: " + localPerformerId);
+    var existingStashIds = localPerformer.stash_ids || [];
+    var newStashIds = existingStashIds.slice();
+    if (!newStashIds.some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; })) {
+      newStashIds.push({ endpoint: JAVSTASH_ENDPOINT, stash_id: jsPerf.id });
+    }
 
-      var existingStashIds = perf.stash_ids || [];
-      var newStashIds = existingStashIds.slice();
-      if (!newStashIds.some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; })) {
-        newStashIds.push({ endpoint: JAVSTASH_ENDPOINT, stash_id: jsPerf.id });
-      }
+    var existingAliases = parseAliasList(localPerformer.alias_list);
+    if (jsPerf.name && existingAliases.indexOf(jsPerf.name) === -1) {
+      existingAliases.push(jsPerf.name);
+    }
+    (jsPerf.aliases || []).forEach(function (a) {
+      if (a && existingAliases.indexOf(a) === -1) existingAliases.push(a);
+    });
 
-      var existingAliases = parseAliasList(perf.alias_list);
-      if (jsPerf.name && existingAliases.indexOf(jsPerf.name) === -1) {
-        existingAliases.push(jsPerf.name);
-      }
-      (jsPerf.aliases || []).forEach(function (a) {
-        if (a && existingAliases.indexOf(a) === -1) existingAliases.push(a);
-      });
+    // Merge URLs (dedup)
+    var existingUrls = localPerformer.urls || [];
+    var newUrls = existingUrls.slice();
+    (jsPerf.urls || []).forEach(function (u) {
+      var urlStr = typeof u === "string" ? u : (u && u.url) || "";
+      if (urlStr && newUrls.indexOf(urlStr) === -1) newUrls.push(urlStr);
+    });
+    var urlsChanged = newUrls.length !== existingUrls.length;
 
-      // Merge URLs (dedup) — jsPerf.urls is [{url: "..."}], local perf.urls is ["..."]
-      var existingUrls = perf.urls || [];
-      var newUrls = existingUrls.slice();
-      (jsPerf.urls || []).forEach(function (u) {
-        var urlStr = typeof u === "string" ? u : (u && u.url) || "";
-        if (urlStr && newUrls.indexOf(urlStr) === -1) newUrls.push(urlStr);
-      });
-      var urlsChanged = newUrls.length !== existingUrls.length;
+    _appliedPerformers[localPerformerId] = true;
 
-      _appliedPerformers[localPerformerId] = true;
-
+    return _localRateLimiter.submit(function () {
       return updatePerformer(localPerformerId, newStashIds, existingAliases, urlsChanged ? newUrls : null);
     });
   }
@@ -353,9 +420,10 @@
     applyDone: false,
   };
 
-  function setState(updates) {
+  function setState(updates, throttle) {
     for (var k in updates) _state[k] = updates[k];
-    render();
+    if (throttle) requestRender();
+    else { if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; } render(); }
   }
 
   // ==================== Scan ====================
@@ -374,17 +442,20 @@
     try {
       var scenes = await getScenesWithJavstashId();
       addLog(tc("找到 " + scenes.length + " 个场景", "Found " + scenes.length + " scenes"));
+      if (scenes.length === 0) {
+        setState({ scanning: false });
+        return;
+      }
+
+      // Initial progress render
+      setState({ scanProgress: { current: 0, total: scenes.length, title: "" } });
 
       var results = [];
-      for (var i = 0; i < scenes.length; i++) {
-        if (_state.abortFlag) {
-          addLog(tc("用户中止扫描", "Scan aborted by user"));
-          break;
-        }
+      var processed = 0;
+      var aborted = false;
 
-        var scene = scenes[i];
-        setState({ scanProgress: { current: i + 1, total: scenes.length, title: scene.title || scene.id } });
-
+      // Submit all scenes to rate limiter (4 concurrent, 250ms spacing)
+      var promises = scenes.map(function (scene, idx) {
         var javstashId = null;
         for (var j = 0; j < (scene.stash_ids || []).length; j++) {
           if (scene.stash_ids[j].endpoint === JAVSTASH_ENDPOINT) {
@@ -392,13 +463,16 @@
             break;
           }
         }
-        if (!javstashId) continue;
+        if (!javstashId) return Promise.resolve(null);
 
-        try {
-          var jsScene = await getJavstashScene(config.javstashEndpoint, config.javstashApiKey, javstashId);
+        return _jsRateLimiter.submit(function () {
+          if (_state.abortFlag || aborted) return Promise.resolve(null);
+          return getJavstashScene(config.javstashEndpoint, config.javstashApiKey, javstashId);
+        }).then(function (jsScene) {
+          if (_state.abortFlag) { aborted = true; return null; }
           if (!jsScene) {
-            addLog("[" + (i + 1) + "/" + scenes.length + "] " + tc("未找到", "Not found") + ": " + (scene.title || scene.id));
-            continue;
+            addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("未找到", "Not found") + ": " + (scene.title || scene.id));
+            return null;
           }
           var result = matchScene(scene, jsScene);
           results.push(result);
@@ -406,15 +480,36 @@
           var med = result.matches.filter(function (m) { return m.confidence === "medium"; }).length;
           var unc = result.unmatchedJavstash.length;
           if (high + med + unc > 0) {
-            addLog("[" + (i + 1) + "/" + scenes.length + "] " + (scene.title || scene.id) +
+            addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + (scene.title || scene.id) +
               " — " + tc("高", "High") + ":" + high + " " + tc("中", "Med") + ":" + med + " " + tc("未匹配", "Unmatched") + ":" + unc);
           }
-        } catch (e) {
-          addLog("[" + (i + 1) + "/" + scenes.length + "] " + tc("错误", "Error") + ": " + e.message);
-        }
+          return result;
+        }).catch(function (e) {
+          addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("错误", "Error") + ": " + e.message);
+          return null;
+        }).then(function (r) {
+          processed++;
+          // Throttled DOM update (no full render)
+          updateProgressDOM(processed, scenes.length, scene.title || scene.id);
+          if (processed % 10 === 0) {
+            // Flush batched logs to DOM every 10 scenes
+            var start = _state.log.length - 10;
+            if (start >= 0) {
+              for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+            }
+          }
+          return r;
+        });
+      });
 
-        await new Promise(function (r) { setTimeout(r, 100); });
+      await Promise.all(promises);
+
+      if (aborted || _state.abortFlag) {
+        addLog(tc("用户中止扫描", "Scan aborted by user"));
       }
+
+      // Flush remaining logs
+      _state.log.forEach(function (line) { appendLogDOM(line); });
 
       setState({ scanProgress: null, results: results, scanning: false });
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
@@ -427,18 +522,21 @@
   function handleApply() {
     var toApply = [];
 
-    // Collect high-confidence matches only (not dismissed)
+    // Collect high-confidence matches only (not dismissed) — pass cached localPerformer
     getAllMatches().forEach(function (m) {
       if (!m.dismissed && m.confidence === "high") {
-        toApply.push({ localPerformerId: m.localPerformer.id, jsPerf: m.javstashPerformer, key: m.key });
+        toApply.push({ localPerformer: m.localPerformer, jsPerf: m.javstashPerformer, key: m.key });
       }
     });
 
-    // Collect manual matches
+    // Collect manual matches — find the local performer object
     getAllUnmatched().forEach(function (u) {
       var localId = _state.manualSelected[u.key];
       if (localId) {
-        toApply.push({ localPerformerId: localId, jsPerf: u.javstashPerformer, key: u.key });
+        var lp = u.unmatchedLocal.find(function (p) { return p.id === localId; });
+        if (lp) {
+          toApply.push({ localPerformer: lp, jsPerf: u.javstashPerformer, key: u.key });
+        }
       }
     });
 
@@ -450,38 +548,42 @@
     if (!confirm(tc("确认应用 " + toApply.length + " 个匹配？将更新演员 stash_id 和别名。",
                     "Apply " + toApply.length + " matches? This will update performer stash_ids and aliases."))) return;
 
-    setState({ applying: true, log: [], applyDone: false });
+    setState({ applying: true, log: [], applyDone: false, scanProgress: { current: 0, total: toApply.length, title: "" } });
 
-    var i = 0;
     var applied = 0;
     var errors = 0;
+    var done = 0;
+    var total = toApply.length;
 
-    function applyNext() {
-      if (i >= toApply.length) {
-        addLog(tc("=== 应用完成: ", "=== Apply complete: ") + applied + tc(" 成功, ", " applied, ") + errors + tc(" 错误", " errors") + " ===");
-        setState({ applying: false, applyDone: true, appliedCount: applied });
-        return;
-      }
-
-      var m = toApply[i];
-      addLog("[" + (i + 1) + "/" + toApply.length + "] " + m.jsPerf.name + "...");
-
-      applyMatch(m.localPerformerId, m.jsPerf).then(function () {
+    // Submit all to local rate limiter (5 concurrent, no spacing)
+    var promises = toApply.map(function (m) {
+      addLogBatch("[" + (done + 1) + "/" + total + "] " + m.jsPerf.name + "...");
+      return applyMatchCached(m.localPerformer, m.jsPerf).then(function () {
         applied++;
-        addLog("  OK");
+        addLogBatch("  OK");
         var a = Object.assign({}, _state.applied);
         a[m.key] = true;
-        setState({ applied: a });
+        _state.applied = a;
       }).catch(function (e) {
         errors++;
-        addLog("  " + tc("错误", "ERROR") + ": " + (e.message || e));
+        addLogBatch("  " + tc("错误", "ERROR") + ": " + (e.message || e));
       }).then(function () {
-        i++;
-        setTimeout(applyNext, 50);
+        done++;
+        updateProgressDOM(done, total, m.jsPerf.name);
+        if (done % 10 === 0) {
+          var start = _state.log.length - 10;
+          if (start >= 0) {
+            for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+          }
+        }
       });
-    }
+    });
 
-    applyNext();
+    Promise.all(promises).then(function () {
+      _state.log.forEach(function (line) { appendLogDOM(line); });
+      addLog(tc("=== 应用完成: ", "=== Apply complete: ") + applied + tc(" 成功, ", " applied, ") + errors + tc(" 错误", " errors") + " ===");
+      setState({ applying: false, applyDone: true, appliedCount: applied, scanProgress: null });
+    });
   }
 
   // ==================== Derived Data ====================
@@ -526,7 +628,48 @@
 
   function addLog(msg) {
     _state.log.push(msg);
-    render();
+    appendLogDOM(msg);
+    if (!_state.scanning && !_state.applying) requestRender();
+  }
+
+  function addLogBatch(msg) {
+    _state.log.push(msg);
+  }
+
+  // ==================== Chunked List (virtual scroll) ====================
+
+  var CHUNK_SIZE = 50;
+
+  function buildChunkedList(items, buildCardFn) {
+    var container = el("div", "jsm-chunked");
+    var sentinel = el("div", "jsm-sentinel", tc("加载中...", "Loading..."));
+    var rendered = 0;
+
+    container.appendChild(sentinel);
+
+    function renderChunk() {
+      var end = Math.min(rendered + CHUNK_SIZE, items.length);
+      for (var i = rendered; i < end; i++) {
+        container.insertBefore(buildCardFn(items[i]), sentinel);
+      }
+      rendered = end;
+      if (rendered >= items.length) {
+        sentinel.remove();
+      }
+    }
+
+    renderChunk();
+
+    if (rendered < items.length) {
+      var observer = new IntersectionObserver(function (entries) {
+        if (entries[0].isIntersecting && rendered < items.length) {
+          renderChunk();
+        }
+      }, { rootMargin: "300px" });
+      observer.observe(sentinel);
+    }
+
+    return container;
   }
 
   // ==================== Render ====================
@@ -651,25 +794,25 @@
       });
       frag.appendChild(tabContainer);
 
-      // Tab content
+      // Tab content (chunked rendering for large lists)
       var content = el("div", "jsm-content");
       if (_state.activeTab === "auto") {
         if (autoMatches.length === 0) {
           content.appendChild(el("div", "jsm-empty", tc("没有自动匹配", "No auto matches")));
         } else {
-          autoMatches.forEach(function (m) { content.appendChild(buildMatchCard(m)); });
+          content.appendChild(buildChunkedList(autoMatches, buildMatchCard));
         }
       } else if (_state.activeTab === "review") {
         if (reviewMatches.length === 0) {
           content.appendChild(el("div", "jsm-empty", tc("没有待审核匹配", "No review matches")));
         } else {
-          reviewMatches.forEach(function (m) { content.appendChild(buildMatchCard(m)); });
+          content.appendChild(buildChunkedList(reviewMatches, buildMatchCard));
         }
       } else if (_state.activeTab === "unmatched") {
         if (unmatched.length === 0) {
           content.appendChild(el("div", "jsm-empty", tc("没有未匹配演员", "No unmatched performers")));
         } else {
-          unmatched.forEach(function (u) { content.appendChild(buildUnmatchedCard(u)); });
+          content.appendChild(buildChunkedList(unmatched, buildUnmatchedCard));
         }
       } else if (_state.activeTab === "log") {
         if (_state.log.length === 0) {
@@ -754,7 +897,7 @@
     } else {
       rightSide.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-success", tc("应用", "Apply"), {
         onclick: function () {
-          applySingle(m.key, m.localPerformer.id, m.javstashPerformer);
+          applySingle(m.key, m.localPerformer, m.javstashPerformer);
         },
       }));
     }
@@ -773,9 +916,9 @@
     return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : "") + (isDismissed ? " jsm-card-dismissed" : ""), [info, badge, methodBadge, rightSide]);
   }
 
-  function applySingle(key, localPerformerId, jsPerf) {
+  function applySingle(key, localPerformer, jsPerf) {
     addLog(tc("应用: ", "Applying: ") + jsPerf.name + "...");
-    applyMatch(localPerformerId, jsPerf).then(function () {
+    applyMatchCached(localPerformer, jsPerf).then(function () {
       addLog("  OK");
       var a = Object.assign({}, _state.applied);
       a[key] = true;
@@ -829,9 +972,10 @@
       right.appendChild(select);
 
       if (selected) {
+        var selectedPerf = u.unmatchedLocal.find(function (p) { return p.id === selected; });
         right.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-success", tc("应用", "Apply"), {
           onclick: function () {
-            applySingle(u.key, selected, jsPerf);
+            if (selectedPerf) applySingle(u.key, selectedPerf, jsPerf);
           },
         }));
       }

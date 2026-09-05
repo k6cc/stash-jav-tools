@@ -10,6 +10,8 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
 | [JavStashLinker](./JavStashLinker/) | 1.1.2 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 |
+| [performerMerge](./performerMerge/) | 1.0.0 | 纯 UI | 重名演员检测与合并：名字+别名归一化分组，选择目标后一键合并（无需 Python） |
+| [tagMerge](./tagMerge/) | 1.0.0 | Python 任务 | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，源名保留为别名 |
 
 ## 安装
 
@@ -40,6 +42,8 @@ plugins/
   sceneGallerySync/    # 解压 sceneGallerySync-vX.Y.Z.zip
   studioTools/         # 解压 studioTools-vX.Y.Z.zip
   JavStashLinker/      # 解压 JavStashLinker-vX.Y.Z.zip
+  performerMerge/      # 解压 performerMerge-vX.Y.Z.zip
+  tagMerge/            # 解压 tagMerge-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -50,10 +54,12 @@ plugins/
 | sceneGallerySync | 需要 | 需要 | 不需要 |
 | studioTools | 不需要 | 不需要 | Search 模块需要（StashDB/ThePornDB/JAVStash 任一） |
 | JavStashLinker | 需要 | 需要 | JAVStash |
+| performerMerge | 不需要 | 不需要 | 不需要（需 Stash v0.31.0+） |
+| tagMerge | 需要 | 需要 | 不需要 |
 
 ### Docker 部署
 
-Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools 是纯 UI 插件，Docker 和裸机均可直接使用。
+Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools 和 performerMerge 是纯 UI 插件，Docker 和裸机均可直接使用。
 
 ### Windows / macOS 裸机部署（仅 Python 插件）
 
@@ -122,6 +128,25 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 
 详细说明见 [JavStashLinker/README.md](./JavStashLinker/README.md)。
 
+### performerMerge
+
+1. 点击导航栏右侧的紫色合并图标，打开面板
+2. 点击「开始扫描」— 遍历所有演员的名字+别名，归一化分组找出重名演员
+3. 每组通过单选框选择目标演员（默认预选场景数最多的），行内徽章显示场景/别名/stash_id 等信息辅助判断
+4. 点击组内「合并」或顶部「合并全部」— 名字/图片保留目标的，源演员名字+别名原样并入目标别名（仅精确去重），其余字段按官方规则合并，场景/标签转移到目标，源演员删除
+5. 需要 Stash v0.31.0+（低版本面板会显示警告）
+
+详细说明见 [performerMerge/README.md](./performerMerge/README.md)。
+
+### tagMerge
+
+1. 在插件目录编辑 `tag_merge_map.json`，按需增删合并规则（键=目标中文 tag，值=源名列表）
+2. 打开「设置 → 任务 → 插件任务」，运行 **Tag Merge → Merge Similar Tags**
+3. 相似名称的 tags（如 `3p`、`3P·4P` → `3P/4P`）合并为规范中文 tag，源名保留为别名可继续搜索
+4. 已合并/不存在的源自动跳过，任务可安全重复执行
+
+详细说明见 [tagMerge/README.md](./tagMerge/README.md)。
+
 ## 插件列表
 
 | 插件 | 类型 | 触发方式 |
@@ -130,6 +155,8 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 | sceneGallerySync | Python + UI | Scene.Update.Post 钩子 + 手动按钮 |
 | studioTools | 纯 UI | 工作室详情页按钮 |
 | JavStashLinker | Python + UI | 导航栏按钮 + 手动任务 |
+| performerMerge | 纯 UI | 导航栏按钮 |
+| tagMerge | Python 任务 | 手动任务 |
 
 ## License
 

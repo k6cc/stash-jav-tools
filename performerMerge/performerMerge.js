@@ -15,6 +15,8 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
+  var PLUGIN_VERSION = "1.1.0";
+  console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
 
@@ -75,10 +77,14 @@
     mergeProgress: null,  // {current,total}
     performerCount: 0,
     groups: null,
+    shortNames: null,     // 共享短名键列表（短名清理页）
+    performers: null,     // 扫描得到的完整演员列表（清理时按 id 取用）
     targets: {},          // groupKey -> 目标演员 id
     merged: {},           // groupKey -> true
     failed: {},           // groupKey -> true
     merging: false,
+    cleaning: false,
+    cleanProgress: null,  // {current,total}
     activeTab: "groups",
     log: [],
   };
@@ -153,7 +159,74 @@
     return out;
   }
 
-  // 并查集：共享任一名称键或 stash_id 的演员连成一组（传递闭合）
+  // 单词短名判定：仅由半角/全角罗马字、数字、假名（含半角片假名与长音符「ー」）构成，
+  // 无空格、无汉字、无任何符号（「・」「-」等都会排除）。
+  // 例：Ai / あい / Ayaka / ゆずき / SAORI；非短名：Iroha Suzumura（含空格）、兒玉七海（含汉字）
+  var SHORT_NAME_RE = /^[0-9A-Za-z\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A\u3041-\u309F\u30A1-\u30FA\u30FC\uFF66-\uFF9F]+$/;
+
+  function isShortName(raw) {
+    return SHORT_NAME_RE.test(String(raw || "").trim());
+  }
+
+  // 共享短名：归一化键被 ≥2 个演员持有（名字+别名都计数，与分组 fanout 口径一致），
+  // 且别名原始串为单词短名 → 这些别名条目是清理候选。主名永不删除；
+  // 全部持有者都经主名贡献的键不会出现在结果中（无别名可删）。
+  function findSharedShortNames(performers) {
+    var fanout = {};
+    performers.forEach(function (p) {
+      var seen = {};
+      perfKeys(p).forEach(function (k) {
+        if (seen[k.norm]) return;
+        seen[k.norm] = true;
+        fanout[k.norm] = (fanout[k.norm] || 0) + 1;
+      });
+    });
+    var byNorm = {};
+    performers.forEach(function (p) {
+      parseAliasList(p.alias_list).forEach(function (a) {
+        var norm = normalizeName(a);
+        if (!norm || (fanout[norm] || 0) < 2 || !isShortName(a)) return;
+        if (!byNorm[norm]) byNorm[norm] = { raws: {}, holders: {} };
+        byNorm[norm].raws[a] = true;
+        var h = byNorm[norm].holders[p.id];
+        if (!h) h = byNorm[norm].holders[p.id] = { id: p.id, name: p.name, raws: [] };
+        if (h.raws.indexOf(a) === -1) h.raws.push(a);
+      });
+    });
+    var out = [];
+    for (var norm in byNorm) {
+      var holders = [];
+      for (var hid in byNorm[norm].holders) holders.push(byNorm[norm].holders[hid]);
+      if (!holders.length) continue;
+      holders.sort(function (a, b) { return Number(a.id) - Number(b.id); });
+      var raws = [];
+      for (var r in byNorm[norm].raws) raws.push(r);
+      raws.sort();
+      out.push({ norm: norm, raws: raws, holders: holders });
+    }
+    out.sort(function (a, b) { return b.holders.length - a.holders.length; });
+    return out;
+  }
+
+  // 同 endpoint stash_id 冲突：两人在同一 endpoint 都有 id 且不同。
+  // 策展库（stashdb 等）一人一条目，同 endpoint 不同 id = 不同的人，
+  // 用于阻断「碰巧共享罕见别名」的假阳性名字匹配。
+  function idConflict(a, b) {
+    var am = {};
+    (a.stash_ids || []).forEach(function (s) {
+      if (s.endpoint && s.stash_id) am[s.endpoint] = s.stash_id;
+    });
+    var conflict = false;
+    (b.stash_ids || []).forEach(function (s) {
+      if (s.endpoint && s.stash_id && am[s.endpoint] && am[s.endpoint] !== s.stash_id) conflict = true;
+    });
+    return conflict;
+  }
+
+  // 并查集分组，信号分两级：
+  // 1. stash_id：同 endpoint + 同 stash_id = 同一外部实体（硬证据，无条件连组）
+  // 2. 名字键（name + alias）：仅当全局恰好 2 人共享（fanout≤2，排除「Ai」「AYAKA」类
+  //    常见短名被几十人共享导致的超大组），且两人无同 endpoint stash_id 冲突时连组
   function buildGroups(performers) {
     var n = performers.length;
     var parent = [];
@@ -167,14 +240,24 @@
       if (ra !== rb) parent[rb] = ra;
     }
 
-    var keyOwners = {}; // 键（名称 norm 或 "sid:endpoint|stash_id"）-> [演员索引]
+    // 全局 fanout 统计：每个名字键被多少个不同演员持有
+    var nameFanout = {};
+    performers.forEach(function (p) {
+      var seen = {};
+      perfKeys(p).forEach(function (k) {
+        if (seen[k.norm]) return;
+        seen[k.norm] = true;
+        nameFanout[k.norm] = (nameFanout[k.norm] || 0) + 1;
+      });
+    });
+
+    var keyOwners = {}; // 键（保留的名字键或 "sid:endpoint|stash_id"）-> [演员索引]
     performers.forEach(function (p, i) {
       perfKeys(p).forEach(function (k) {
+        if ((nameFanout[k.norm] || 0) > 2) return; // 常见名抑制
         if (!keyOwners[k.norm]) keyOwners[k.norm] = [];
         keyOwners[k.norm].push(i);
       });
-      // stash_id 信号：同 endpoint + 同 stash_id = 同一外部实体，
-      // 比名字更硬的证据（可命中名字完全不同的同人，如罗马音 vs 日文名）
       (p.stash_ids || []).forEach(function (sid) {
         if (!sid.endpoint || !sid.stash_id) return;
         var k = "sid:" + sid.endpoint + "|" + sid.stash_id;
@@ -182,9 +265,18 @@
         keyOwners[k].push(i);
       });
     });
+
+    // 连边；名字键（fanout≤2 → 至多 2 人）需通过冲突检测才生效
+    var nameEdges = {}; // norm -> true（实际生效的名字连接，用于组内展示）
     for (var norm in keyOwners) {
       var owners = keyOwners[norm];
-      for (var j = 1; j < owners.length; j++) union(owners[0], owners[j]);
+      if (norm.indexOf("sid:") === 0) {
+        for (var j = 1; j < owners.length; j++) union(owners[0], owners[j]);
+      } else if (owners.length === 2
+        && !idConflict(performers[owners[0]], performers[owners[1]])) {
+        union(owners[0], owners[1]);
+        nameEdges[norm] = true;
+      }
     }
 
     var rootMembers = {};
@@ -201,30 +293,27 @@
       var members = idxs.map(function (i) { return performers[i]; });
       members.sort(function (a, b) { return Number(a.id) - Number(b.id); });
 
-      // 组内共享名称（被 ≥2 个成员使用的键），显示名优先取真实演员名
-      var keyCount = {};
+      // 组内生效的共享名字键（显示名优先取真实演员名）
       var keyDisplay = {};
-      var sidCount = {};
+      var shared = [];
+      var sharedNorms = {};
       members.forEach(function (p) {
         perfKeys(p).forEach(function (k) {
-          keyCount[k.norm] = (keyCount[k.norm] || 0) + 1;
+          if (!nameEdges[k.norm]) return;
           if (!keyDisplay[k.norm] || (k.isName && !keyDisplay[k.norm].isName)) keyDisplay[k.norm] = k;
+          sharedNorms[k.norm] = true;
         });
+      });
+      for (var nk in sharedNorms) shared.push(keyDisplay[nk].display);
+      // 组内共享 stash_id（被 ≥2 个成员使用）
+      var sidCount = {};
+      members.forEach(function (p) {
         (p.stash_ids || []).forEach(function (sid) {
           if (!sid.endpoint || !sid.stash_id) return;
           var k = sid.endpoint + "|" + sid.stash_id;
           sidCount[k] = (sidCount[k] || 0) + 1;
         });
       });
-      var shared = [];
-      var sharedNorms = {};
-      for (var nk in keyCount) {
-        if (keyCount[nk] >= 2) {
-          shared.push(keyDisplay[nk].display);
-          sharedNorms[nk] = true;
-        }
-      }
-      // 组内共享 stash_id（被 ≥2 个成员使用）
       var sharedStashIds = [];
       var sharedSidKeys = {};
       for (var sk in sidCount) {
@@ -267,14 +356,77 @@
     return best;
   }
 
+  // ==================== 调试：大组诊断 ====================
+
+  // 大组（成员数 ≥ DEBUG_BIG_GROUP）扫描后输出诊断：
+  // 日志页 — 连接键 Top10 + 最大连接键的拥有者样本（区分经名字/别名贡献）；
+  // 浏览器控制台 — 完整 JSON（前缀 [pdm-debug]，F12 查看）。
+  // 用于诊断超大组成因（大量同名不同人的短名 / 公共别名桥接）。
+  var DEBUG_BIG_GROUP = 8;
+
+  function debugBigGroups(groups) {
+    groups.forEach(function (g) {
+      if (g.members.length < DEBUG_BIG_GROUP) return;
+
+      // 每个共享键的拥有者（via 标记该演员经名字还是别名贡献此键）
+      var hubs = {}; // norm -> { key, owners: [{ id, name, via, endpoints }] }
+      g.members.forEach(function (p) {
+        var seenK = {};
+        perfKeys(p).forEach(function (k) {
+          if (!g.sharedNorms || !g.sharedNorms[k.norm] || seenK[k.norm]) return;
+          seenK[k.norm] = true;
+          if (!hubs[k.norm]) hubs[k.norm] = { key: k.display, owners: [] };
+          hubs[k.norm].owners.push({
+            id: p.id,
+            name: p.name,
+            via: k.isName ? "name" : "alias",
+            endpoints: (p.stash_ids || []).map(function (s) { return endpointShort(s.endpoint) + ":" + s.stash_id; }),
+          });
+        });
+      });
+      var hubArr = [];
+      for (var n in hubs) hubArr.push(hubs[n]);
+      hubArr.sort(function (a, b) { return b.owners.length - a.owners.length; });
+
+      addLog(tc("调试", "Debug") + ": " + groupLabel(g) + " — " + g.members.length
+        + tc(" 个成员, ", " members, ") + hubArr.length + tc(" 个连接键", " hub keys"));
+
+      var top = hubArr.slice(0, 10).map(function (h) {
+        return "「" + h.key + "」×" + h.owners.length;
+      });
+      if (hubArr.length > 10) top.push("+" + (hubArr.length - 10));
+      addLog(tc("调试", "Debug") + ": " + tc("连接键 Top: ", "Hub keys: ") + top.join(" | "));
+
+      hubArr.slice(0, 5).forEach(function (h) {
+        var sample = h.owners.slice(0, 8).map(function (o) {
+          return o.id + " " + o.name + (o.via === "name" ? "(" + tc("名", "N") + ")" : "(" + tc("别名", "A") + ")");
+        });
+        addLog(tc("调试", "Debug") + ": " + tc("键", "Key") + "「" + h.key + "」" + tc(" 拥有者(前8): ", " owners(8): ")
+          + sample.join(" | "));
+      });
+
+      addLog(tc("调试", "Debug") + ": " + tc("完整成员与连接键数据已输出到浏览器控制台（F12，前缀 [pdm-debug]）",
+        "Full dump in browser console (F12, prefix [pdm-debug])"));
+
+      console.log("[pdm-debug] group " + g.key, {
+        label: groupLabel(g),
+        memberCount: g.members.length,
+        members: g.members.map(function (p) {
+          return { id: p.id, name: p.name, alias_list: p.alias_list, stash_ids: p.stash_ids };
+        }),
+        hubs: hubArr.map(function (h) { return { key: h.key, owners: h.owners }; }),
+      });
+    });
+  }
+
   // ==================== 扫描 ====================
 
   var PERF_FIELDS = "id name disambiguation alias_list urls gender birthdate death_date ethnicity country eye_color height_cm weight measurements fake_tits penis_length circumcised career_start career_end tattoos piercings details hair_color favorite rating100 tags { id } stash_ids { endpoint stash_id } custom_fields scene_count image_count gallery_count created_at";
 
-  async function handleScan() {
+  async function handleScan(keepLog) {
     setState({
-      scanning: true, abortFlag: false, groups: null, performerCount: 0,
-      log: [], merged: {}, failed: {}, targets: {}, scanProgress: { current: 0, total: 0, title: "" },
+      scanning: true, abortFlag: false, groups: null, shortNames: null, performerCount: 0,
+      log: keepLog ? _state.log : [], merged: {}, failed: {}, targets: {}, scanProgress: { current: 0, total: 0, title: "" },
     });
     addLog(tc("正在获取演员列表...", "Fetching performers..."));
 
@@ -291,10 +443,25 @@
       groups.forEach(function (g) {
         _state.targets[g.key] = String(pickDefaultTarget(g.members).id);
       });
+      var shortNames = findSharedShortNames(performers);
 
       addLog(tc("发现 " + groups.length + " 组重名演员", "Found " + groups.length + " duplicate groups"));
+      if (shortNames.length) {
+        var snDel = 0, snPerf = {};
+        shortNames.forEach(function (sn) {
+          sn.holders.forEach(function (h) { snPerf[h.id] = true; snDel += h.raws.length; });
+        });
+        addLog(tc("发现 " + shortNames.length + " 个共享短名键（" + Object.keys(snPerf).length
+          + " 个演员、" + snDel + " 条别名），详见「短名清理」页",
+          shortNames.length + " shared short-name keys (" + Object.keys(snPerf).length
+          + " performers, " + snDel + " aliases), see the Short Names tab"));
+      }
+      debugBigGroups(groups);
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
-      setState({ groups: groups, scanning: false, scanProgress: null });
+      setState({
+        groups: groups, shortNames: shortNames, performers: performers,
+        scanning: false, scanProgress: null, performerCount: performers.length,
+      });
     } catch (e) {
       addLog(tc("扫描错误", "Scan error") + ": " + e.message);
       setState({ scanning: false, scanProgress: null });
@@ -551,9 +718,109 @@
     render();
   }
 
+  // ==================== 短名清理 ====================
+
+  var M_UPDATE = "mutation($input: PerformerUpdateInput!) { performerUpdate(input: $input) { id } }";
+
+  function perfById(id) {
+    var list = _state.performers || [];
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].id) === String(id)) return list[i];
+    }
+    return null;
+  }
+
+  // 逐个演员提交过滤后的 alias_list（整表替换）：
+  // 仅移除共享短名条目，其余别名保持原顺序原样保留；主名不在 alias_list 中，永不受影响。
+  // 个别演员提交失败（如剩余别名中存在历史遗留的仅大小写重复，后端校验拒绝）只记日志跳过，不中断批量。
+  // snList：要清理的短名键列表 —「清理全部」传全部，单卡「清理」只传该键。
+  // 完成后不自动重扫（内存数据已就地更新，卡片直接收缩变灰）；分组页数据是清理前快照，需手动重扫。
+  async function handleCleanShortNames(snList) {
+    var shortNames = ((snList && snList.length) ? snList : (_state.shortNames || []))
+      .filter(function (sn) { return !sn.cleaned; });
+    if (!shortNames.length || _state.cleaning || _state.merging || _state.scanning) return;
+
+    var byPerf = {}; // id -> { norms: {归一化键:true} }
+    var totalDel = 0;
+    shortNames.forEach(function (sn) {
+      sn.holders.forEach(function (h) {
+        if (!byPerf[h.id]) byPerf[h.id] = { norms: {} };
+        byPerf[h.id].norms[sn.norm] = true;
+        totalDel += h.raws.length;
+      });
+    });
+    var ids = Object.keys(byPerf);
+    if (!ids.length) return;
+
+    var pendingTotal = (_state.shortNames || []).filter(function (sn) { return !sn.cleaned; }).length;
+    var allKeys = shortNames.length === pendingTotal;
+    if (!confirm(allKeys
+      ? tc(
+          "删除 " + totalDel + " 条被 ≥2 人共享的单词短名别名（涉及 " + ids.length + " 个演员）？\n\n仅删除别名条目，主名与其余别名不受影响。完成后卡片收缩变灰，不自动重新扫描。",
+          "Delete " + totalDel + " single-word short-name aliases shared by 2+ performers (" + ids.length + " performers)?\n\nOnly alias entries are removed; names and other aliases are untouched. Cards collapse afterwards; no automatic rescan.")
+      : tc(
+          "删除短名「" + shortNames[0].raws.join(" / ") + "」的 " + totalDel + " 条别名（涉及 " + ids.length + " 个演员）？\n\n仅删除别名条目，主名与其余别名不受影响。完成后卡片收缩变灰，不自动重新扫描。",
+          "Delete " + totalDel + " aliases of the short name \"" + shortNames[0].raws.join(" / ") + "\" (" + ids.length + " performers)?\n\nOnly alias entries are removed; names and other aliases are untouched. Cards collapse afterwards; no automatic rescan."))) return;
+
+    _state.cleaning = true;
+    _state.cleanProgress = { current: 0, total: ids.length };
+    render();
+
+    var ok = 0, fail = 0;
+    for (var i = 0; i < ids.length; i++) {
+      var p = perfById(ids[i]);
+      var orig = p ? parseAliasList(p.alias_list) : [];
+      var removeNorms = byPerf[ids[i]].norms;
+      // 双重判定删除：归一化键命中共享短名清单 且 原始串本身是单词短名。
+      // 第二个条件保证含空格/汉字/符号的变体（如 "A I"，归一化后同为 "ai"）永不误删。
+      var kept = orig.filter(function (a) {
+        return !(isShortName(a) && removeNorms[normalizeName(a)]);
+      });
+      if (!p || kept.length === orig.length) continue;
+      updateProgressDOM(i, ids.length, p.name);
+      try {
+        await callGQL(M_UPDATE, { input: { id: p.id, alias_list: kept } });
+        p.alias_list = kept; // 就地更新内存数据，卡片上的其他别名立即反映清理结果
+        ok++;
+      } catch (e) {
+        fail++;
+        addLog("[" + (i + 1) + "/" + ids.length + "] " + p.name + " " + tc("清理失败", "clean failed") + ": " + mergeErrMsg(e));
+      }
+    }
+
+    // 全部持有者已无该短名 → 标记 cleaned（卡片收缩变灰保留）；任一持有者仍持有（失败/跳过）则保留可重试
+    var cleanedNorms = {};
+    shortNames.forEach(function (sn) { cleanedNorms[sn.norm] = true; });
+    (_state.shortNames || []).forEach(function (sn) {
+      if (!cleanedNorms[sn.norm]) return;
+      var stillHeld = sn.holders.some(function (h) {
+        var p = perfById(h.id);
+        return !p || parseAliasList(p.alias_list).some(function (a) {
+          return isShortName(a) && normalizeName(a) === sn.norm;
+        });
+      });
+      if (!stillHeld) sn.cleaned = true;
+    });
+
+    var namesLabel = shortNames.length === 1
+      ? shortNames[0].raws.join(" / ")
+      : shortNames.slice(0, 5).map(function (sn) { return sn.raws[0]; }).join(", ")
+        + tc(" 等 " + shortNames.length + " 键", " + " + (shortNames.length - 5) + " more");
+    updateProgressDOM(ids.length, ids.length, "");
+    addLog(tc("=== 短名清理完成（", "=== Short-name cleanup (") + namesLabel + "): "
+      + ok + tc(" 成功, ", " OK, ") + fail + tc(" 失败", " failed") + " ===");
+    if (fail === 0 && shortNames.length === pendingTotal) {
+      addLog(tc("提示：重名分组为清理前快照，纯短名分组需重新扫描后消失", "Note: duplicate groups are a pre-clean snapshot; rescan to refresh"));
+    }
+    _state.cleaning = false;
+    _state.cleanProgress = null;
+    render();
+  }
+
   // ==================== Render ====================
 
   function render() {
+    hideTip();
     var root = document.getElementById("pdm-panel-root");
     if (!root) return;
     var scrollContainer = document.getElementById("pdm-panel-container");
@@ -590,8 +857,17 @@
     return node;
   }
 
+  // 已知 Stash-box 端点的品牌名（host 小写匹配）；未知端点回退 host
+  var ENDPOINT_NAMES = {
+    "theporndb.net": "ThePornDB",
+    "stashdb.org": "StashDB",
+    "javstash.org": "JAVStash",
+  };
+
   function endpointShort(endpoint) {
-    return String(endpoint || "").replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+    var host = String(endpoint || "").replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+    var branded = ENDPOINT_NAMES[host.toLowerCase()];
+    return branded || host;
   }
 
   function buildStat(num, label, color) {
@@ -612,11 +888,14 @@
     closeBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
     frag.appendChild(el("div", "pdm-header", [
-      el("h2", "pdm-title", tc("演员合并", "Performer Merge")),
+      el("h2", "pdm-title", [
+        tc("演员合并", "Performer Merge"),
+        el("span", "pdm-version", "v" + PLUGIN_VERSION),
+      ]),
       el("div", "pdm-header-actions", [
         el("button", "pdm-btn pdm-btn-primary", tc("合并全部", "Merge All"), {
           onclick: handleMergeAll,
-          disabled: _state.merging || _state.scanning || pendingGroups().length === 0,
+          disabled: _state.merging || _state.scanning || _state.cleaning || pendingGroups().length === 0,
         }),
         closeBtn,
       ]),
@@ -639,12 +918,15 @@
           ? el("button", "pdm-btn pdm-btn-danger", tc("中止", "Abort"), {
               onclick: function () { _state.abortFlag = true; },
             })
-          : el("button", "pdm-btn pdm-btn-primary", tc("开始扫描", "Start Scan"), { onclick: handleScan }),
+          : el("button", "pdm-btn pdm-btn-primary", tc("开始扫描", "Start Scan"), {
+              onclick: function () { handleScan(); },
+              disabled: _state.cleaning || _state.merging,
+            }),
       ]),
     ]));
 
     // 进度
-    var prog = _state.mergeProgress || _state.scanProgress;
+    var prog = _state.mergeProgress || _state.cleanProgress || _state.scanProgress;
     if (prog) {
       var pct = prog.total ? Math.round((prog.current / prog.total) * 100) : 0;
       frag.appendChild(el("div", "pdm-progress", [
@@ -668,8 +950,13 @@
         buildStat(involved, tc("涉及演员", "Performers Involved"), "#ced4da"),
       ]));
 
+      // 短名清理页扫描后常显：计数为未清理键数（已清理卡片收缩变灰，不计入），0 = 无待清理
+      var snCount = _state.shortNames
+        ? _state.shortNames.filter(function (sn) { return !sn.cleaned; }).length
+        : 0;
       var tabs = [
         { id: "groups", label: tc("重名分组", "Duplicate Groups") + " (" + _state.groups.length + ")" },
+        { id: "cleanup", label: tc("短名清理", "Short Names") + " (" + snCount + ")" },
         { id: "log", label: tc("日志", "Log") },
       ];
       var tabContainer = el("div", "pdm-tabs");
@@ -687,6 +974,8 @@
         } else {
           content.appendChild(buildChunkedList(_state.groups, buildGroupCard));
         }
+      } else if (_state.activeTab === "cleanup") {
+        content.appendChild(buildCleanupTab());
       } else {
         var logBox = el("div", "pdm-log");
         _state.log.forEach(function (line) { logBox.appendChild(el("div", null, line)); });
@@ -718,7 +1007,7 @@
       if (isFailed) headerRight.appendChild(el("span", "pdm-badge pdm-badge-fail", tc("失败", "Failed")));
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-merge", tc("合并", "Merge"), {
         onclick: function () { handleMergeGroup(g); },
-        disabled: _state.merging || _state.versionOk === false,
+        disabled: _state.merging || _state.cleaning || _state.versionOk === false,
         title: tc("将其他演员合并到选中目标", "Merge the others into the selected target"),
       }));
     }
@@ -745,27 +1034,161 @@
     return card;
   }
 
+  // ==================== 短名清理页 ====================
+
+  function buildCleanupTab() {
+    var shortNames = _state.shortNames || [];
+    var pending = shortNames.filter(function (sn) { return !sn.cleaned; });
+    var frag = document.createDocumentFragment();
+
+    var perfIds = {};
+    var totalDel = 0;
+    pending.forEach(function (sn) {
+      sn.holders.forEach(function (h) { perfIds[h.id] = true; totalDel += h.raws.length; });
+    });
+
+    var cleanedCount = shortNames.length - pending.length;
+    var statusText = pending.length
+      ? tc("共 " + pending.length + " 个单词短名被 ≥2 人共享 · 涉及 " + Object.keys(perfIds).length
+          + " 个演员 · 可删除 " + totalDel + " 条别名",
+          pending.length + " single-word short names shared by 2+ performers · "
+          + Object.keys(perfIds).length + " performers · " + totalDel + " aliases removable")
+      : (cleanedCount
+          ? tc("全部 " + cleanedCount + " 个共享短名已清理完成 — 重名分组为清理前快照，重新扫描后纯短名分组消失",
+              "All " + cleanedCount + " shared short names cleaned — duplicate groups are a pre-clean snapshot; rescan to refresh")
+          : tc("未发现共享短名", "No shared short names"));
+    frag.appendChild(el("div", "pdm-config", [
+      el("div", "pdm-config-status", statusText),
+      el("div", "pdm-actions", [
+        el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
+          onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
+          disabled: _state.cleaning || _state.merging || _state.scanning || !pending.length,
+          title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
+            "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched. Cards collapse afterwards; no automatic rescan."),
+        }),
+      ]),
+    ]));
+
+    if (shortNames.length) {
+      frag.appendChild(buildChunkedList(shortNames, buildShortNameCard));
+    } else {
+      frag.appendChild(el("div", "pdm-empty", tc("未发现共享短名", "No shared short names")));
+    }
+    return frag;
+  }
+
+  function buildShortNameCard(sn) {
+    var isCleaned = !!sn.cleaned;
+    var card = el("div", "pdm-group" + (isCleaned ? " pdm-group-done" : ""));
+    card.appendChild(el("div", "pdm-group-header", [
+      el("div", "pdm-shared-name", [
+        sn.raws.join(" / "),
+        el("span", "pdm-member-count", tc(" · " + sn.holders.length + " 人持有", " · held by " + sn.holders.length)),
+      ]),
+      isCleaned
+        ? el("span", "pdm-badge pdm-badge-done", tc("已清理", "Cleaned"))
+        : el("div", "pdm-card-actions", [
+            el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("清理", "Clean"), {
+              onclick: function () { handleCleanShortNames([sn]); },
+              disabled: _state.cleaning || _state.merging || _state.scanning,
+              title: tc("仅删除该短名的别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
+                "Only this short name's alias entries are removed; names and aliases containing spaces/CJK characters are untouched. The card collapses afterwards; no automatic rescan."),
+            }),
+          ]),
+    ]));
+    if (isCleaned) return card; // 已清理：收缩为仅头部
+    var list = el("div", "pdm-perf-list");
+    sn.holders.forEach(function (h) {
+      // 其他别名 = 该演员完整别名中除当前短名原始串之外的条目（就地内存数据，清理后即正确）
+      var rawSet = {};
+      h.raws.forEach(function (r) { rawSet[r] = true; });
+      var others = (function () {
+        var p = perfById(h.id);
+        var all = p ? parseAliasList(p.alias_list) : [];
+        var out = [];
+        all.forEach(function (a) { if (!rawSet[a]) out.push(a); });
+        return out;
+      })();
+      list.appendChild(el("div", "pdm-sn-owner", [
+        el("div", "pdm-sn-owner-main", [
+          el("span", "pdm-sn-owner-name", h.name),
+          el("span", "pdm-sn-owner-raws", h.raws.join(", ")),
+          el("span", "pdm-badge pdm-badge-count", "#" + h.id),
+        ]),
+        others.length
+          ? el("div", "pdm-sn-owner-others", tc("其他别名", "Others") + ": " + others.join(", "))
+          : null,
+      ]));
+    });
+    card.appendChild(list);
+    return card;
+  }
+
+  // ==================== 演员行悬浮提示（自定义 tooltip：条目分行 + 标签加粗） ====================
+
+  // 原生 title 属性无法加粗，改为共享 DOM 节点的自定义 tooltip；
+  // 跟随光标，靠近屏幕右/下边缘时自动翻转到光标左侧/上方。
+  var _tipEl = null;
+  var _hasHover = window.matchMedia && !window.matchMedia("(hover: none)").matches;
+
+  function showTip(rows, x, y) {
+    if (!_tipEl) {
+      _tipEl = el("div", "pdm-tooltip");
+      document.body.appendChild(_tipEl);
+    }
+    _tipEl.textContent = "";
+    rows.forEach(function (r) {
+      _tipEl.appendChild(el("div", "pdm-tip-row", [
+        el("span", "pdm-tip-label", r.label),
+        el("span", "pdm-tip-value", r.value),
+      ]));
+    });
+    _tipEl.classList.add("pdm-tip-show");
+    moveTip(x, y);
+  }
+
+  function moveTip(x, y) {
+    if (!_tipEl || !_tipEl.classList.contains("pdm-tip-show")) return;
+    var pad = 8, gap = 14;
+    var w = _tipEl.offsetWidth, h = _tipEl.offsetHeight;
+    var left = x + gap, top = y + gap + 4;
+    if (left + w > window.innerWidth - pad) left = x - w - gap;
+    if (left < pad) left = pad;
+    if (top + h > window.innerHeight - pad) top = y - h - gap;
+    if (top < pad) top = pad;
+    _tipEl.style.left = left + "px";
+    _tipEl.style.top = top + "px";
+  }
+
+  function hideTip() {
+    if (_tipEl) _tipEl.classList.remove("pdm-tip-show");
+  }
+
   function buildPerfRow(g, p, isTarget) {
     var aliases = parseAliasList(p.alias_list);
-    var hoverParts = ["ID: " + p.id];
-    if (aliases.length) hoverParts.push(tc("别名", "Aliases") + ": " + aliases.join(", "));
-    if (p.created_at) hoverParts.push(tc("创建", "Created") + ": " + String(p.created_at).slice(0, 10));
-    // 匹配原因：该演员与组内其他成员共享的名称键（悬停查看，便于核对分组是否合理）
+    // 悬浮提示条目：ID / 别名 / 创建 / 组内重名 / 同 stash_id（匹配原因，便于核对分组是否合理）
+    var tipRows = [{ label: "ID", value: String(p.id) }];
+    if (aliases.length) tipRows.push({ label: tc("别名", "Aliases"), value: aliases.join(", ") });
+    if (p.created_at) tipRows.push({ label: tc("创建", "Created"), value: String(p.created_at).slice(0, 10) });
     if (g.sharedNorms) {
       var matched = perfKeys(p).filter(function (k) { return g.sharedNorms[k.norm]; })
         .map(function (k) { return k.display; });
-      if (matched.length) hoverParts.push(tc("组内重名", "Matched") + ": " + matched.join(", "));
+      if (matched.length) tipRows.push({ label: tc("组内重名", "Matched"), value: matched.join(", ") });
     }
     if (g.sharedSidKeys) {
       var sidMatched = (p.stash_ids || []).filter(function (s) { return g.sharedSidKeys[s.endpoint + "|" + s.stash_id]; })
         .map(function (s) { return endpointShort(s.endpoint) + ": " + s.stash_id; });
-      if (sidMatched.length) hoverParts.push(tc("同 stash_id", "Same stash_id") + ": " + sidMatched.join(", "));
+      if (sidMatched.length) tipRows.push({ label: tc("同 stash_id", "Same stash_id"), value: sidMatched.join(", ") });
     }
 
     var row = el("label", "pdm-perf-row" + (isTarget ? " pdm-row-target" : ""), null, {
       "data-pid": String(p.id),
-      title: hoverParts.join(" | "),
     });
+    if (_hasHover) {
+      row.addEventListener("mouseenter", function (e) { showTip(tipRows, e.clientX, e.clientY); });
+      row.addEventListener("mousemove", function (e) { moveTip(e.clientX, e.clientY); });
+      row.addEventListener("mouseleave", hideTip);
+    }
 
     var radio = document.createElement("input");
     radio.type = "radio";
@@ -854,6 +1277,7 @@
   // ==================== Panel ====================
 
   function closePanel() {
+    hideTip();
     var container = document.getElementById("pdm-panel-container");
     if (container) container.remove();
   }

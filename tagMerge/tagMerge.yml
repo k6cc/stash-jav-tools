@@ -1,0 +1,13 @@
+name: Tag Merge
+description: Merge similar tags into canonical Chinese tags based on an editable mapping database.
+version: 1.0.0
+url: https://discourse.stashapp.cc/
+exec:
+  - python
+  - "{pluginDir}/tagMerge.py"
+interface: raw
+tasks:
+  - name: "Merge Similar Tags"
+    description: Merge similar tags (EN/JP/CN variants) into canonical Chinese tags. Source tag names are preserved as aliases. Skips missing sources, safe to re-run. Edit tag_merge_map.json to customize.
+    defaultArgs:
+      mode: merge_tags

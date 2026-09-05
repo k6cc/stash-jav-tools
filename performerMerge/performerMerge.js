@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.1.1";
+  var PLUGIN_VERSION = "1.1.2";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -99,12 +99,21 @@
     appendLogDOM(msg);
   }
 
+  // 自动滚动到底部经 rAF 合并：一帧内追加 N 条日志只读一次 scrollHeight，
+  // 避免「合并全部/清理全部」时每条日志都强制布局（Forced reflow）
+  var _logScrollQueued = false;
+
   function appendLogDOM(msg) {
     var logBox = document.querySelector(".pdm-log");
-    if (logBox) {
-      logBox.appendChild(el("div", null, msg));
-      logBox.scrollTop = logBox.scrollHeight;
-    }
+    if (!logBox) return;
+    logBox.appendChild(el("div", null, msg));
+    if (_logScrollQueued) return;
+    _logScrollQueued = true;
+    requestAnimationFrame(function () {
+      _logScrollQueued = false;
+      var box = document.querySelector(".pdm-log");
+      if (box) box.scrollTop = box.scrollHeight;
+    });
   }
 
   function updateProgressDOM(current, total, title) {
@@ -763,7 +772,9 @@
     var scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
     root.innerHTML = "";
     root.appendChild(buildPanel());
-    if (scrollContainer) scrollContainer.scrollTop = scrollTop;
+    // scrollTop=0（面板刚打开/未滚动）时跳过写入：对刚重建的大面板写 scrollTop
+    // 会强制浏览器同步计算整棵子树布局（~40ms Forced reflow），仅控制台告警无害但完全可免
+    if (scrollContainer && scrollTop > 0) scrollContainer.scrollTop = scrollTop;
   }
 
   function el(tag, className, children, attrs) {
@@ -1065,6 +1076,7 @@
   // 原生 title 属性无法加粗，改为共享 DOM 节点的自定义 tooltip；
   // 跟随光标，靠近屏幕右/下边缘时自动翻转到光标左侧/上方。
   var _tipEl = null;
+  var _tipW = 0, _tipH = 0; // tooltip 尺寸缓存：showTip 时测量一次，mousemove 复用，避免每帧读 offsetWidth/Height 强制布局
   var _hasHover = window.matchMedia && !window.matchMedia("(hover: none)").matches;
 
   function showTip(rows, x, y) {
@@ -1080,13 +1092,15 @@
       ]));
     });
     _tipEl.classList.add("pdm-tip-show");
+    _tipW = _tipEl.offsetWidth;
+    _tipH = _tipEl.offsetHeight;
     moveTip(x, y);
   }
 
   function moveTip(x, y) {
     if (!_tipEl || !_tipEl.classList.contains("pdm-tip-show")) return;
     var pad = 8, gap = 14;
-    var w = _tipEl.offsetWidth, h = _tipEl.offsetHeight;
+    var w = _tipW, h = _tipH;
     var left = x + gap, top = y + gap + 4;
     if (left + w > window.innerWidth - pad) left = x - w - gap;
     if (left < pad) left = pad;

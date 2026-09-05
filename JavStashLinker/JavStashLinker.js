@@ -228,6 +228,34 @@
     ).then(function (data) { return data.findScene; });
   }
 
+  function searchJavstashPerformers(endpoint, apiKey, term) {
+    return callJavstashGQL(endpoint, apiKey,
+      "query($term: String!) { searchPerformer(term: $term) { id name disambiguation aliases deleted urls { url } birth_date career_start_year height } }",
+      { term: term }
+    ).then(function (data) { return data.searchPerformer || []; });
+  }
+
+  function fetchAllLocalPerformers() {
+    var PAGE_SIZE = 1000;
+    var all = [];
+    var page = 1;
+    function fetchPage() {
+      return callGQL(
+        "query($filter: FindFilterType!) { findPerformers(filter: $filter) { count performers { id name disambiguation alias_list birthdate urls height_cm stash_ids { endpoint stash_id } } } }",
+        { filter: { per_page: PAGE_SIZE, page: page, sort: "name" } }
+      ).then(function (data) {
+        var result = data.findPerformers;
+        all = all.concat(result.performers || []);
+        if (page * PAGE_SIZE < result.count) {
+          page++;
+          return fetchPage();
+        }
+        return all;
+      });
+    }
+    return fetchPage();
+  }
+
   function updatePerformer(id, stashIds, aliasArray, urls) {
     var input = { id: id, stash_ids: stashIds, alias_list: aliasArray };
     if (urls) input.urls = urls;
@@ -358,6 +386,94 @@
     };
   }
 
+  // ==================== Manual Search Matching ====================
+
+  // Build search terms from local performer: main name + aliases, dedup by
+  // normalized form, main first, capped at 15 terms (rate-limit friendly)
+  function buildSearchTerms(localPerf) {
+    var seen = {};
+    var terms = [];
+    function add(raw, isMain) {
+      var norm = normalizeName(raw);
+      if (!norm || seen[norm]) return;
+      seen[norm] = true;
+      terms.push({ raw: String(raw).trim(), norm: norm, isMain: !!isMain });
+    }
+    add(localPerf.name, true);
+    parseAliasList(localPerf.alias_list).forEach(function (a) { add(a, false); });
+    if (terms.length > 15) terms = terms.slice(0, 15);
+    return terms;
+  }
+
+  // Evaluate a JAVStash candidate against a local performer.
+  // Confidence rules (agreed):
+  //   stashdb UUID cross-ref equal           -> high (hard evidence)
+  //   URL intersection >= 2                  -> high (1 may be a studio site)
+  //   >=3 names exact-matched                -> high
+  //   exactly 2 local names, both matched,
+  //     at least one long (norm >=3 chars)   -> high (short-name collision guard)
+  //   name match + full birthdate equal      -> high
+  //   name match + birth year equal          -> medium
+  //   2 of >=3 names matched                 -> medium
+  //   deleted performer capped at medium
+  function evaluateCandidate(localPerf, jsPerf, terms) {
+    var jsNames = {};
+    jsNames[normalizeName(jsPerf.name)] = true;
+    (jsPerf.aliases || []).forEach(function (a) { jsNames[normalizeName(a)] = true; });
+    delete jsNames[""];
+
+    var votes = terms.filter(function (t) { return jsNames[t.norm]; });
+    var hasLongVote = votes.some(function (v) { return v.norm.length >= 3; });
+
+    var localStashdbId = null;
+    (localPerf.stash_ids || []).forEach(function (sid) {
+      if (sid.endpoint && sid.endpoint.indexOf("stashdb.org") !== -1) localStashdbId = sid.stash_id;
+    });
+    var jsStashdbIds = [];
+    (jsPerf.urls || []).forEach(function (u) {
+      var urlStr = typeof u === "string" ? u : (u && u.url) || "";
+      var m = urlStr.match(/stashdb\.org\/performers\/([0-9a-fA-F-]{36})/);
+      if (m) jsStashdbIds.push(m[1].toLowerCase());
+    });
+    var stashdbMatch = !!(localStashdbId && jsStashdbIds.indexOf(String(localStashdbId).toLowerCase()) !== -1);
+
+    var localUrls = localPerf.urls || [];
+    var jsUrls = [];
+    (jsPerf.urls || []).forEach(function (u) {
+      var urlStr = typeof u === "string" ? u : (u && u.url) || "";
+      if (urlStr) jsUrls.push(urlStr);
+    });
+    var urlIntersect = jsUrls.filter(function (u) { return localUrls.indexOf(u) !== -1; }).length;
+
+    var lb = localPerf.birthdate || "";
+    var jb = jsPerf.birth_date || "";
+    var bdayFull = !!(lb && jb && lb === jb);
+    var bdayYear = !!(lb && jb && lb.slice(0, 4) === jb.slice(0, 4));
+
+    var v = votes.length;
+    var total = terms.length;
+    var confidence = null;
+    if (stashdbMatch) confidence = "high";
+    else if (urlIntersect >= 2) confidence = "high";
+    else if (v >= 3) confidence = "high";
+    else if (total === 2 && v === 2 && hasLongVote) confidence = "high";
+    else if (v >= 1 && bdayFull) confidence = "high";
+    else if (v >= 1 && bdayYear) confidence = "medium";
+    else if (v === 2) confidence = "medium";
+    if (jsPerf.deleted && confidence === "high") confidence = "medium";
+
+    return {
+      confidence: confidence,
+      votes: votes,
+      voteCount: v,
+      totalNames: total,
+      stashdbMatch: stashdbMatch,
+      urlIntersect: urlIntersect,
+      bdayFull: bdayFull,
+      bdayYear: bdayYear,
+    };
+  }
+
   // ==================== Apply ====================
 
   var _appliedPerformers = {}; // track local performer IDs already applied
@@ -410,6 +526,7 @@
     abortFlag: false,
     scanProgress: null,
     results: null,
+    emptyReason: "",
     activeTab: "auto",
     applying: false,
     log: [],
@@ -418,6 +535,13 @@
     applied: {},
     appliedCount: 0,
     applyDone: false,
+    manualTab: {
+      list: null,
+      listLoading: false,
+      listFilter: "",
+      search: {},
+      ignoredIds: {},
+    },
   };
 
   function setState(updates, throttle) {
@@ -435,7 +559,7 @@
                "JAVStash not configured. Add it in Settings → Metadata Providers first."));
       return;
     }
-    setState({ scanning: true, abortFlag: false, results: null, log: [], dismissed: {}, manualSelected: {}, applied: {}, applyDone: false });
+    setState({ scanning: true, abortFlag: false, results: null, emptyReason: "", log: [], dismissed: {}, manualSelected: {}, applied: {}, applyDone: false });
     _appliedPerformers = {};
     addLog(tc("正在获取含 JAVStash ID 的场景（跳过已全部匹配的）...", "Fetching scenes with JAVStash IDs (skipping fully matched)..."));
 
@@ -443,7 +567,12 @@
       var scenes = await getScenesWithJavstashId();
       addLog(tc("找到 " + scenes.length + " 个场景", "Found " + scenes.length + " scenes"));
       if (scenes.length === 0) {
-        setState({ scanning: false });
+        setState({
+          scanning: false,
+          results: [],
+          emptyReason: tc("没有需要扫描的场景 — 含 JAVStash ID 的场景已全部匹配完成",
+                          "Nothing to scan — all scenes with JAVStash IDs are already fully matched"),
+        });
         return;
       }
 
@@ -515,7 +644,12 @@
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
     } catch (e) {
       addLog(tc("扫描错误", "Scan error") + ": " + e.message);
-      setState({ scanning: false, scanProgress: null });
+      setState({
+        scanning: false,
+        scanProgress: null,
+        results: [],
+        emptyReason: tc("扫描未完成，详见下方日志", "Scan did not finish — see log below"),
+      });
     }
   }
 
@@ -670,6 +804,158 @@
     updateProgressDOM(0, _state.scanProgress.total, "");
   }
 
+  // ==================== Manual Search ====================
+
+  function setManualTab(changes) {
+    setState({ manualTab: Object.assign({}, _state.manualTab, changes) });
+  }
+
+  function setSearchState(localId, changes) {
+    var search = Object.assign({}, _state.manualTab.search);
+    search[localId] = Object.assign({}, search[localId], changes);
+    setManualTab({ search: search });
+  }
+
+  function updateManualStatusDOM(localId, text) {
+    var node = document.querySelector('[data-jsm-mstatus="' + localId + '"]');
+    if (node) node.textContent = text;
+  }
+
+  function ensureManualList() {
+    var mt = _state.manualTab;
+    if (mt.list !== null || mt.listLoading) return;
+    setManualTab({ listLoading: true });
+    fetchAllLocalPerformers().then(function (performers) {
+      var unlinked = performers.filter(function (p) {
+        return !(p.stash_ids || []).some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; });
+      });
+      setManualTab({ listLoading: false, list: unlinked });
+    }).catch(function (e) {
+      addLog(tc("加载演员列表失败", "Failed to load performer list") + ": " + e.message);
+      setManualTab({ listLoading: false, list: [] });
+    });
+  }
+
+  function hasHighCandidate(local, candMap, terms) {
+    for (var id in candMap) {
+      if (evaluateCandidate(local, candMap[id], terms).confidence === "high") return true;
+    }
+    return false;
+  }
+
+  // Sequential term search; stops early on a high-confidence hit when
+  // earlyStop is set. candMap/termsDone are seeded from existing search state.
+  function runManualTermSearch(local, terms, earlyStop) {
+    var localId = local.id;
+    var st = _state.manualTab.search[localId] || {};
+    var candMap = Object.assign({}, st.candMap);
+    var idx = st.termsDone || 0;
+    var continued = Object.keys(candMap).length > 0;
+
+    return getStashBoxConfig().then(function (config) {
+      function step() {
+        if (idx >= terms.length) return null;
+        var term = terms[idx];
+        function advance() {
+          idx++;
+          var cur = _state.manualTab.search[localId];
+          if (cur) cur.termsDone = idx;
+          updateManualStatusDOM(localId,
+            (continued
+              ? tc("继续搜索 JAVStash 中... ", "Searching more... ")
+              : tc("搜索 JAVStash 中... ", "Searching JAVStash... ")) +
+            idx + "/" + terms.length);
+        }
+        return _jsRateLimiter.submit(function () {
+          return searchJavstashPerformers(config.javstashEndpoint, config.javstashApiKey, term.raw);
+        }).then(function (list) {
+          list.forEach(function (p) { if (!candMap[p.id]) candMap[p.id] = p; });
+          advance();
+          if (earlyStop && hasHighCandidate(local, candMap, terms)) return "early";
+          return step();
+        }).catch(function (e) {
+          addLog(tc("搜索失败", "Search failed") + " [" + term.raw + "]: " + e.message);
+          advance();
+          return step();
+        });
+      }
+      return step();
+    }).then(function (result) {
+      setSearchState(localId, {
+        searching: false,
+        candMap: candMap,
+        termsDone: idx,
+        termsTotal: terms.length,
+        earlyStop: result === "early",
+      });
+      addLog(tc("手动搜索: ", "Manual search: ") + local.name + " — " +
+        tc("候选 " + Object.keys(candMap).length + " 个", Object.keys(candMap).length + " candidates") +
+        (result === "early" ? tc("（第 " + idx + " 词命中高可信度，停止）", " (high hit at term " + idx + ")") : ""));
+    });
+  }
+
+  function handleRowSearch(local) {
+    var existing = _state.manualTab.search[local.id];
+    if (existing && existing.searching) return;
+    var linked = (local.stash_ids || []).some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; });
+    if (linked) return;
+    var terms = buildSearchTerms(local);
+    if (terms.length === 0) return;
+    getStashBoxConfig().then(function (config) {
+      if (!config.javstashApiKey) {
+        alert(tc("未找到 JAVStash 配置，请在 设置 → 元数据提供者 中添加 JAVStash stash-box 实例",
+                 "JAVStash not configured. Add it in Settings → Metadata Providers first."));
+        return;
+      }
+      setSearchState(local.id, {
+        searching: true, candMap: {}, termsDone: 0, termsTotal: terms.length,
+        earlyStop: false, full: false, appliedJsId: null,
+      });
+      return runManualTermSearch(local, terms, true);
+    });
+  }
+
+  function handleMore(local) {
+    var s = _state.manualTab.search[local.id];
+    if (!s || s.searching) return;
+    var terms = buildSearchTerms(local);
+    if ((s.termsDone || 0) >= terms.length) {
+      setSearchState(local.id, { full: true });
+      return;
+    }
+    setSearchState(local.id, { searching: true, full: false });
+    runManualTermSearch(local, terms, false).then(function () {
+      setSearchState(local.id, { full: true });
+    });
+  }
+
+  function handleCollapseSearch(local) {
+    var search = Object.assign({}, _state.manualTab.search);
+    delete search[local.id];
+    setManualTab({ search: search });
+  }
+
+  function handleIgnorePerformer(local) {
+    var ignored = {};
+    for (var k in _state.manualTab.ignoredIds) ignored[k] = true;
+    ignored[local.id] = true;
+    var search = Object.assign({}, _state.manualTab.search);
+    delete search[local.id];
+    setManualTab({ ignoredIds: ignored, search: search });
+  }
+
+  function handleApplyManual(local, jsPerf) {
+    addLog(tc("手动应用: ", "Manual apply: ") + jsPerf.name + " → " + local.name);
+    applyMatchCached(local, jsPerf).then(function () {
+      addLog("  OK");
+      local.stash_ids = (local.stash_ids || []).concat([{ endpoint: JAVSTASH_ENDPOINT, stash_id: jsPerf.id }]);
+      setSearchState(local.id, { appliedJsId: jsPerf.id, searching: false });
+    }).catch(function (e) {
+      addLog("  " + tc("错误", "ERROR") + ": " + (e.message || e));
+      alert(tc("应用失败", "Apply failed") + ": " + (e.message || e));
+    });
+  }
+
   // ==================== Derived Data ====================
 
   function getAllMatches() {
@@ -761,8 +1047,20 @@
   function render() {
     var root = document.getElementById("jsm-panel-root");
     if (!root) return;
+    var active = document.activeElement;
+    var restoreInput = null;
+    if (active && active.classList && active.classList.contains("jsm-manual-query")) {
+      restoreInput = { pos: active.selectionStart };
+    }
     root.innerHTML = "";
     root.appendChild(buildPanel());
+    if (restoreInput) {
+      var input = root.querySelector(".jsm-manual-query");
+      if (input) {
+        input.focus();
+        try { input.setSelectionRange(restoreInput.pos, restoreInput.pos); } catch (e) {}
+      }
+    }
   }
 
   function el(tag, className, children, attrs) {
@@ -772,6 +1070,7 @@
       for (var k in attrs) {
         if (k === "onclick") node.onclick = attrs[k];
         else if (k === "onchange") node.onchange = attrs[k];
+        else if (k === "oninput") node.oninput = attrs[k];
         else if (k === "type") node.type = attrs[k];
         else if (k === "value") node.value = attrs[k];
         else if (k === "placeholder") node.placeholder = attrs[k];
@@ -848,69 +1147,79 @@
       frag.appendChild(banner);
     }
 
-    // Stats
-    if (_state.results) {
-      var autoMatches = getAllMatches().filter(function (m) { return m.confidence === "high" && !m.dismissed; });
-      var reviewMatches = getAllMatches().filter(function (m) { return m.confidence === "medium"; });
-      var unmatched = getAllUnmatched();
-      var manualCount = Object.keys(_state.manualSelected).length;
+    // Stats (only when a scan produced results)
+    var hasResults = !!_state.results;
+    var hasResultItems = hasResults && _state.results.length > 0;
+    var autoMatches = hasResultItems ? getAllMatches().filter(function (m) { return m.confidence === "high" && !m.dismissed; }) : [];
+    var reviewMatches = hasResultItems ? getAllMatches().filter(function (m) { return m.confidence === "medium"; }) : [];
+    var unmatched = hasResultItems ? getAllUnmatched() : [];
 
+    if (hasResultItems) {
+      var manualCount = Object.keys(_state.manualSelected).length;
       frag.appendChild(el("div", "jsm-stats", [
         buildStat(autoMatches.length, tc("自动匹配", "Auto Matched"), "#37b24d"),
         buildStat(reviewMatches.length, tc("待审核", "Needs Review"), "#f59f00"),
         buildStat(unmatched.length, tc("未匹配", "Unmatched"), "#f03e3e"),
         buildStat(manualCount, tc("手动选择", "Manual Selected"), "#339af0"),
       ]));
-
-      // Tabs
-      var tabs = [
-        { id: "auto", label: tc("自动匹配", "Auto Matched") + " (" + autoMatches.length + ")" },
-        { id: "review", label: tc("待审核", "Needs Review") + " (" + reviewMatches.length + ")" },
-        { id: "unmatched", label: tc("未匹配", "Unmatched") + " (" + unmatched.length + ")" },
-        { id: "log", label: tc("日志", "Log") },
-      ];
-      var tabContainer = el("div", "jsm-tabs");
-      tabs.forEach(function (t) {
-        var tab = el("div", "jsm-tab" + (_state.activeTab === t.id ? " jsm-tab-active" : ""), t.label, {
-          onclick: function () { setState({ activeTab: t.id }); },
-        });
-        tabContainer.appendChild(tab);
-      });
-      frag.appendChild(tabContainer);
-
-      // Tab content (chunked rendering for large lists)
-      var content = el("div", "jsm-content");
-      if (_state.activeTab === "auto") {
-        if (autoMatches.length === 0) {
-          content.appendChild(el("div", "jsm-empty", tc("没有自动匹配", "No auto matches")));
-        } else {
-          content.appendChild(buildChunkedList(autoMatches, buildMatchCard));
-        }
-      } else if (_state.activeTab === "review") {
-        if (reviewMatches.length === 0) {
-          content.appendChild(el("div", "jsm-empty", tc("没有待审核匹配", "No review matches")));
-        } else {
-          content.appendChild(buildChunkedList(reviewMatches, buildMatchCard));
-        }
-      } else if (_state.activeTab === "unmatched") {
-        if (unmatched.length === 0) {
-          content.appendChild(el("div", "jsm-empty", tc("没有未匹配演员", "No unmatched performers")));
-        } else {
-          content.appendChild(buildChunkedList(unmatched, buildUnmatchedCard));
-        }
-      } else if (_state.activeTab === "log") {
-        if (_state.log.length === 0) {
-          content.appendChild(el("div", "jsm-empty", tc("暂无日志", "No logs yet")));
-        } else {
-          var logBox = el("div", "jsm-log");
-          _state.log.forEach(function (line) {
-            logBox.appendChild(el("div", null, line));
-          });
-          content.appendChild(logBox);
-        }
-      }
-      frag.appendChild(content);
     }
+
+    // Tabs (always visible — manual search works without scanning)
+    var tabs = [
+      { id: "auto", label: tc("自动匹配", "Auto Matched") + " (" + autoMatches.length + ")" },
+      { id: "review", label: tc("待审核", "Needs Review") + " (" + reviewMatches.length + ")" },
+      { id: "unmatched", label: tc("未匹配", "Unmatched") + " (" + unmatched.length + ")" },
+      { id: "manual", label: tc("手动搜索", "Manual Search") },
+      { id: "log", label: tc("日志", "Log") },
+    ];
+    var tabContainer = el("div", "jsm-tabs");
+    tabs.forEach(function (t) {
+      var tab = el("div", "jsm-tab" + (_state.activeTab === t.id ? " jsm-tab-active" : ""), t.label, {
+          onclick: function () {
+            setState({ activeTab: t.id });
+            if (t.id === "manual") ensureManualList();
+          },
+        });
+      tabContainer.appendChild(tab);
+    });
+    frag.appendChild(tabContainer);
+
+    // Tab content
+    var content = el("div", "jsm-content");
+    if (_state.activeTab === "manual") {
+      content.appendChild(buildManualTab());
+    } else if (_state.activeTab === "log") {
+      if (_state.log.length === 0) {
+        content.appendChild(el("div", "jsm-empty", tc("暂无日志", "No logs yet")));
+      } else {
+        var logBox = el("div", "jsm-log");
+        _state.log.forEach(function (line) {
+          logBox.appendChild(el("div", null, line));
+        });
+        content.appendChild(logBox);
+      }
+    } else {
+      // Result tabs (auto / review / unmatched)
+      var items = _state.activeTab === "auto" ? autoMatches
+        : _state.activeTab === "review" ? reviewMatches
+        : unmatched;
+      if (!hasResults) {
+        content.appendChild(el("div", "jsm-empty",
+          _state.scanning ? tc("扫描进行中...", "Scanning...")
+            : tc("尚未扫描 — 点击上方「开始扫描」，或使用「手动搜索」", "Not scanned yet — click Start Scan above, or use Manual Search")));
+      } else if (_state.results.length === 0) {
+        content.appendChild(el("div", "jsm-empty",
+          _state.emptyReason || tc("没有结果", "No results")));
+      } else if (items.length === 0) {
+        var emptyText = _state.activeTab === "auto" ? tc("没有自动匹配", "No auto matches")
+          : _state.activeTab === "review" ? tc("没有待审核匹配", "No review matches")
+          : tc("没有未匹配演员", "No unmatched performers");
+        content.appendChild(el("div", "jsm-empty", emptyText));
+      } else {
+        content.appendChild(buildChunkedList(items, _state.activeTab === "unmatched" ? buildUnmatchedCard : buildMatchCard));
+      }
+    }
+    frag.appendChild(content);
 
     // Apply log (during applying)
     if (_state.applying) {
@@ -987,7 +1296,7 @@
     }
 
     if (!isApplied) {
-      var dismissBtn = el("button", "jsm-btn jsm-btn-sm jsm-btn-danger", tc("忽略", "Dismiss"), {
+      var dismissBtn = el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Dismiss"), {
         onclick: function () {
           var d = Object.assign({}, _state.dismissed);
           d[m.key] = true;
@@ -1066,6 +1375,261 @@
     }
 
     return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : ""), [info, badge, right]);
+  }
+
+  // ==================== Manual Search UI ====================
+
+  var _manualFilterTimer = null;
+
+  function buildManualTab() {
+    var mt = _state.manualTab;
+    var wrap = el("div", "jsm-manual");
+
+    var input = el("input", "jsm-input jsm-manual-query", null, {
+      type: "text",
+      value: mt.listFilter,
+      placeholder: tc("筛选演员（名称/别名）", "Filter performers (name/alias)"),
+      oninput: function (e) {
+        if (e.isComposing) return;
+        clearTimeout(_manualFilterTimer);
+        var v = e.target.value;
+        _manualFilterTimer = setTimeout(function () { setManualTab({ listFilter: v }); }, 250);
+      },
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.isComposing) {
+        clearTimeout(_manualFilterTimer);
+        setManualTab({ listFilter: input.value });
+      }
+    });
+    wrap.appendChild(el("div", "jsm-manual-searchrow", [input]));
+
+    if (mt.listLoading) {
+      wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));
+      return wrap;
+    }
+    if (mt.list === null) {
+      ensureManualList();
+      wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));
+      return wrap;
+    }
+
+    var filter = (mt.listFilter || "").trim().toLowerCase();
+    var visible = mt.list.filter(function (p) { return !mt.ignoredIds[p.id]; });
+    var filtered = filter
+      ? visible.filter(function (p) {
+          if ((p.name || "").toLowerCase().indexOf(filter) !== -1) return true;
+          return parseAliasList(p.alias_list).some(function (a) {
+            return a.toLowerCase().indexOf(filter) !== -1;
+          });
+        })
+      : visible;
+
+    if (filtered.length === 0) {
+      wrap.appendChild(el("div", "jsm-empty",
+        visible.length === 0
+          ? tc("没有未绑定 JAVStash 的演员", "No performers without JAVStash ID")
+          : tc("无匹配演员", "No matching performers")));
+      return wrap;
+    }
+
+    var ignoredCount = mt.list.length - visible.length;
+    var countText = filtered.length === visible.length
+      ? tc("未绑定演员 " + filtered.length + " 个", filtered.length + " unlinked performers")
+      : tc("匹配 " + filtered.length + " / " + visible.length + " 个",
+           filtered.length + " / " + visible.length + " performers");
+    if (ignoredCount > 0) {
+      countText += tc("（已忽略 " + ignoredCount + " 个）", " (" + ignoredCount + " ignored)");
+    }
+    wrap.appendChild(el("div", "jsm-manual-status", countText));
+    wrap.appendChild(buildChunkedList(filtered, buildManualRow));
+    return wrap;
+  }
+
+  function buildManualRow(p) {
+    var s = _state.manualTab.search[p.id];
+    var group = el("div", "jsm-mgroup");
+
+    var aliases = parseAliasList(p.alias_list);
+    var head = el("div", "jsm-mgroup-head", [
+      el("div", "jsm-card-info", [
+        el("div", "jsm-card-name", p.name),
+        aliases.length ? el("div", "jsm-card-sub", aliases.join(", ")) : null,
+      ]),
+    ]);
+    if (s && s.appliedJsId) {
+      head.appendChild(el("span", "jsm-badge jsm-badge-applied", tc("已应用", "Applied")));
+    } else if (s && s.searching) {
+      head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-state", tc("搜索中...", "Searching..."), { disabled: true }));
+    } else {
+      head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("搜索", "Search"), {
+        onclick: function () { handleRowSearch(p); },
+      }));
+    }
+    head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Ignore"), {
+      title: tc("本轮忽略该演员", "Ignore this performer for this session"),
+      onclick: function () { handleIgnorePerformer(p); },
+    }));
+    group.appendChild(head);
+
+    if (s && !s.appliedJsId && (s.searching || s.candMap)) {
+      var body = el("div", "jsm-mgroup-body");
+      if (s.searching) {
+        var hasPrior = s.candMap && Object.keys(s.candMap).length > 0;
+        body.appendChild(el("div", "jsm-manual-status",
+          (hasPrior
+            ? tc("继续搜索 JAVStash 中... ", "Searching more... ")
+            : tc("搜索 JAVStash 中... ", "Searching JAVStash... ")) +
+          (s.termsDone || 0) + "/" + (s.termsTotal || 0),
+          { "data-jsm-mstatus": p.id }));
+        if (hasPrior) {
+          body.appendChild(buildManualResults(p, s, true));
+        }
+      } else {
+        body.appendChild(buildManualResults(p, s, false));
+      }
+      group.appendChild(body);
+    }
+    return group;
+  }
+
+  function buildStatusRow(local, text) {
+    return el("div", "jsm-manual-statusrow", [
+      el("span", "jsm-status-text", text),
+      el("span", "jsm-collapse-arrow", "▲", {
+        title: tc("收起搜索结果", "Collapse search results"),
+        onclick: function () { handleCollapseSearch(local); },
+      }),
+    ]);
+  }
+
+  function buildManualResults(local, s, searching) {
+    var frag = document.createDocumentFragment();
+    var terms = buildSearchTerms(local);
+    var evaluated = [];
+    for (var id in s.candMap) {
+      evaluated.push({ jsPerf: s.candMap[id], evidence: evaluateCandidate(local, s.candMap[id], terms) });
+    }
+    var rank = { high: 0, medium: 1 };
+    evaluated.sort(function (a, b) {
+      var ra = a.evidence.confidence !== null ? rank[a.evidence.confidence] : 2;
+      var rb = b.evidence.confidence !== null ? rank[b.evidence.confidence] : 2;
+      if (ra !== rb) return ra - rb;
+      if (a.evidence.stashdbMatch !== b.evidence.stashdbMatch) return a.evidence.stashdbMatch ? -1 : 1;
+      if (b.evidence.voteCount !== a.evidence.voteCount) return b.evidence.voteCount - a.evidence.voteCount;
+      return b.evidence.urlIntersect - a.evidence.urlIntersect;
+    });
+
+    var high = evaluated.filter(function (c) { return c.evidence.confidence === "high"; });
+    var others = evaluated.filter(function (c) { return c.evidence.confidence !== "high"; });
+
+    if (!searching) {
+      if (evaluated.length === 0) {
+        frag.appendChild(buildStatusRow(local,
+          tc("JAVStash 未找到候选演员", "No candidates found on JAVStash")));
+      } else if (s.earlyStop) {
+        frag.appendChild(buildStatusRow(local,
+          tc("第 " + s.termsDone + "/" + s.termsTotal + " 词命中高可信度，已停止搜索",
+             "High-confidence hit at term " + s.termsDone + "/" + s.termsTotal + ", search stopped")));
+      } else {
+        frag.appendChild(buildStatusRow(local,
+          tc("已搜索全部 " + s.termsTotal + " 词", "Searched all " + s.termsTotal + " terms")));
+      }
+    }
+
+    high.forEach(function (c) {
+      frag.appendChild(buildManualCandidateCard(c, local, !s.full && !searching));
+    });
+
+    if (searching) return frag;
+
+    if (s.full) {
+      others.forEach(function (c) {
+        frag.appendChild(buildManualCandidateCard(c, local, false));
+      });
+    } else if (high.length === 0 && evaluated.length > 0) {
+      frag.appendChild(el("div", "jsm-manual-hint-row", [
+        el("span", "jsm-manual-hint-text", tc("未找到高可信度候选", "No high-confidence candidates")),
+        el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("更多", "More"), {
+          onclick: function () { handleMore(local); },
+        }),
+      ]));
+    }
+    return frag;
+  }
+
+  function buildManualCandidateCard(c, local, showMore) {
+    var jsPerf = c.jsPerf;
+    var ev = c.evidence;
+    var s = _state.manualTab.search[local.id];
+    var isApplied = !!(s && s.appliedJsId === jsPerf.id);
+
+    var voteNames = ev.votes.map(function (v) { return v.raw; }).join(", ");
+
+    var bdayText, bdayClass;
+    if (!local.birthdate || !jsPerf.birth_date) {
+      bdayText = tc("生日 —", "bday —");
+      bdayClass = null;
+    } else if (ev.bdayFull) {
+      bdayText = tc("生日 ✓ ", "bday ✓ ") + local.birthdate;
+      bdayClass = "jsm-ev-ok";
+    } else if (ev.bdayYear) {
+      bdayText = tc("生日 △ ", "bday △ ") + local.birthdate + " / " + jsPerf.birth_date;
+      bdayClass = "jsm-ev-mid";
+    } else {
+      bdayText = tc("生日 ✗ ", "bday ✗ ") + local.birthdate + " / " + jsPerf.birth_date;
+      bdayClass = "jsm-ev-bad";
+    }
+
+    var hText, hClass;
+    if (!local.height_cm || !jsPerf.height) {
+      hText = tc("身高 —", "height —");
+      hClass = null;
+    } else if (local.height_cm === jsPerf.height) {
+      hText = tc("身高 ✓ ", "height ✓ ") + local.height_cm;
+      hClass = "jsm-ev-ok";
+    } else {
+      hText = tc("身高 ✗ ", "height ✗ ") + local.height_cm + " / " + jsPerf.height;
+      hClass = "jsm-ev-bad";
+    }
+
+    var sub = el("div", "jsm-card-sub", [
+      el("span", null, tc("命中 ", "votes ") + ev.voteCount + "/" + ev.totalNames + (voteNames ? ": " + voteNames : "") + " · "),
+      el("span", bdayClass, bdayText + " · "),
+      el("span", hClass, hText + " · "),
+      el("span", null, tc("URL交集 ", "URL ") + ev.urlIntersect + " · "),
+      el("span", ev.stashdbMatch ? "jsm-ev-ok" : null, tc("StashDB ", "StashDB ") + (ev.stashdbMatch ? "✓" : "✗")),
+    ]);
+
+    var nameText = jsPerf.name + (jsPerf.disambiguation ? " (" + jsPerf.disambiguation + ")" : "");
+    if (jsPerf.deleted) nameText += "  [" + tc("已删除", "deleted") + "]";
+
+    var badge = ev.confidence
+      ? el("span", "jsm-badge " + (ev.confidence === "high" ? "jsm-badge-high" : "jsm-badge-medium"), ev.confidence)
+      : el("span", "jsm-badge jsm-badge-method", tc("手动", "manual"));
+
+    var right = el("div", "jsm-card-actions");
+    if (isApplied) {
+      right.appendChild(el("span", "jsm-badge jsm-badge-applied", tc("已应用", "Applied")));
+    } else {
+      right.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-success", tc("应用", "Apply"), {
+        onclick: function () { handleApplyManual(local, jsPerf); },
+      }));
+      if (showMore) {
+        right.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("更多", "More"), {
+          onclick: function () { handleMore(local); },
+        }));
+      }
+    }
+
+    return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : ""), [
+      el("div", "jsm-card-info", [
+        el("div", "jsm-card-name", nameText),
+        sub,
+      ]),
+      badge,
+      right,
+    ]);
   }
 
   // ==================== Panel ====================

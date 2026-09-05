@@ -9,7 +9,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
-| [JavStashLinker](./JavStashLinker/) | 1.1.2 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 |
+| [JavStashLinker](./JavStashLinker/) | 1.2.0 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则） |
 | [performerMerge](./performerMerge/) | 1.1.2 | 纯 UI | 重名演员检测与合并：stash_id 硬证据 + 双层过滤的名字匹配（常见名抑制/同 endpoint id 冲突阻断），选择目标后一键合并；附带共享短名别名一键清理（无需 Python） |
 | [tagMerge](./tagMerge/) | 1.0.0 | Python 任务 | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，源名保留为别名 |
 
@@ -125,6 +125,7 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 5. 在「待审核」标签页审核 medium 置信度匹配（纯名称/别名匹配）
 6. 在「未匹配」标签页为多演员场景手动选择本地演员
 7. 点击「应用全部」批量应用 high 置信度匹配，或逐条点击「应用」按钮
+8. 在「手动搜索」标签页：列出全部未绑定演员（可按名称/别名筛选），点「搜索」逐词搜 JAVStash，命中高可信度即停止，「更多」展开全部候选（StashDB 交叉/URL 交集/多名称一致/生日比对）
 
 详细说明见 [JavStashLinker/README.md](./JavStashLinker/README.md)。
 

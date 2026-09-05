@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.1.2：修复应用全部日志格式 — 按演员去重后单行输出(序号正确)，rAF 批量刷 DOM 实时滚动
+> v1.2.0：新增「手动搜索」— 列出全部未绑定 JAVStash 的演员，逐词搜索命中高可信度即停止，「更多」展开全部候选；多信号证据规则（StashDB 交叉 / URL 交集 / 多名称一致 / 生日比对）；含 v1.1.3 扫描 0 结果反馈修复
 
 Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 
@@ -45,14 +45,42 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 - **Batch Scan**：扫描所有有 JAVStash ID 的场景，输出匹配结果到 `match_results.json`
 - **Apply High-Confidence Matches**：应用高置信度匹配（仅 stashdb_id 和单演员匹配）
 
+### 方式三：手动搜索（单个演员）
+
+适合场景扫描覆盖不到的演员（无 JAVStash 场景 ID、或库中尚无对应场景）：
+
+1. 打开面板，切到 **手动搜索** 标签页 — 自动列出所有未绑定 JAVStash ID 的本地演员（顶部可按名称/别名实时筛选）
+2. 点击演员行右侧 **搜索** — 用该演员的主名+全部别名（去重后最多 15 个词）逐词调 JAVStash `searchPerformer`（4 req/s 限流）
+3. **命中高可信度即停止搜索**：组框向下展开，只显示 high 候选，卡片显示证据明细（命中票数、生日/身高对比 ✓/△/✗、URL 交集、StashDB 交叉）
+4. 点击 **应用** → 写入 stash_id + 别名 + URL 合并（与场景扫描应用同一条路径，只追加不覆盖）；应用后按钮显示 **已应用**，组框收缩
+5. 点击 **更多**（应用按钮右侧，或「未找到高可信度候选」提示行右侧）：继续搜索剩余词 — **高可信度结果保持置顶可见、可随时应用**，进度行追加在下方；搜完后追加全部 medium / 手动确认候选（靠 high/medium 徽章颜色区分）
+6. 状态行右侧 **▲** 可收起该组搜索结果，恢复搜索前状态；未找到高可信度时显示简短提示（JAVStash 未返回任何候选时仅显示状态行）
+7. **忽略**（搜索按钮右侧）：本轮将该演员从列表中排除，关闭面板后重置
+
+#### 手动搜索置信度规则
+
+| 条件 | 置信度 | 说明 |
+|------|--------|------|
+| StashDB UUID 相等 | high | 本地 stashdb stash_id = JAVStash 演员 URLs 中的 stashdb.org/performers/<uuid>（硬证据） |
+| URL 交集 ≥2 | high | 本地与 JAVStash 有 ≥2 条相同链接；单条可能是工作室网站，不作证据 |
+| 名称精确命中 ≥3 票 | high | 本地主名/别名与 JAVStash 名称/别名 NFC 归一化后精确相等 |
+| 仅 2 个名称且全命中 | high | 需至少 1 个名称归一化后 ≥3 字符（防 'Ai'/'An' 类共享短名撞车，否则 medium） |
+| 名称命中 + 生日完整相等 | high | 1993-08-16 完整日期相等 |
+| 名称命中 + 仅生日年份相等 | medium | AV 数据源生日常有 ±1 年误差 |
+| ≥3 个名称中命中 2 票 | medium | |
+| JAVStash 演员已删除 | 上限 medium | 已删除的 stash-box 演员通常已被合并 |
+
+说明：JAVStash `searchPerformer` 为模糊搜索（每词最多 10 条），"出现在搜索结果中"不算匹配，必须名称归一化后精确相等才计票。
+
 ## 应用效果
 
 每个成功应用的匹配会：
 
-1. 在本地演员的 `stash_ids` 中添加 `{endpoint: "https://javstash.org/graphql", stash_id: "javstash演员ID"}`
+1. 在本地演员的 `stash_ids` 中添加 `{endpoint: "https://javstash.org/graphql", stash_id: "javstash演员ID"}`（已有 JAVStash ID 则跳过）
 2. 将 JAVStash 演员名添加到本地演员的 `aliases`（如不存在）
 3. 将 JAVStash 演员的所有别名添加到本地演员的 `aliases`（如不存在）
-4. **不修改**本地演员的现有名字
+4. 将 JAVStash 演员的所有链接（URLs）追加到本地演员的 `urls`（去重合并，已有链接保留，无新增时不提交该字段）
+5. **不修改**本地演员的现有名字
 
 ## 文件说明
 

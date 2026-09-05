@@ -1,0 +1,10 @@
+name: Performer Merge
+description: Find performers with duplicate names/aliases and merge them into one performer.
+version: 1.0.0
+url: https://discourse.stashapp.cc/
+errLog: info
+ui:
+  javascript:
+    - performerMerge.js
+  css:
+    - performerMerge.css

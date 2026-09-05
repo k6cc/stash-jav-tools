@@ -1,0 +1,475 @@
+/* performerMerge - Styles */
+
+.pdm-panel-container {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: rgba(0, 0, 0, 0.75) !important;
+  z-index: 99999 !important;
+  overflow: auto !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  padding: 30px 16px !important;
+}
+
+.pdm-panel-root {
+  max-width: 900px !important;
+  width: 100% !important;
+  background: #2b2b2b !important;
+  border-radius: 8px !important;
+  padding: 20px !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  color: #e0e0e0 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+}
+
+.pdm-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  margin-bottom: 16px !important;
+  padding-bottom: 12px !important;
+  border-bottom: 1px solid #444 !important;
+  flex-shrink: 0 !important;
+}
+
+.pdm-title {
+  margin: 0 !important;
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  color: #e0e0e0 !important;
+}
+
+.pdm-header-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.pdm-close-btn {
+  background: transparent !important;
+  border: 1px solid #444 !important;
+  border-radius: 4px !important;
+  color: #999 !important;
+  cursor: pointer !important;
+  padding: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: color 0.15s, border-color 0.15s !important;
+}
+
+.pdm-close-btn:hover {
+  color: #f03e3e !important;
+  border-color: #f03e3e !important;
+}
+
+.pdm-warn {
+  background: rgba(245, 159, 0, 0.12) !important;
+  border: 1px solid rgba(245, 159, 0, 0.5) !important;
+  color: #ffa94d !important;
+  border-radius: 6px !important;
+  padding: 10px 14px !important;
+  font-size: 13px !important;
+  margin-bottom: 16px !important;
+}
+
+.pdm-config {
+  background: #2b2b2b !important;
+  border-radius: 8px !important;
+  padding: 16px !important;
+  margin-bottom: 20px !important;
+}
+
+.pdm-config-status {
+  font-size: 13px !important;
+  color: #999 !important;
+  margin-bottom: 12px !important;
+}
+
+.pdm-actions {
+  margin-top: 4px !important;
+}
+
+.pdm-nav-btn-icon {
+  background-color: #7048e8 !important;
+  border-color: #7048e8 !important;
+  color: #fff !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+}
+
+.pdm-nav-btn-icon:hover {
+  background-color: #6741d9 !important;
+  border-color: #6741d9 !important;
+}
+
+.pdm-nav-btn-icon svg {
+  display: block !important;
+}
+
+.pdm-btn {
+  padding: 6px 16px !important;
+  border: none !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  font-family: inherit !important;
+  transition: background 0.15s, opacity 0.15s !important;
+}
+
+.pdm-btn-primary {
+  background: #7048e8 !important;
+  color: #fff !important;
+}
+
+.pdm-btn-primary:hover {
+  background: #6741d9 !important;
+}
+
+.pdm-btn-primary:disabled {
+  background: #555 !important;
+  cursor: not-allowed !important;
+  opacity: 0.6 !important;
+}
+
+.pdm-btn-merge {
+  background: #37b24d !important;
+  color: #fff !important;
+}
+
+.pdm-btn-merge:hover {
+  background: #2f9e44 !important;
+}
+
+.pdm-btn-merge:disabled {
+  background: #555 !important;
+  cursor: not-allowed !important;
+  opacity: 0.6 !important;
+}
+
+.pdm-btn-danger {
+  background: #f03e3e !important;
+  color: #fff !important;
+}
+
+.pdm-btn-danger:hover {
+  background: #e03131 !important;
+}
+
+.pdm-btn-sm {
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+}
+
+.pdm-progress {
+  margin: 10px 0 16px !important;
+}
+
+.pdm-progress-bar {
+  background: #7048e8 !important;
+  height: 24px !important;
+  border-radius: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #fff !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  transition: width 0.3s !important;
+  min-width: 60px !important;
+}
+
+.pdm-progress-title {
+  font-size: 12px !important;
+  color: #999 !important;
+  margin-top: 4px !important;
+}
+
+.pdm-stats {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 10px !important;
+  margin-bottom: 16px !important;
+}
+
+.pdm-stat {
+  background: #1a1a1a !important;
+  border-radius: 6px !important;
+  padding: 10px 8px !important;
+  text-align: center !important;
+  min-width: 0 !important;
+}
+
+.pdm-stat-num {
+  font-size: 22px !important;
+  font-weight: bold !important;
+}
+
+.pdm-stat-label {
+  font-size: 11px !important;
+  color: #999 !important;
+  margin-top: 2px !important;
+}
+
+.pdm-tabs {
+  display: flex !important;
+  gap: 4px !important;
+  margin-bottom: 16px !important;
+  border-bottom: 1px solid #333 !important;
+  flex-wrap: wrap !important;
+}
+
+.pdm-tab {
+  padding: 6px 14px !important;
+  cursor: pointer !important;
+  border-bottom: 2px solid transparent !important;
+  color: #999 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  transition: color 0.15s, border-color 0.15s !important;
+}
+
+.pdm-tab:hover {
+  color: #ccc !important;
+}
+
+.pdm-tab-active {
+  color: #e0e0e0 !important;
+  border-bottom-color: #7048e8 !important;
+}
+
+.pdm-content {
+  min-height: 200px !important;
+}
+
+.pdm-chunked {
+  width: 100% !important;
+}
+
+.pdm-sentinel {
+  text-align: center !important;
+  padding: 12px !important;
+  color: #666 !important;
+  font-size: 12px !important;
+}
+
+/* 分组卡片 */
+.pdm-group {
+  background: #1a1a1a !important;
+  border-radius: 6px !important;
+  padding: 10px 12px !important;
+  margin-bottom: 10px !important;
+  border: 1px solid #2a2a2a !important;
+}
+
+.pdm-group-done {
+  opacity: 0.55 !important;
+}
+
+.pdm-group-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  margin-bottom: 8px !important;
+  min-width: 0 !important;
+}
+
+.pdm-shared-name {
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  color: #e0e0e0 !important;
+  word-break: break-all !important;
+  overflow-wrap: break-word !important;
+  min-width: 0 !important;
+}
+
+.pdm-member-count {
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  color: #888 !important;
+}
+
+.pdm-card-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-shrink: 0 !important;
+}
+
+/* 演员行（label 可点击整行选择目标） */
+.pdm-perf-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.pdm-perf-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 6px 8px !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  border-left: 3px solid transparent !important;
+  min-width: 0 !important;
+  transition: background 0.15s, border-color 0.15s !important;
+}
+
+.pdm-perf-row:hover {
+  background: #222 !important;
+}
+
+.pdm-row-target {
+  border-left-color: #7048e8 !important;
+  background: rgba(112, 72, 232, 0.08) !important;
+}
+
+.pdm-row-target:hover {
+  background: rgba(112, 72, 232, 0.14) !important;
+}
+
+.pdm-radio {
+  accent-color: #7048e8 !important;
+  width: 15px !important;
+  height: 15px !important;
+  flex-shrink: 0 !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+}
+
+.pdm-perf-info {
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+.pdm-perf-name {
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  color: #e0e0e0 !important;
+  word-break: break-all !important;
+  overflow-wrap: break-word !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+
+.pdm-perf-disamb {
+  font-weight: 400 !important;
+  color: #888 !important;
+}
+
+.pdm-perf-badges {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+}
+
+.pdm-badge {
+  padding: 2px 8px !important;
+  border-radius: 3px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  white-space: nowrap !important;
+  border: 1px solid transparent !important;
+}
+
+.pdm-badge-count {
+  background: rgba(136, 136, 136, 0.1) !important;
+  border-color: rgba(136, 136, 136, 0.4) !important;
+  color: #aaa !important;
+}
+
+.pdm-badge-stash {
+  background: rgba(51, 154, 240, 0.12) !important;
+  border-color: rgba(51, 154, 240, 0.5) !important;
+  color: #74c0fc !important;
+}
+
+.pdm-badge-fav {
+  background: rgba(240, 62, 128, 0.12) !important;
+  border-color: rgba(240, 62, 128, 0.5) !important;
+  color: #f783ac !important;
+}
+
+.pdm-badge-target {
+  background: rgba(112, 72, 232, 0.15) !important;
+  border-color: rgba(112, 72, 232, 0.6) !important;
+  color: #b197fc !important;
+}
+
+.pdm-badge-done {
+  background: rgba(55, 178, 77, 0.12) !important;
+  border-color: rgba(55, 178, 77, 0.5) !important;
+  color: #51cf66 !important;
+}
+
+.pdm-badge-fail {
+  background: rgba(240, 62, 62, 0.12) !important;
+  border-color: rgba(240, 62, 62, 0.5) !important;
+  color: #ff8787 !important;
+}
+
+.pdm-empty {
+  text-align: center !important;
+  color: #666 !important;
+  padding: 40px !important;
+  font-size: 14px !important;
+}
+
+.pdm-log {
+  background: #111 !important;
+  border-radius: 4px !important;
+  padding: 12px !important;
+  max-height: 400px !important;
+  overflow-y: auto !important;
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace !important;
+  font-size: 12px !important;
+  color: #aaa !important;
+  line-height: 1.6 !important;
+}
+
+.pdm-log > div {
+  border-bottom: 1px solid #1a1a1a !important;
+  padding: 2px 0 !important;
+}
+
+@media (max-width: 640px) {
+  .pdm-stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .pdm-group-header {
+    flex-wrap: wrap !important;
+  }
+
+  .pdm-perf-row {
+    flex-wrap: wrap !important;
+  }
+
+  .pdm-perf-info {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    order: 2 !important;
+  }
+
+  .pdm-perf-badges {
+    flex: 1 1 100% !important;
+    justify-content: flex-start !important;
+    order: 3 !important;
+  }
+
+  .pdm-radio {
+    order: 1 !important;
+  }
+}

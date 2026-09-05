@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.1.0";
+  var PLUGIN_VERSION = "1.1.1";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -356,69 +356,6 @@
     return best;
   }
 
-  // ==================== 调试：大组诊断 ====================
-
-  // 大组（成员数 ≥ DEBUG_BIG_GROUP）扫描后输出诊断：
-  // 日志页 — 连接键 Top10 + 最大连接键的拥有者样本（区分经名字/别名贡献）；
-  // 浏览器控制台 — 完整 JSON（前缀 [pdm-debug]，F12 查看）。
-  // 用于诊断超大组成因（大量同名不同人的短名 / 公共别名桥接）。
-  var DEBUG_BIG_GROUP = 8;
-
-  function debugBigGroups(groups) {
-    groups.forEach(function (g) {
-      if (g.members.length < DEBUG_BIG_GROUP) return;
-
-      // 每个共享键的拥有者（via 标记该演员经名字还是别名贡献此键）
-      var hubs = {}; // norm -> { key, owners: [{ id, name, via, endpoints }] }
-      g.members.forEach(function (p) {
-        var seenK = {};
-        perfKeys(p).forEach(function (k) {
-          if (!g.sharedNorms || !g.sharedNorms[k.norm] || seenK[k.norm]) return;
-          seenK[k.norm] = true;
-          if (!hubs[k.norm]) hubs[k.norm] = { key: k.display, owners: [] };
-          hubs[k.norm].owners.push({
-            id: p.id,
-            name: p.name,
-            via: k.isName ? "name" : "alias",
-            endpoints: (p.stash_ids || []).map(function (s) { return endpointShort(s.endpoint) + ":" + s.stash_id; }),
-          });
-        });
-      });
-      var hubArr = [];
-      for (var n in hubs) hubArr.push(hubs[n]);
-      hubArr.sort(function (a, b) { return b.owners.length - a.owners.length; });
-
-      addLog(tc("调试", "Debug") + ": " + groupLabel(g) + " — " + g.members.length
-        + tc(" 个成员, ", " members, ") + hubArr.length + tc(" 个连接键", " hub keys"));
-
-      var top = hubArr.slice(0, 10).map(function (h) {
-        return "「" + h.key + "」×" + h.owners.length;
-      });
-      if (hubArr.length > 10) top.push("+" + (hubArr.length - 10));
-      addLog(tc("调试", "Debug") + ": " + tc("连接键 Top: ", "Hub keys: ") + top.join(" | "));
-
-      hubArr.slice(0, 5).forEach(function (h) {
-        var sample = h.owners.slice(0, 8).map(function (o) {
-          return o.id + " " + o.name + (o.via === "name" ? "(" + tc("名", "N") + ")" : "(" + tc("别名", "A") + ")");
-        });
-        addLog(tc("调试", "Debug") + ": " + tc("键", "Key") + "「" + h.key + "」" + tc(" 拥有者(前8): ", " owners(8): ")
-          + sample.join(" | "));
-      });
-
-      addLog(tc("调试", "Debug") + ": " + tc("完整成员与连接键数据已输出到浏览器控制台（F12，前缀 [pdm-debug]）",
-        "Full dump in browser console (F12, prefix [pdm-debug])"));
-
-      console.log("[pdm-debug] group " + g.key, {
-        label: groupLabel(g),
-        memberCount: g.members.length,
-        members: g.members.map(function (p) {
-          return { id: p.id, name: p.name, alias_list: p.alias_list, stash_ids: p.stash_ids };
-        }),
-        hubs: hubArr.map(function (h) { return { key: h.key, owners: h.owners }; }),
-      });
-    });
-  }
-
   // ==================== 扫描 ====================
 
   var PERF_FIELDS = "id name disambiguation alias_list urls gender birthdate death_date ethnicity country eye_color height_cm weight measurements fake_tits penis_length circumcised career_start career_end tattoos piercings details hair_color favorite rating100 tags { id } stash_ids { endpoint stash_id } custom_fields scene_count image_count gallery_count created_at";
@@ -456,7 +393,6 @@
           shortNames.length + " shared short-name keys (" + Object.keys(snPerf).length
           + " performers, " + snDel + " aliases), see the Short Names tab"));
       }
-      debugBigGroups(groups);
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
       setState({
         groups: groups, shortNames: shortNames, performers: performers,

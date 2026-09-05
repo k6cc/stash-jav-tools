@@ -10,7 +10,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
 | [JavStashLinker](./JavStashLinker/) | 1.1.2 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 |
-| [performerMerge](./performerMerge/) | 1.0.0 | 纯 UI | 重名演员检测与合并：名字+别名归一化分组，选择目标后一键合并（无需 Python） |
+| [performerMerge](./performerMerge/) | 1.0.1 | 纯 UI | 重名演员检测与合并：名字+别名+stash_id 分组（保留消歧后缀），选择目标后一键合并（无需 Python） |
 | [tagMerge](./tagMerge/) | 1.0.0 | Python 任务 | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，源名保留为别名 |
 
 ## 安装

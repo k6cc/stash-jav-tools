@@ -123,8 +123,11 @@
   function normalizeName(name) {
     if (!name) return "";
     var s = String(name).normalize("NFC").toLowerCase().trim();
+    // 全角括号统一为半角（数据源混用），其余保留
+    s = s.replace(/（/g, "(").replace(/）/g, ")");
     s = s.replace(/\s+/g, "");
-    s = s.replace(/[（(].*?[)）]/g, ""); // 去掉括号消歧后缀
+    // 注意：不剥离 "(2)" 消歧后缀 — 该后缀语义是「同名不同人」，
+    // 剥离会把不同演员并成一组（曾产生 169 人大组误报）
     return s;
   }
 
@@ -150,7 +153,7 @@
     return out;
   }
 
-  // 并查集：共享任一名称键的演员连成一组（传递闭合）
+  // 并查集：共享任一名称键或 stash_id 的演员连成一组（传递闭合）
   function buildGroups(performers) {
     var n = performers.length;
     var parent = [];
@@ -164,11 +167,19 @@
       if (ra !== rb) parent[rb] = ra;
     }
 
-    var keyOwners = {}; // norm -> [演员索引]
+    var keyOwners = {}; // 键（名称 norm 或 "sid:endpoint|stash_id"）-> [演员索引]
     performers.forEach(function (p, i) {
       perfKeys(p).forEach(function (k) {
         if (!keyOwners[k.norm]) keyOwners[k.norm] = [];
         keyOwners[k.norm].push(i);
+      });
+      // stash_id 信号：同 endpoint + 同 stash_id = 同一外部实体，
+      // 比名字更硬的证据（可命中名字完全不同的同人，如罗马音 vs 日文名）
+      (p.stash_ids || []).forEach(function (sid) {
+        if (!sid.endpoint || !sid.stash_id) return;
+        var k = "sid:" + sid.endpoint + "|" + sid.stash_id;
+        if (!keyOwners[k]) keyOwners[k] = [];
+        keyOwners[k].push(i);
       });
     });
     for (var norm in keyOwners) {
@@ -193,25 +204,51 @@
       // 组内共享名称（被 ≥2 个成员使用的键），显示名优先取真实演员名
       var keyCount = {};
       var keyDisplay = {};
+      var sidCount = {};
       members.forEach(function (p) {
         perfKeys(p).forEach(function (k) {
           keyCount[k.norm] = (keyCount[k.norm] || 0) + 1;
           if (!keyDisplay[k.norm] || (k.isName && !keyDisplay[k.norm].isName)) keyDisplay[k.norm] = k;
         });
+        (p.stash_ids || []).forEach(function (sid) {
+          if (!sid.endpoint || !sid.stash_id) return;
+          var k = sid.endpoint + "|" + sid.stash_id;
+          sidCount[k] = (sidCount[k] || 0) + 1;
+        });
       });
       var shared = [];
+      var sharedNorms = {};
       for (var nk in keyCount) {
-        if (keyCount[nk] >= 2) shared.push(keyDisplay[nk].display);
+        if (keyCount[nk] >= 2) {
+          shared.push(keyDisplay[nk].display);
+          sharedNorms[nk] = true;
+        }
+      }
+      // 组内共享 stash_id（被 ≥2 个成员使用）
+      var sharedStashIds = [];
+      var sharedSidKeys = {};
+      for (var sk in sidCount) {
+        if (sidCount[sk] >= 2) {
+          sharedSidKeys[sk] = true;
+          var bar = sk.indexOf("|");
+          sharedStashIds.push({ endpoint: sk.slice(0, bar), stash_id: sk.slice(bar + 1) });
+        }
       }
 
-      groups.push({ key: "g" + root, members: members, sharedNames: shared });
+      groups.push({
+        key: "g" + root, members: members,
+        sharedNames: shared, sharedNorms: sharedNorms,
+        sharedStashIds: sharedStashIds, sharedSidKeys: sharedSidKeys,
+      });
     }
 
-    // 组内人数降序，同人数按首个共享名排序
+    // 组内人数降序，同人数按首个共享名（无共享名取首成员名）排序
     groups.sort(function (a, b) {
       var d = b.members.length - a.members.length;
       if (d !== 0) return d;
-      return String(a.sharedNames[0] || "").localeCompare(String(b.sharedNames[0] || ""));
+      var an = String(a.sharedNames[0] || (a.members[0] && a.members[0].name) || "");
+      var bn = String(b.sharedNames[0] || (b.members[0] && b.members[0].name) || "");
+      return an.localeCompare(bn);
     });
     return groups;
   }
@@ -441,8 +478,16 @@
     return msg;
   }
 
+  // 共享 stash_id 的短标签（组头部/日志兜底显示用）
+  function stashIdLabel(sid) {
+    if (!sid || !sid.endpoint) return "";
+    return endpointShort(sid.endpoint) + ": " + String(sid.stash_id).slice(0, 8);
+  }
+
   function groupLabel(g) {
-    var name = g.sharedNames[0] || (g.members[0] && g.members[0].name) || "?";
+    var name = g.sharedNames[0]
+      || stashIdLabel(g.sharedStashIds && g.sharedStashIds[0])
+      || (g.members[0] && g.members[0].name) || "?";
     return name + " (" + g.members.length + ")";
   }
 
@@ -660,6 +705,10 @@
 
     var names = g.sharedNames.slice(0, 2).join(" / ");
     if (g.sharedNames.length > 2) names += " +" + (g.sharedNames.length - 2);
+    if (!names && g.sharedStashIds && g.sharedStashIds.length) {
+      // 无共享名称：按 stash_id 匹配的组（名字不同但同外部实体）
+      names = g.sharedStashIds.slice(0, 2).map(stashIdLabel).join(" / ");
+    }
     if (!names) names = (g.members[0] && g.members[0].name) || "";
 
     var headerRight = el("div", "pdm-card-actions");
@@ -675,13 +724,17 @@
     }
 
     var card = el("div", "pdm-group" + (isMerged ? " pdm-group-done" : ""));
-    card.appendChild(el("div", "pdm-group-header", [
-      el("div", "pdm-shared-name", [
-        names,
-        el("span", "pdm-member-count", tc(" · " + g.members.length + " 个演员", " · " + g.members.length + " performers")),
-      ]),
-      headerRight,
-    ]));
+    var nameCell = el("div", "pdm-shared-name", [
+      names,
+      el("span", "pdm-member-count", tc(" · " + g.members.length + " 个演员", " · " + g.members.length + " performers")),
+    ]);
+    // 仅按 stash_id 匹配的组（名字不同）显示徽章，提示匹配依据
+    if (!g.sharedNames.length && g.sharedStashIds && g.sharedStashIds.length) {
+      nameCell.appendChild(el("span", "pdm-badge pdm-badge-stash", tc("stash_id 匹配", "stash_id match"), {
+        title: tc("名字不同但共享 stash_id（同一外部实体）", "Different names but share stash_id (same external entity)"),
+      }));
+    }
+    card.appendChild(el("div", "pdm-group-header", [nameCell, headerRight]));
 
     var list = el("div", "pdm-perf-list");
     g.members.forEach(function (p) {
@@ -697,6 +750,17 @@
     var hoverParts = ["ID: " + p.id];
     if (aliases.length) hoverParts.push(tc("别名", "Aliases") + ": " + aliases.join(", "));
     if (p.created_at) hoverParts.push(tc("创建", "Created") + ": " + String(p.created_at).slice(0, 10));
+    // 匹配原因：该演员与组内其他成员共享的名称键（悬停查看，便于核对分组是否合理）
+    if (g.sharedNorms) {
+      var matched = perfKeys(p).filter(function (k) { return g.sharedNorms[k.norm]; })
+        .map(function (k) { return k.display; });
+      if (matched.length) hoverParts.push(tc("组内重名", "Matched") + ": " + matched.join(", "));
+    }
+    if (g.sharedSidKeys) {
+      var sidMatched = (p.stash_ids || []).filter(function (s) { return g.sharedSidKeys[s.endpoint + "|" + s.stash_id]; })
+        .map(function (s) { return endpointShort(s.endpoint) + ": " + s.stash_id; });
+      if (sidMatched.length) hoverParts.push(tc("同 stash_id", "Same stash_id") + ": " + sidMatched.join(", "));
+    }
 
     var row = el("label", "pdm-perf-row" + (isTarget ? " pdm-row-target" : ""), null, {
       "data-pid": String(p.id),

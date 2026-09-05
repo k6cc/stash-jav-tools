@@ -8,10 +8,6 @@
   height: 100% !important;
   background: rgba(0, 0, 0, 0.75) !important;
   z-index: 99999 !important;
-  overflow: auto !important;
-  /* 常驻滚动条留白：切换标签页（如日志页内容变高出现滚动条）时，
-     居中弹窗不会因内容区变窄而整体左移 */
-  scrollbar-gutter: stable !important;
   display: flex !important;
   align-items: flex-start !important;
   justify-content: center !important;
@@ -21,6 +17,12 @@
 .pdm-panel-root {
   max-width: 900px !important;
   width: 100% !important;
+  max-height: calc(100vh - 60px) !important;
+  overflow-y: auto !important;
+  /* 面板内部滚动（外层不滚）：滚动条常驻留白防止切换标签页时内容区变窄导致弹窗位移 */
+  scrollbar-gutter: stable !important;
+  /* 内容低于屏幕高度时上下居中（flex-start + auto margin），超出时自动退化为顶对齐 */
+  margin: auto 0 !important;
   background: #2b2b2b !important;
   border-radius: 8px !important;
   padding: 20px !important;
@@ -54,21 +56,22 @@
 }
 
 .pdm-close-btn {
-  background: transparent !important;
-  border: 1px solid #444 !important;
+  background: #555 !important;
+  border: none !important;
   border-radius: 4px !important;
-  color: #999 !important;
+  color: #ddd !important;
   cursor: pointer !important;
   padding: 4px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  transition: color 0.15s, border-color 0.15s !important;
+  flex-shrink: 0 !important;
+  transition: background 0.15s, color 0.15s !important;
 }
 
 .pdm-close-btn:hover {
-  color: #f03e3e !important;
-  border-color: #f03e3e !important;
+  background: #f03e3e !important;
+  color: #fff !important;
 }
 
 .pdm-warn {
@@ -115,6 +118,8 @@
   display: block !important;
 }
 
+/* 大按钮（合并全部/开始扫描等）：自然高度，与 JavStashLinker 同尺寸；
+   等高基座（inline-flex + line-height:1 + 定高）只用于小按钮，不压扁大按钮 */
 .pdm-btn {
   padding: 6px 16px !important;
   border: none !important;
@@ -123,6 +128,7 @@
   font-size: 13px !important;
   font-weight: 600 !important;
   font-family: inherit !important;
+  flex-shrink: 0 !important;
   transition: background 0.15s, opacity 0.15s !important;
 }
 
@@ -181,9 +187,33 @@
   background: #e03131 !important;
 }
 
+/* 状态展示（透明框语义）：无待合并/已全部清理等长期状态，不可点击 */
+.pdm-btn-state {
+  padding: 3px 10px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  font-family: inherit !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 22px !important;
+  white-space: nowrap !important;
+  border-radius: 3px !important;
+  border: 1px solid rgba(136, 136, 136, 0.4) !important;
+  background: rgba(136, 136, 136, 0.1) !important;
+  color: #aaa !important;
+  cursor: default !important;
+}
+
 .pdm-btn-sm {
   padding: 3px 10px !important;
   font-size: 11px !important;
+  height: 22px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  line-height: 1 !important;
 }
 
 .pdm-progress {
@@ -401,6 +431,12 @@
   font-weight: 600 !important;
   white-space: nowrap !important;
   border: 1px solid transparent !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 22px !important;
+  cursor: default !important;
 }
 
 .pdm-badge-count {
@@ -575,8 +611,18 @@
     grid-template-columns: repeat(2, 1fr) !important;
   }
 
+  .pdm-header {
+    flex-wrap: wrap !important;
+  }
+
   .pdm-group-header {
     flex-wrap: wrap !important;
+  }
+
+  /* 组头 actions 与组名换行后右对齐，与宽屏时按钮位置呼应 */
+  .pdm-card-actions {
+    margin-left: auto !important;
+    justify-content: flex-end !important;
   }
 
   .pdm-perf-row {
@@ -589,13 +635,27 @@
     order: 2 !important;
   }
 
+  /* badge 换行到信息下方右侧，与宽屏位置呼应 */
   .pdm-perf-badges {
     flex: 1 1 100% !important;
-    justify-content: flex-start !important;
+    justify-content: flex-end !important;
     order: 3 !important;
   }
 
   .pdm-radio {
     order: 1 !important;
+  }
+}
+
+/* 极窄屏：弹窗两侧铺满（外层 padding 清零、圆角取消） */
+@media (max-width: 480px) {
+  .pdm-panel-container {
+    padding: 0 !important;
+  }
+
+  .pdm-panel-root {
+    border-radius: 0 !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
   }
 }

@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.1.2";
+  var PLUGIN_VERSION = "1.2.0";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -768,13 +768,12 @@
     hideTip();
     var root = document.getElementById("pdm-panel-root");
     if (!root) return;
-    var scrollContainer = document.getElementById("pdm-panel-container");
-    var scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+    var scrollTop = root.scrollTop;
     root.innerHTML = "";
     root.appendChild(buildPanel());
     // scrollTop=0（面板刚打开/未滚动）时跳过写入：对刚重建的大面板写 scrollTop
     // 会强制浏览器同步计算整棵子树布局（~40ms Forced reflow），仅控制台告警无害但完全可免
-    if (scrollContainer && scrollTop > 0) scrollContainer.scrollTop = scrollTop;
+    if (scrollTop > 0) root.scrollTop = scrollTop;
   }
 
   function el(tag, className, children, attrs) {
@@ -840,10 +839,12 @@
         el("span", "pdm-version", "v" + PLUGIN_VERSION),
       ]),
       el("div", "pdm-header-actions", [
-        el("button", "pdm-btn pdm-btn-primary", tc("合并全部", "Merge All"), {
-          onclick: handleMergeAll,
-          disabled: _state.merging || _state.scanning || _state.cleaning || pendingGroups().length === 0,
-        }),
+        _state.groups && pendingGroups().length === 0
+          ? el("span", "pdm-btn-state", tc("无待合并", "Nothing to Merge"), { title: "" })
+          : el("button", "pdm-btn pdm-btn-primary", tc("合并全部", "Merge All"), {
+              onclick: handleMergeAll,
+              disabled: _state.merging || _state.scanning || _state.cleaning || !_state.groups,
+            }),
         closeBtn,
       ]),
     ]));
@@ -1007,12 +1008,14 @@
     frag.appendChild(el("div", "pdm-config", [
       el("div", "pdm-config-status", statusText),
       el("div", "pdm-actions", [
-        el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
-          onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
-          disabled: _state.cleaning || _state.merging || _state.scanning || !pending.length,
-          title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
-            "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched. Cards collapse afterwards; no automatic rescan."),
-        }),
+        pending.length
+          ? el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
+              onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
+              disabled: _state.cleaning || _state.merging || _state.scanning,
+              title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
+                "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched. Cards collapse afterwards; no automatic rescan."),
+            })
+          : el("span", "pdm-btn-state", tc("已全部清理", "All Cleaned")),
       ]),
     ]));
 

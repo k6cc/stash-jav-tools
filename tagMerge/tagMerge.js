@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.0.0";
+  var PLUGIN_VERSION = "2.0.1";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -1214,23 +1214,34 @@
       return;
     }
 
-    var payload = {};
+    var pairs = [];
+    var byKey = {};
     for (var mk in ed.meta) {
-      if (Object.prototype.hasOwnProperty.call(ed.meta, mk)) payload[mk] = ed.meta[mk];
+      if (Object.prototype.hasOwnProperty.call(ed.meta, mk)) { pairs.push([mk, ed.meta[mk]]); byKey[mk] = true; }
     }
     var count = 0;
     ed.items.forEach(function (it) {
       var t = it.target.trim();
       if (!t || !it.sources.length) return;
-      payload[t] = it.sources.slice();
       count++;
+      if (byKey[t]) {
+        for (var i = 0; i < pairs.length; i++) {
+          if (pairs[i][0] === t) { pairs[i][1] = it.sources.slice(); break; }
+        }
+      } else {
+        byKey[t] = true;
+        pairs.push([t, it.sources.slice()]);
+      }
     });
     if (!count && ed.items.length) {
       if (!confirm(tc("所有映射都为空 — 导出空表后扫描将匹配不到任何分组，继续？",
           "All entries are empty — exporting an empty table means scans match nothing. Continue?"))) return;
     }
 
-    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    // 保序拼装：JSON.stringify 会把纯数字键（如 "69"）强制排到对象最前，破坏文件键序
+    var blob = new Blob([pairs.length ? "{\n" + pairs.map(function (p) {
+      return "  " + JSON.stringify(p[0]) + ": " + JSON.stringify(p[1], null, 2).split("\n").join("\n  ");
+    }).join(",\n") + "\n}" : "{}"], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;

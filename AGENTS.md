@@ -74,6 +74,16 @@
 - 触屏设备或 ≤640px：仅装饰性交互（拖拽把手、标签清除 ×）可隐藏，功能按钮一律保留
 - 表格类数据（如合并对照表）在窄屏改用横向滚动或堆叠布局，不用缩字号硬塞
 
+### 多语言（i18n，所有带 UI 的插件通用）
+
+**双语言模型：中文 / 英文**，跟随 Stash 界面语言，不引入第三方语言与翻译文件。三插件（JavStashLinker / performerMerge / tagMerge）共用同一实现，新插件照抄：
+
+- **调用约定**：模块级 `tc(zh, en)` 函数，`_intlLocale` 以 `zh` 开头返回中文，否则英文。**所有用户可见字符串必须包 `tc()` 且两个参数都写**：按钮文案、标题、tooltip（`title` 属性）、`alert`/`confirm` 弹窗、badge、placeholder、日志条目、空态提示
+- **语言来源**：`initIntlBridge()` 通过 `PluginApi` 挂 React 组件读 `api.libraries.Intl.useIntl().locale`，同步到 `_intlLocale`；桥接失败（PluginApi 不可用/异常）静默降级为英文默认——不允许抛错阻塞插件加载
+- **动态文案**：拼接变量写法 `tc("已合并 " + n + " 个", "Merged " + n)`，两种语言各自完整组句，不抽词根
+- **不翻译的内容**：数据值（tag/演员/工作室名）、GraphQL 语句、`console.log`（前缀用 `[jsm]`/`[pdm]`/`[tgm]` 等插件缩写）、CSS 类名、localStorage 键
+- **弹窗与确认框**：`confirm()` 用于破坏性/批量操作前置确认，文案必须双语且包含关键数字（组数/源数/将发生什么）；`alert()` 仅用于错误与不可继续的提示；操作结果提示优先走面板内状态行（分色），不用弹窗
+
 ## 其他
 
 - `.gitignore` 已忽略 `__pycache__` 与备份文件，不要提交

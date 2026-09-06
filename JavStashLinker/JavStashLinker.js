@@ -1379,8 +1379,6 @@
 
   // ==================== Manual Search UI ====================
 
-  var _manualFilterTimer = null;
-
   function buildManualTab() {
     var mt = _state.manualTab;
     var wrap = el("div", "jsm-manual");
@@ -1391,18 +1389,24 @@
       placeholder: tc("筛选演员（名称/别名）", "Filter performers (name/alias)"),
       oninput: function (e) {
         if (e.isComposing) return;
-        clearTimeout(_manualFilterTimer);
-        var v = e.target.value;
-        _manualFilterTimer = setTimeout(function () { setManualTab({ listFilter: v }); }, 250);
+        if (e.target.value !== _state.manualTab.listFilter) setManualTab({ listFilter: e.target.value });
       },
     });
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter" && !e.isComposing) {
-        clearTimeout(_manualFilterTimer);
-        setManualTab({ listFilter: input.value });
-      }
+    input.addEventListener("compositionend", function () {
+      if (input.value !== _state.manualTab.listFilter) setManualTab({ listFilter: input.value });
     });
-    wrap.appendChild(el("div", "jsm-manual-searchrow", [input]));
+    var inputWrap = el("div", "jsm-input-wrap", [input]);
+    if ((mt.listFilter || "").length > 0) {
+      inputWrap.appendChild(el("button", "jsm-input-clear", "×", {
+        title: tc("清除筛选", "Clear filter"),
+        onclick: function () {
+          setManualTab({ listFilter: "" });
+          var inp = document.querySelector(".jsm-manual-query");
+          if (inp) inp.focus();
+        },
+      }));
+    }
+    wrap.appendChild(el("div", "jsm-manual-searchrow", [inputWrap]));
 
     if (mt.listLoading) {
       wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));

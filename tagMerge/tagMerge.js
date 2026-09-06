@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.0.1";
+  var PLUGIN_VERSION = "2.0.2";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -169,18 +169,32 @@
   // ==================== 映射库 ====================
 
   // 解析 {目标: [源...]} 对象：返回条目列表、源名计数、_ 开头的元数据键（导出时原样带回）
-  function parseMapObject(data) {
+  // keyOrder 为可选的顶层键序数组 — JS 对象遍历（for...in / Object.keys）会把整数键（如 "69"）
+  // 强制排在最前、无视插入序，必须显式传入文本键序才能保持文件顺序；缺省时回退对象遍历序
+  function parseMapObject(data, keyOrder) {
+    var keys;
+    if (Array.isArray(keyOrder)) {
+      var seen = {};
+      keys = [];
+      keyOrder.forEach(function (k) {
+        if (Object.prototype.hasOwnProperty.call(data, k) && !seen[k]) { seen[k] = true; keys.push(k); }
+      });
+      Object.keys(data).forEach(function (k) {
+        if (!seen[k]) { seen[k] = true; keys.push(k); }
+      });
+    } else {
+      keys = Object.keys(data);
+    }
     var list = [];
     var names = 0;
     var meta = {};
-    for (var target in data) {
-      if (!Object.prototype.hasOwnProperty.call(data, target)) continue;
-      if (typeof target !== "string" || target.charAt(0) === "_") {
-        if (typeof target === "string" && target.charAt(0) === "_") meta[target] = data[target];
-        continue;
+    keys.forEach(function (target) {
+      if (target.charAt(0) === "_") {
+        meta[target] = data[target];
+        return;
       }
       var sources = data[target];
-      if (!Array.isArray(sources)) continue;
+      if (!Array.isArray(sources)) return;
       var cleaned = sources.filter(function (s) {
         return typeof s === "string" && s.trim();
       });
@@ -188,7 +202,7 @@
         names += cleaned.length;
         list.push({ target: target, sources: cleaned });
       }
-    }
+    });
     return { list: list, names: names, meta: meta };
   }
 
@@ -201,10 +215,16 @@
     return fetch(MAP_URL + "?t=" + Date.now(), { cache: "no-store" })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
+        return r.text();
       })
-      .then(function (data) {
-        var parsed = parseMapObject(data);
+      .then(function (text) {
+        // JSON.parse 后的对象遍历（for...in / Object.keys）会把整数键（如 "69"）
+        // 强制前置、无视文件顺序 — 从响应文本提取顶层键序传给 parseMapObject
+        var order = [];
+        var re = /^  "((?:[^"\\]|\\.)+)":/gm;
+        var m;
+        while ((m = re.exec(text)) !== null) order.push(m[1]);
+        var parsed = parseMapObject(JSON.parse(text), order);
         return { list: parsed.list, names: parsed.names, meta: parsed.meta };
       });
   }

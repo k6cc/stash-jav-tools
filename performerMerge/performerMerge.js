@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.3.0";
+  var PLUGIN_VERSION = "1.4.0";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -1413,6 +1413,7 @@
 
   function setupNavButton() {
     injectNavButton();
+    setupRefractTile();
     // SPA 导航后重新注入
     var origPush = history.pushState;
     var origReplace = history.replaceState;
@@ -1468,6 +1469,60 @@
     });
 
     nav.appendChild(container);
+    injectRefractTile();
+  }
+
+  // ==================== Refract 主题移动端适配 ====================
+  // Refract 在移动端隐藏原生导航，改用自建底部 dock + 抽屉（.refract-mobile-drawer）。
+  // 抽屉只镜像真实路由 a[href]（排除 javascript: 伪链接）或主题硬编码白名单按钮，
+  // 本插件按钮两者都不满足，因此按主题 action tile 结构自注入代理 tile：
+  // 抽屉/底部 dock 的点击逻辑会按 data-action-selector 把点击转发给源按钮，
+  // Settings → Interface → Refract → Mobile dock 的候选采集也会自动收录本 tile。
+
+  function setupRefractTile() {
+    if (window.__pdmRefractTileInit) return;
+    window.__pdmRefractTileInit = true;
+    var timer = null;
+    // 抽屉是 body 直接子元素：childList（非 subtree）捕捉其创建/销毁
+    new MutationObserver(function () {
+      clearTimeout(timer);
+      timer = setTimeout(injectRefractTile, 200);
+    }).observe(document.body, { childList: true });
+    injectRefractTile();
+  }
+
+  function injectRefractTile() {
+    var drawer = document.querySelector(".refract-mobile-drawer");
+    if (!drawer) return;
+    if (!drawer.__pdmTileObs) {
+      drawer.__pdmTileObs = true;
+      // 抽屉内 tile 被移除（源按钮暂时不在时主题 reconcile 会清除）后自动补注
+      new MutationObserver(function () {
+        clearTimeout(drawer.__pdmTileTimer);
+        drawer.__pdmTileTimer = setTimeout(injectRefractTile, 200);
+      }).observe(drawer, { childList: true });
+    }
+    if (drawer.querySelector('.refract-drawer-tile[data-action="pdm"]')) return;
+    if (!document.querySelector(".pdm-nav-btn-icon")) return;
+
+    var tile = document.createElement("a");
+    tile.className = "refract-drawer-tile";
+    tile.setAttribute("href", "#");
+    tile.setAttribute("data-action", "pdm");
+    tile.setAttribute("data-action-tile", "1");
+    tile.setAttribute("data-action-selector", ".pdm-nav-btn-icon");
+    tile.setAttribute("aria-label", "Performer Merge");
+    tile.setAttribute("title", "Performer Merge");
+    var icon = document.createElement("span");
+    icon.className = "refract-drawer-tile-icon";
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<circle cx="18" cy="18" r="3"/>' +
+      '<circle cx="6" cy="6" r="3"/>' +
+      '<path d="M6 21V9a9 9 0 0 0 9 9"/>' +
+      '</svg>';
+    tile.appendChild(icon);
+    drawer.appendChild(tile);
   }
 
   // ==================== 版本检查 ====================

@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.1.1";
+  var PLUGIN_VERSION = "2.2.0";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -745,30 +745,34 @@
     var isGroupIgnored = !!_state.ignoredGroups[g.key];
     var eff = effectiveSources(g);
 
-    var headerRight = el("div", "tgm-card-actions");
-    // 目标 tag 的引用计数徽章（合并按钮前）；已合并后不显示（合并后计数已变，避免误导）
-    if (!isMerged) appendCountBadges(headerRight, g.destCounts);
+    // 组头徽章（引用计数/状态）：始终留在组头行；窄屏换行时右对齐
+    var headerBadges = el("div", "tgm-card-badges");
+    // 组操作按钮（合并/忽略/恢复）：宽屏组头右侧、窄屏组底部右下角（CSS grid 控制）
+    var cardActions = el("div", "tgm-card-actions");
+    // 目标 tag 的引用计数徽章；已合并/已忽略后不显示（合并后计数已变；忽略后折叠仅留状态）
+    if (!isMerged && !isGroupIgnored) appendCountBadges(headerBadges, g.destCounts);
     if (isMerged) {
-      headerRight.appendChild(el("span", "tgm-badge tgm-badge-done", tc("已合并", "Merged")));
+      headerBadges.appendChild(el("span", "tgm-badge tgm-badge-done", tc("已合并", "Merged")));
     } else if (isGroupIgnored) {
-      headerRight.appendChild(el("span", "tgm-badge tgm-badge-state", tc("已忽略", "Ignored")));
-      headerRight.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("恢复", "Undo"), {
+      // 折叠态：状态徽章与「恢复」同容器，任意屏宽都同行
+      cardActions.appendChild(el("span", "tgm-badge tgm-badge-state", tc("已忽略", "Ignored")));
+      cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("恢复", "Undo"), {
         onclick: function () { delete _state.ignoredGroups[g.key]; render(); },
         disabled: _state.merging || _state.scanning,
         title: tc("恢复该组的合并资格（仅本次会话）", "Restore this group for merging (current session only)"),
       }));
     } else if (isEmptied || eff.length === 0) {
-      headerRight.appendChild(el("span", "tgm-badge tgm-badge-state", tc("无有效源", "No Sources"), {
+      headerBadges.appendChild(el("span", "tgm-badge tgm-badge-state", tc("无有效源", "No Sources"), {
         title: tc("源已被忽略或被先前的合并消耗", "Sources ignored or consumed by earlier merges"),
       }));
     } else {
-      if (isFailed) headerRight.appendChild(el("span", "tgm-badge tgm-badge-fail", tc("失败", "Failed")));
-      headerRight.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("合并", "Merge"), {
+      if (isFailed) headerBadges.appendChild(el("span", "tgm-badge tgm-badge-fail", tc("失败", "Failed")));
+      cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("合并", "Merge"), {
         onclick: function () { handleMergeGroup(g); },
         disabled: _state.merging || _state.scanning,
         title: tc("将该组源 tag 合并进目标", "Merge this group's source tags into the target"),
       }));
-      headerRight.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略", "Ignore"), {
+      cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略组", "Ignore Group"), {
         onclick: function () { _state.ignoredGroups[g.key] = true; render(); },
         disabled: _state.merging || _state.scanning,
         title: tc("折叠该组并从「合并全部」中排除（仅本次会话，重新扫描重置）", "Collapse this group and exclude it from Merge All (current session only; rescan resets)"),
@@ -780,7 +784,9 @@
       ? g.sources.filter(function (s) { return _consumed[s.id]; }).length
       : (isGroupIgnored ? g.sources.length : eff.length);
 
-    var card = el("div", "tgm-group" + (isMerged || isGroupIgnored || isEmptied || eff.length === 0 ? " tgm-group-done" : ""));
+    var card = el("div", "tgm-group"
+      + (isMerged || isGroupIgnored || isEmptied || eff.length === 0 ? " tgm-group-done" : "")
+      + (isGroupIgnored ? " tgm-group-ignored" : ""));
     card.appendChild(el("div", "tgm-group-header", [
       el("div", "tgm-shared-name", [
         el("span", "tgm-target-name", g.target),
@@ -789,11 +795,13 @@
         }) : null,
         el("span", "tgm-member-count", tc(" · " + srcCount + " 个源", " · " + srcCount + " sources")),
       ]),
-      headerRight,
+      headerBadges,
     ]));
 
-    // 合并完成/忽略后折叠：仅显示组头（目标名 · 源计数 + 状态徽章）
-    if (isMerged || isGroupIgnored) return card;
+    // 合并完成后折叠：仅显示组头（目标名 · 源计数 + 状态徽章）
+    if (isMerged) return card;
+    // 忽略后折叠：组头 + 操作按钮（恢复）
+    if (isGroupIgnored) { card.appendChild(cardActions); return card; }
 
     var list = el("div", "tgm-src-list");
 
@@ -838,6 +846,9 @@
     if (notes.length) {
       card.appendChild(el("div", "tgm-group-notes", notes.join(" · ")));
     }
+
+    // 操作按钮置于组尾：宽屏经 grid 上移至组头右侧，窄屏留在组底部右下角
+    if (cardActions.childNodes.length) card.appendChild(cardActions);
 
     return card;
   }

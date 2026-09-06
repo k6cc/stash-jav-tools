@@ -506,8 +506,16 @@
   min-width: 0 !important;
 }
 
-.tgm-search-input {
+.tgm-search-wrap {
+  position: relative !important;
   flex: 1 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.tgm-search-input {
+  width: 100% !important;
   min-width: 0 !important;
   background: #1a1a1a !important;
   border: 1px solid #444 !important;
@@ -515,8 +523,34 @@
   color: #e0e0e0 !important;
   font-size: 13px !important;
   font-family: inherit !important;
-  padding: 6px 10px !important;
+  padding: 6px 26px 6px 10px !important;
   transition: border-color 0.15s !important;
+}
+
+/* 输入框内右对齐的清除按钮（仅有内容时显示，JS 控制显隐） */
+.tgm-search-clear {
+  position: absolute !important;
+  right: 5px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 18px !important;
+  height: 18px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 3px !important;
+  color: #8f8f8f !important;
+  font-size: 12px !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+}
+
+.tgm-search-clear:hover {
+  color: #e0e0e0 !important;
 }
 
 .tgm-search-input:focus {
@@ -609,6 +643,49 @@
   overflow-wrap: anywhere !important;
 }
 
+/* 冲突源（组内归一化重复 / 跨条目重复）：黄字黄边 */
+.tgm-edit-src-conflict {
+  color: #ffa94d !important;
+  border-color: rgba(255, 169, 77, 0.55) !important;
+  background: rgba(255, 169, 77, 0.08) !important;
+}
+
+/* 清理 / 冲突项按钮：黄色实心（警告语义，可交互） */
+.tgm-btn-warn {
+  background: #a66b1e !important;
+  border-color: #a66b1e !important;
+  color: #fff !important;
+}
+.tgm-btn-warn:hover {
+  background: #c07f24 !important;
+  border-color: #c07f24 !important;
+}
+/* 冲突筛选激活态（切换反馈）：背景与文字更暗 + 内圈底部白色指示条（贴底边，与文字留空隙） */
+.tgm-btn-warn-on,
+.tgm-btn-warn-on:hover {
+  background: #8a5a1a !important;
+  border-color: #8a5a1a !important;
+  color: #d0d0d0 !important;
+  position: relative !important;
+}
+.tgm-btn-warn-on::after {
+  content: "" !important;
+  position: absolute !important;
+  left: 8px !important;
+  right: 8px !important;
+  bottom: 2px !important;
+  height: 3px !important;
+  background: #fff !important;
+  border-radius: 2px !important;
+}
+
+/* 冲突筛选提示行（列表顶部，黄字小号） */
+.tgm-conflict-hint {
+  font-size: 12px !important;
+  color: #ffa94d !important;
+  margin-bottom: 8px !important;
+}
+
 /* 重复提示（红字，靠左小字） */
 .tgm-edit-item-dup {
   font-size: 12px !important;
@@ -680,6 +757,7 @@
 .tgm-edit-item .tgm-card-actions {
   justify-content: flex-end !important;
   margin-top: 2px !important;
+  margin-left: auto !important;
 }
 
 /* 极窄屏：编辑器工具栏换行，按钮组靠右；
@@ -689,7 +767,7 @@
     flex-wrap: wrap !important;
   }
 
-  .tgm-search-input {
+  .tgm-search-wrap {
     flex: 1 1 100% !important;
   }
 

@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.0.2";
+  var PLUGIN_VERSION = "2.1.0";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -101,6 +101,7 @@
         return { id: "e" + (eid++), target: m.target, sources: m.sources.slice(), editing: false, draftTarget: "", draftSources: "" };
       }),
       search: "",
+      conflictOnly: false,       // 冲突筛选开关：列表只显示含冲突源的条目
       dirty: false,
       saving: false,
       saveMsg: null,             // {text, ok} 导出结果提示（数秒淡出）
@@ -917,6 +918,7 @@
       var seen = {};
       var dupInGroup = [];
       var dupOther = {};
+      var dupTarget = {};
       sources.forEach(function (s) {
         var sn = normalize(s);
         if (seen[sn]) {
@@ -931,6 +933,9 @@
             dupOther[s] = orig || s;
           }
         });
+        (idx.targets[sn] || []).forEach(function (other) {
+          if (other !== item && dupTarget[s] == null) dupTarget[s] = other.target;
+        });
       });
       if (dupInGroup.length) {
         errors.push({ msg: tc("组内源重复: " + dupInGroup.join("、"), "Duplicated within group: " + dupInGroup.join(", ")), hard: false });
@@ -940,8 +945,10 @@
         errors.push({ msg: tc("源与其他条目重复: " + otherKeys.map(function (k) { return k + "↔" + dupOther[k]; }).join("、"),
           "Sources duplicated elsewhere: " + otherKeys.join(", ")), hard: false });
       }
-      if (normalize(target) && sources.some(function (s) { return normalize(s) === normalize(target); })) {
-        errors.push({ msg: tc("源名与目标名重复（防链式规则会跳过它）", "A source equals the target (chain prevention will skip it)"), hard: false });
+      var targetKeys = Object.keys(dupTarget);
+      if (targetKeys.length) {
+        errors.push({ msg: tc("源与其他目标重复: " + targetKeys.map(function (k) { return k + "↔" + dupTarget[k]; }).join("、"),
+          "Sources duplicate other targets: " + targetKeys.join(", ")), hard: false });
       }
     }
 
@@ -973,23 +980,48 @@
       placeholder: tc("搜索目标名或源名", "Search target or source names"),
       oninput: function (e) {
         ed.search = e.target.value;
+        clearBtn.style.display = e.target.value ? "" : "none";
         renderEditorList();
       },
     });
+    // 输入框内右对齐的清除按钮：仅在有内容时显示
+    var clearBtn = el("button", "tgm-search-clear", "✕", {
+      type: "button",
+      title: tc("清空搜索", "Clear search"),
+      onclick: function () {
+        ed.search = "";
+        searchInput.value = "";
+        clearBtn.style.display = "none";
+        renderEditorList();
+        searchInput.focus();
+      },
+    });
+    clearBtn.style.display = ed.search ? "" : "none";
+    var searchWrap = el("div", "tgm-search-wrap", [searchInput, clearBtn]);
+    var toolbarBtns = [
+      el("button", "tgm-btn tgm-btn-muted", tc("添加", "Add"), {
+        onclick: handleEditorAdd,
+        disabled: ed.saving,
+      }),
+      hasAnyConflict() ? el("button", "tgm-btn tgm-btn-warn" + (ed.conflictOnly ? " tgm-btn-warn-on" : ""), tc("冲突项", "Conflicts"), {
+        onclick: function () {
+          ed.conflictOnly = !ed.conflictOnly;
+          if (ed.conflictOnly) ed.search = ""; // 进入筛选时清空搜索
+          render();
+        },
+        title: tc(ed.conflictOnly ? "退出冲突筛选，显示全部条目" : "筛选显示所有含冲突源（归一化重复/跨条目重复/与其他条目目标重名）的条目",
+          ed.conflictOnly ? "Exit conflict filter and show all entries" : "Show only entries with conflict sources (normalized duplicates / cross-entry duplicates / other-target name collisions)"),
+      }) : null,
+      el("button", "tgm-btn tgm-btn-primary", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
+        onclick: handleEditorExport,
+        disabled: ed.saving,
+        title: tc("下载完整映射表 JSON — 手动替换插件目录中的 tag_merge_map.json",
+          "Download the full mapping JSON — manually replace tag_merge_map.json in the plugin folder"),
+      }),
+    ].filter(Boolean);
     wrap.appendChild(el("div", "tgm-editor-toolbar", [
-      searchInput,
-      el("div", "tgm-editor-toolbar-actions", [
-        el("button", "tgm-btn tgm-btn-muted", tc("添加", "Add"), {
-          onclick: handleEditorAdd,
-          disabled: ed.saving,
-        }),
-        el("button", "tgm-btn tgm-btn-primary", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
-          onclick: handleEditorExport,
-          disabled: ed.saving,
-          title: tc("下载完整映射表 JSON — 手动替换插件目录中的 tag_merge_map.json",
-            "Download the full mapping JSON — manually replace tag_merge_map.json in the plugin folder"),
-        }),
-      ]),
+      searchWrap,
+      el("div", "tgm-editor-toolbar-actions", toolbarBtns),
     ]));
 
     // 状态行：未导出修改（黄）/ 导出结果（成功绿、失败红）
@@ -1026,6 +1058,9 @@
       return;
     }
 
+    // 冲突已全部清理时自动退出筛选（点击「清理」后条目即时移出，清完回归全列表）
+    if (ed.conflictOnly && !hasAnyConflict()) ed.conflictOnly = false;
+
     var q = ed.search.trim().toLowerCase();
     var filtered = q
       ? ed.items.filter(function (it) {
@@ -1033,10 +1068,20 @@
           return it.sources.some(function (s) { return s.toLowerCase().indexOf(q) >= 0; });
         })
       : ed.items;
+    if (ed.conflictOnly) {
+      filtered = filtered.filter(function (it) { return getConflictSources(it); });
+    }
 
     if (!filtered.length) {
-      listEl.appendChild(el("div", "tgm-empty", tc("无匹配结果", "No matches")));
+      listEl.appendChild(el("div", "tgm-empty",
+        ed.conflictOnly ? tc("无冲突项", "No conflicts") : tc("无匹配结果", "No matches")));
       return;
+    }
+
+    if (ed.conflictOnly) {
+      listEl.appendChild(el("div", "tgm-conflict-hint",
+        tc("● 冲突筛选: " + filtered.length + " 个条目",
+          "● Conflict filter: " + filtered.length + " entries")));
     }
 
     listEl.appendChild(buildChunkedList(filtered, buildEditorItem));
@@ -1046,42 +1091,121 @@
     return item.editing ? buildEditorItemEdit(item) : buildEditorItemView(item);
   }
 
-  // 列表态：目标名 + 源徽章 + 重复提示 + 编辑/删除
+  // 条目的冲突源名集合（源名 -> true）：组内归一化重复 + 跨条目重复 + 源与其他条目目标重名
+  // （与本组目标归一化相同的源是目标自身的写法变体，扫描时正常并入，不算冲突）
+  // 返回 null 表示无冲突
+  function getConflictSources(item) {
+    var idx = getDupIndex();
+    var conflicts = null;
+    var seenInItem = {};
+    item.sources.forEach(function (s) {
+      var sn = normalize(s);
+      if (!sn) return;
+      if (seenInItem[sn]) { // 组内：本条目里已出现过归一化相同的源
+        conflicts = conflicts || {};
+        conflicts[s] = true;
+        return;
+      }
+      seenInItem[sn] = s;
+      if (idx.sources[sn] && idx.sources[sn].some(function (o) { return o !== item; })) {
+        conflicts = conflicts || {};
+        conflicts[s] = true;
+        return;
+      }
+      if (idx.targets[sn] && idx.targets[sn].some(function (o) { return o !== item; })) {
+        // 源名与其他条目目标重名：扫描时会被防链式规则跳过，死数据
+        conflicts = conflicts || {};
+        conflicts[s] = true;
+      }
+    });
+    return conflicts;
+  }
+
+  // 编辑器是否存在任何冲突（工具栏「冲突项」按钮的显隐依据）
+  function hasAnyConflict() {
+    var items = _state.editor ? _state.editor.items : [];
+    for (var i = 0; i < items.length; i++) {
+      if (getConflictSources(items[i])) return true;
+    }
+    return false;
+  }
+
+  // 清理单条目的冲突源：删除组内归一化重复（保留首个）、跨条目重复（本条目让出）
+  // 与其他条目目标重名的源，只动 item.sources，不触碰其他条目 — 手动编辑出冲突时的一键兜底
+  function handleEditorClean(item) {
+    var idx = getDupIndex();
+    var seen = {};
+    var kept = [];
+    var removed = 0;
+    item.sources.forEach(function (s) {
+      var sn = normalize(s);
+      if (!sn) { kept.push(s); return; }
+      if (seen[sn]) { removed++; return; } // 组内重复：保留首个
+      if (idx.sources[sn] && idx.sources[sn].some(function (o) { return o !== item; })) {
+        removed++; return; // 跨条目重复：本条目让出
+      }
+      if (idx.targets[sn] && idx.targets[sn].some(function (o) { return o !== item; })) {
+        removed++; return; // 源与其他条目目标重名：防链式死数据，直接移除
+      }
+      seen[sn] = s;
+      kept.push(s);
+    });
+    if (!removed) return;
+    item.sources = kept;
+    var ed = _state.editor;
+    ed.dirty = true;
+    invalidateDupIndex();
+    addLog(tc("清理冲突: 「" + item.target + "」移除 " + removed + " 个冲突源",
+      "Cleaned conflicts: removed " + removed + " conflict source(s) from \"" + item.target + "\""));
+    render();
+  }
+
+  // 列表态：目标名 + 源徽章（冲突源标黄）+ 重复提示 + 清理/编辑/删除
   function buildEditorItemView(item) {
     var ed = _state.editor;
     var idx = getDupIndex();
+    var conflicts = getConflictSources(item);
 
     var card = el("div", "tgm-edit-item");
+    card.setAttribute("data-item-id", item.id);
 
-    var actions = el("div", "tgm-card-actions", [
-      el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("编辑", "Edit"), {
-        onclick: function () {
-          item.editing = true;
-          item.draftTarget = item.target;
-          item.draftSources = item.sources.join("\n");
-          render();
-        },
+    var actionBtns = [];
+    if (conflicts) {
+      actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-warn", tc("清理", "Clean"), {
+        onclick: function () { handleEditorClean(item); },
         disabled: ed.saving,
-      }),
-      el("button", "tgm-btn tgm-btn-sm tgm-btn-danger", tc("删除", "Delete"), {
-        onclick: function () { handleEditorRemove(item); },
-        disabled: ed.saving,
-      }),
-    ]);
+        title: tc("移除本组的冲突源（组内归一化重复保留首个；跨条目重复本组让出；与其他条目目标重名直接移除）",
+          "Remove this entry's conflict sources (in-group duplicates keep the first; cross-entry duplicates are yielded; other-target name collisions are removed)"),
+      }));
+    }
+    actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("编辑", "Edit"), {
+      onclick: function () {
+        item.editing = true;
+        item.draftTarget = item.target;
+        item.draftSources = item.sources.join("\n");
+        render();
+      },
+      disabled: ed.saving,
+    }));
+    actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-danger", tc("删除", "Delete"), {
+      onclick: function () { handleEditorRemove(item); },
+      disabled: ed.saving,
+    }));
 
     card.appendChild(el("div", "tgm-edit-item-head", [
       el("span", "tgm-edit-item-target", item.target, { title: item.target }),
       el("span", "tgm-badge tgm-badge-count", tc(item.sources.length + " 源", item.sources.length + " sources")),
-      actions,
+      el("div", "tgm-card-actions", actionBtns),
     ]));
 
     var srcWrap = el("div", "tgm-edit-item-sources");
     item.sources.forEach(function (s) {
-      srcWrap.appendChild(el("span", "tgm-edit-src", s, { title: s }));
+      srcWrap.appendChild(el("span", conflicts && conflicts[s] ? "tgm-edit-src tgm-edit-src-conflict" : "tgm-edit-src", s, { title: s }));
     });
     card.appendChild(srcWrap);
 
-    // 重复提示（红字）：目标重复 / 源重复
+    // 重复提示（红字）：目标重复 / 组内源重复 / 跨条目源重复 / 源与其他条目目标重名
+    // （与本组目标归一化相同的源是目标自身写法变体，扫描时正常并入，不提示）
     var dups = [];
     var tn = normalize(item.target);
     if (tn && idx.targets[tn].length > 1) {
@@ -1089,13 +1213,43 @@
         .map(function (it) { return it.target; });
       dups.push(tc("目标与「" + others.join("」「") + "」重复", "Target duplicates \"" + others.join("\", \"") + "\""));
     }
-    var dupSrcs = [];
+    var dupInGroup = [];
+    var dupCross = [];
+    var dupOtherTarget = [];
     item.sources.forEach(function (s) {
       var sn = normalize(s);
-      if (sn && idx.sources[sn].length > 1) dupSrcs.push(s);
+      if (!sn) return;
+      var owners = idx.sources[sn];
+      if (owners && owners.length >= 2) {
+        if (owners.filter(function (o) { return o === item; }).length > 1) dupInGroup.push(s);
+        if (owners.some(function (o) { return o !== item; })) dupCross.push(s);
+      }
+      var targetOwners = idx.targets[sn];
+      if (targetOwners && targetOwners.some(function (o) { return o !== item; })) dupOtherTarget.push(s);
     });
-    if (dupSrcs.length) {
-      dups.push(tc("源重复: " + dupSrcs.join("、"), "Duplicated sources: " + dupSrcs.join(", ")));
+    if (dupInGroup.length) {
+      dups.push(tc("组内源重复: " + dupInGroup.join("、"),
+        "Duplicated within group: " + dupInGroup.join(", ")));
+    }
+    if (dupCross.length) {
+      var crossOwners = {};
+      dupCross.forEach(function (s) {
+        idx.sources[normalize(s)].forEach(function (o) {
+          if (o !== item) crossOwners[o.target] = true;
+        });
+      });
+      dups.push(tc("源与其他条目重复: " + dupCross.join("、") + " → " + Object.keys(crossOwners).join("、"),
+        "Sources duplicated across entries: " + dupCross.join(", ") + " -> " + Object.keys(crossOwners).join(", ")));
+    }
+    if (dupOtherTarget.length) {
+      var dupTargetOwners = {};
+      dupOtherTarget.forEach(function (s) {
+        idx.targets[normalize(s)].forEach(function (o) {
+          if (o !== item) dupTargetOwners[o.target] = true;
+        });
+      });
+      dups.push(tc("源与其他目标重复: " + dupOtherTarget.join("、") + " → " + Object.keys(dupTargetOwners).join("、"),
+        "Sources duplicate other targets: " + dupOtherTarget.join(", ") + " -> " + Object.keys(dupTargetOwners).join(", ")));
     }
     if (dups.length) {
       card.appendChild(el("div", "tgm-edit-item-dup", dups.join(" · ")));
@@ -1212,6 +1366,7 @@
   function handleEditorAdd() {
     var ed = _state.editor;
     ed.search = "";
+    ed.conflictOnly = false; // 新条目无冲突，退出筛选避免被过滤隐藏
     var searchEl = document.querySelector("#tgm-panel-root .tgm-search-input");
     if (searchEl) searchEl.value = "";
     ed.items.unshift({

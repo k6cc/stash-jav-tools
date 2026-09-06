@@ -91,6 +91,24 @@
   margin-bottom: 20px !important;
 }
 
+/* 紧凑提示区（强制合并/短名清理页）：仅状态文案（+单按钮），上下留白收窄 */
+.pdm-config-compact {
+  padding: 8px 12px !important;
+  margin-bottom: 12px !important;
+}
+
+.pdm-config-compact .pdm-config-status {
+  margin-bottom: 6px !important;
+}
+
+.pdm-config-compact .pdm-config-status:last-child {
+  margin-bottom: 0 !important;
+}
+
+.pdm-config-compact .pdm-actions {
+  margin-top: 0 !important;
+}
+
 .pdm-config-status {
   font-size: 13px !important;
   color: #999 !important;
@@ -558,6 +576,14 @@
   background: rgba(240, 62, 62, 0.12) !important;
   border-color: rgba(240, 62, 62, 0.5) !important;
   color: #ff8787 !important;
+}
+
+/* ID 冲突徽章（强制合并页）：琥珀警示色，状态语义非可点击；
+   成员行冲突端点的 stash_id 徽章复用同色，便于核对阻断原因 */
+.pdm-badge-conflict {
+  background: rgba(245, 159, 0, 0.12) !important;
+  border-color: rgba(245, 159, 0, 0.5) !important;
+  color: #ffa94d !important;
 }
 
 .pdm-empty {

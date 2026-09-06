@@ -10,7 +10,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
 | [JavStashLinker](./JavStashLinker/) | 1.3.0 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则） |
-| [performerMerge](./performerMerge/) | 1.4.0 | 纯 UI | 重名演员检测与合并：stash_id 硬证据 + 双层过滤的名字匹配（常见名抑制/同 endpoint id 冲突阻断），选择目标后一键合并，误报组可忽略；附带共享短名别名一键清理（无需 Python） |
+| [performerMerge](./performerMerge/) | 1.5.1 | 纯 UI | 重名演员检测与合并：stash_id 硬证据 + 双层过滤的名字匹配（常见名抑制/同 endpoint id 冲突阻断），选择目标后一键合并，误报组可忽略；被冲突阻断的重名对可在「强制合并」页人工核实后手动合并；附带共享短名别名一键清理（无需 Python） |
 | [tagMerge](./tagMerge/) | 2.3.0 | 纯 UI | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，面板预览后一键合并，源名保留为别名；映射表可在面板内编辑并导出文件，冲突检测一键清理（无需 Python） |
 
 ## 安装
@@ -135,7 +135,8 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 2. 点击「开始扫描」— 遍历所有演员的名字+别名，归一化分组找出重名演员
 3. 每组通过单选框选择目标演员（默认预选场景数最多的），行内徽章显示场景/别名/stash_id 等信息辅助判断
 4. 点击组内「合并」或顶部「合并全部」— 名字/图片保留目标的，源演员名字+别名原样并入目标别名（仅精确去重），其余字段按官方规则合并，场景/标签转移到目标，源演员删除
-5. 需要 Stash v0.31.0+（低版本面板会显示警告）
+5. 「强制合并」页列出被 stash_id 冲突阻断的重名对（可能为不同的人）：核实确为同一人后逐对手动强制合并（红色按钮，冲突明细可悬浮徽章查看），误报对可忽略；该页纯手动，不参与「合并全部」
+6. 需要 Stash v0.31.0+（低版本面板会显示警告）
 
 详细说明见 [performerMerge/README.md](./performerMerge/README.md)。
 

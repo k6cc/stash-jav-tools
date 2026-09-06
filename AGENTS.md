@@ -11,9 +11,9 @@
 | sceneTranslate | `sceneTranslate.yml` `version:` | `translateProxy.py` 头部 banner（`Scene Translate Proxy vX.Y.Z`）；`README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
 | sceneGallerySync | `sceneGallerySync.yml` `version:` | 根 `README.md` 版本表 | 头部无 note；在文末「## 变更历史」新增 `### X.Y.Z` 条目 |
 | studioTools | `studioTools.yml` `version:` | `README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
-| JavStashLinker | `JavStashLinker.yml` `version:` | `README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
-| performerMerge | `performerMerge.yml` `version:` | `README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
-| tagMerge | `tagMerge.yml` `version:` | `README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
+| JavStashLinker | `JavStashLinker.yml` `version:` | `JavStashLinker.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示）；`README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
+| performerMerge | `performerMerge.yml` `version:` | `performerMerge.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示）；`README.md` 头部 `> vX.Y.Z：`；根 `README.md` 版本表 | 头部**只保留最新一条** note |
+| tagMerge | `tagMerge.yml` `version:` | `tagMerge.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示）；根 `README.md` 版本表 | 头部**只保留最新一条** note |
 
 根 `README.md` 版本表包含全部六个插件，发版必须同步。各插件 `yml` 的 `url:` 字段指向 Discourse 论坛帖子，发布时确认链接正确。
 

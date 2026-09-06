@@ -13,6 +13,8 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
+  var PLUGIN_VERSION = "1.2.2";
+
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
 
@@ -1100,7 +1102,10 @@
     closeBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
     frag.appendChild(el("div", "jsm-header", [
-      el("h2", "jsm-title", "JavStashLinker"),
+      el("h2", "jsm-title", [
+        "JavStashLinker",
+        el("span", "jsm-version", "v" + PLUGIN_VERSION),
+      ]),
       el("div", "jsm-header-actions", [
         el("button", "jsm-btn jsm-btn-primary" + (_state.applying ? " jsm-btn-disabled" : ""), tc("应用全部", "Apply All"), {
           onclick: handleApply,

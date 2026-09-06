@@ -1,7 +1,7 @@
 name: JavStashLinker
 description: Batch match JAVStash performer IDs via scene-based reverse lookup, stash_id matching, and alias matching
-version: 1.2.2
-url: https://discourse.stashapp.cc/
+version: 1.2.3
+url: https://discourse.stashapp.cc/u/ufousox007/activity/topics
 errLog: info
 
 exec:

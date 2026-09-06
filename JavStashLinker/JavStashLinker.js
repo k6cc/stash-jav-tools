@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.2.3";
+  var PLUGIN_VERSION = "1.3.0";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -1690,6 +1690,7 @@
 
   function setupNavButton() {
     injectNavButton();
+    setupRefractTile();
     // Re-inject on navigation (SPA)
     var origPush = history.pushState;
     var origReplace = history.replaceState;
@@ -1745,6 +1746,59 @@
     });
 
     nav.appendChild(container);
+    injectRefractTile();
+  }
+
+  // ==================== Refract 主题移动端适配 ====================
+  // Refract 在移动端隐藏原生导航，改用自建底部 dock + 抽屉（.refract-mobile-drawer）。
+  // 抽屉只镜像真实路由 a[href]（排除 javascript: 伪链接）或主题硬编码白名单按钮，
+  // 本插件按钮两者都不满足，因此按主题 action tile 结构自注入代理 tile：
+  // 抽屉/底部 dock 的点击逻辑会按 data-action-selector 把点击转发给源按钮，
+  // Settings → Interface → Refract → Mobile dock 的候选采集也会自动收录本 tile。
+
+  function setupRefractTile() {
+    if (window.__jsmRefractTileInit) return;
+    window.__jsmRefractTileInit = true;
+    var timer = null;
+    // 抽屉是 body 直接子元素：childList（非 subtree）捕捉其创建/销毁
+    new MutationObserver(function () {
+      clearTimeout(timer);
+      timer = setTimeout(injectRefractTile, 200);
+    }).observe(document.body, { childList: true });
+    injectRefractTile();
+  }
+
+  function injectRefractTile() {
+    var drawer = document.querySelector(".refract-mobile-drawer");
+    if (!drawer) return;
+    if (!drawer.__jsmTileObs) {
+      drawer.__jsmTileObs = true;
+      // 抽屉内 tile 被移除（源按钮暂时不在时主题 reconcile 会清除）后自动补注
+      new MutationObserver(function () {
+        clearTimeout(drawer.__jsmTileTimer);
+        drawer.__jsmTileTimer = setTimeout(injectRefractTile, 200);
+      }).observe(drawer, { childList: true });
+    }
+    if (drawer.querySelector('.refract-drawer-tile[data-action="jsm"]')) return;
+    if (!document.querySelector(".jsm-nav-btn-icon")) return;
+
+    var tile = document.createElement("a");
+    tile.className = "refract-drawer-tile";
+    tile.setAttribute("href", "#");
+    tile.setAttribute("data-action", "jsm");
+    tile.setAttribute("data-action-tile", "1");
+    tile.setAttribute("data-action-selector", ".jsm-nav-btn-icon");
+    tile.setAttribute("aria-label", "JavStashLinker");
+    tile.setAttribute("title", "JavStashLinker");
+    var icon = document.createElement("span");
+    icon.className = "refract-drawer-tile-icon";
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>' +
+      '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>' +
+      '</svg>';
+    tile.appendChild(icon);
+    drawer.appendChild(tile);
   }
 
   // ==================== Init ====================

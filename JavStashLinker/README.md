@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.2.3：更新插件源链接（Discourse 帖子页）；含 v1.2.2 面板标题版本号、v1.2.1 筛选即时过滤与内嵌 × 清除按钮
+> v1.3.0：适配 Refract 主题移动端导航 — 按钮自动镜像进移动端抽屉（更多选项），并可在 Settings → Interface → Refract → Mobile dock 中固定到底部 dock；含 v1.2.3 源链接更新
 
 Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 

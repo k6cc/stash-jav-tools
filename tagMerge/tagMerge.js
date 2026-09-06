@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.1.0";
+  var PLUGIN_VERSION = "2.1.1";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -980,23 +980,24 @@
       placeholder: tc("搜索目标名或源名", "Search target or source names"),
       oninput: function (e) {
         ed.search = e.target.value;
-        clearBtn.style.display = e.target.value ? "" : "none";
+        clearBtn.hidden = !e.target.value;
         renderEditorList();
       },
     });
-    // 输入框内右对齐的清除按钮：仅在有内容时显示
-    var clearBtn = el("button", "tgm-search-clear", "✕", {
+    // 输入框内右对齐的清除按钮：实心可点击，仅有内容时显示（hidden 属性，见 CSS 注释）
+    // （工具栏不随输入重建以保持焦点，用 hidden 切换显隐）
+    var clearBtn = el("button", "tgm-search-clear", "×", {
       type: "button",
       title: tc("清空搜索", "Clear search"),
       onclick: function () {
         ed.search = "";
         searchInput.value = "";
-        clearBtn.style.display = "none";
+        clearBtn.hidden = true;
         renderEditorList();
         searchInput.focus();
       },
     });
-    clearBtn.style.display = ed.search ? "" : "none";
+    clearBtn.hidden = !ed.search;
     var searchWrap = el("div", "tgm-search-wrap", [searchInput, clearBtn]);
     var toolbarBtns = [
       el("button", "tgm-btn tgm-btn-muted", tc("添加", "Add"), {

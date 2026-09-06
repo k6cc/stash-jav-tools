@@ -523,34 +523,40 @@
   color: #e0e0e0 !important;
   font-size: 13px !important;
   font-family: inherit !important;
-  padding: 6px 26px 6px 10px !important;
+  padding: 6px 28px 6px 10px !important;
   transition: border-color 0.15s !important;
 }
 
-/* 输入框内右对齐的清除按钮（仅有内容时显示，JS 控制显隐） */
+/* 输入框内右对齐的清除按钮：实心灰底可点击，hover 变红（jsm-input-clear 同款） */
 .tgm-search-clear {
   position: absolute !important;
   right: 5px !important;
   top: 50% !important;
   transform: translateY(-50%) !important;
-  width: 18px !important;
-  height: 18px !important;
+  width: 20px !important;
+  height: 20px !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   padding: 0 !important;
   border: none !important;
-  background: transparent !important;
-  border-radius: 3px !important;
-  color: #8f8f8f !important;
+  background: #555 !important;
+  border-radius: 4px !important;
+  color: #ddd !important;
   font-size: 12px !important;
   line-height: 1 !important;
   cursor: pointer !important;
   flex-shrink: 0 !important;
 }
 
+/* 仅有内容时显示：基础规则带 !important 会压过内联 display，用 hidden 属性 + 属性选择器（特异性更高）控制显隐 */
+.tgm-search-clear[hidden] {
+  display: none !important;
+}
+
 .tgm-search-clear:hover {
-  color: #e0e0e0 !important;
+  background: #e03131 !important;
+  color: #fff !important;
 }
 
 .tgm-search-input:focus {

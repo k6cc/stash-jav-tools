@@ -91,7 +91,7 @@
 
 **清除按钮（输入框内嵌）：**
 
-- 有内容时显示，无内容时**不渲染**（不是隐藏占位）
+- 显隐实现**跟随渲染架构**：全量重渲染插件（如 JavStashLinker）用**条件渲染**——有内容才 append 进 DOM，随重渲染自然出现/消失；局部渲染插件（如 tagMerge 工具栏刻意不重建以保焦点）用 **`hidden` 属性切换**——按钮常驻 DOM，`clearBtn.hidden = !value` 控制显隐（等效 `display: none`）。两种方式用户观感相同，选错架构才会出问题
 - 绝对定位在输入框**右侧内部**（`position: absolute; right` + 父容器 `position: relative`），输入框 `padding-right` 预留按钮空间
 - 样式：实心灰（中性可点击语义）、hover 变红（清除=危险暗示）、22px 定高（与图标按钮统一），点击后清空筛选并把焦点还给输入框
 

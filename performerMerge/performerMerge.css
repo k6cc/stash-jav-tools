@@ -206,6 +206,91 @@
   cursor: default !important;
 }
 
+/* 大尺寸状态提示：与同排的大按钮（.pdm-btn）同尺寸（仅多 1px 边框透明叠加，
+   line-height 与 .pdm-btn 默认行高一致，保证与「合并全部」等高） */
+.pdm-btn-state-lg {
+  padding: 6px 16px !important;
+  font-size: 13px !important;
+  line-height: normal !important;
+  height: auto !important;
+  border-radius: 4px !important;
+}
+
+/* 中性小按钮（忽略/恢复）：灰底，非操作主色 */
+.pdm-btn-neutral {
+  background: #555 !important;
+  color: #ddd !important;
+}
+
+.pdm-btn-neutral:hover {
+  background: #666 !important;
+}
+
+.pdm-btn-neutral:disabled {
+  background: #555 !important;
+  cursor: not-allowed !important;
+  opacity: 0.6 !important;
+}
+
+/* 短名清理页搜索框（参照 JavStashLinker：即时过滤 + 右对齐清除按钮） */
+.pdm-search-row {
+  margin-bottom: 12px !important;
+}
+
+.pdm-search-wrap {
+  position: relative !important;
+}
+
+.pdm-search-input {
+  width: 100% !important;
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  padding: 6px 10px !important;
+  padding-right: 34px !important;
+  border: 1px solid #444 !important;
+  border-radius: 4px !important;
+  background: #1a1a1a !important;
+  color: #e0e0e0 !important;
+  font-size: 13px !important;
+  font-family: inherit !important;
+}
+
+.pdm-search-clear {
+  position: absolute !important;
+  right: 6px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 4px !important;
+  background: #555 !important;
+  color: #ddd !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+}
+
+.pdm-search-clear:hover {
+  background: #e03131 !important;
+}
+
+.pdm-search-input:focus {
+  border-color: #7048e8 !important;
+  outline: none !important;
+}
+
+/* 清除按钮隐藏态用类而非 inline style：上方 display:inline-flex !important
+   会覆盖 inline display:none（!important 样式表声明优先于普通 inline 样式） */
+.pdm-search-clear.pdm-hidden {
+  display: none !important;
+}
+
 .pdm-btn-sm {
   padding: 3px 10px !important;
   font-size: 11px !important;
@@ -629,8 +714,8 @@
     flex-wrap: wrap !important;
   }
 
+  /* 不设 100% flex-basis：圆形选择钮与演员名保持同一行，仅 badges 换行到下一行 */
   .pdm-perf-info {
-    flex: 1 1 100% !important;
     min-width: 0 !important;
     order: 2 !important;
   }

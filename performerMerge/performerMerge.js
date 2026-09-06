@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.2.0";
+  var PLUGIN_VERSION = "1.3.0";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -85,6 +85,9 @@
     merging: false,
     cleaning: false,
     cleanProgress: null,  // {current,total}
+    snFilter: "",         // 短名清理页搜索词（即时过滤）
+    ignored: {},          // groupKey -> true（忽略的组：收缩成一行，合并全部跳过）
+    snIgnored: {},        // 短名归一化键 -> true（忽略的短名：收缩成一行，清理全部跳过）
     activeTab: "groups",
     log: [],
   };
@@ -129,7 +132,13 @@
 
   function pendingGroups() {
     return (_state.groups || []).filter(function (g) {
-      return !_state.merged[g.key] && !_state.failed[g.key];
+      return !_state.merged[g.key] && !_state.failed[g.key] && !_state.ignored[g.key];
+    });
+  }
+
+  function pendingShortNames() {
+    return (_state.shortNames || []).filter(function (sn) {
+      return !sn.cleaned && !_state.snIgnored[sn.norm];
     });
   }
 
@@ -682,7 +691,7 @@
   // 完成后不自动重扫（内存数据已就地更新，卡片直接收缩变灰）；分组页数据是清理前快照，需手动重扫。
   async function handleCleanShortNames(snList) {
     var shortNames = ((snList && snList.length) ? snList : (_state.shortNames || []))
-      .filter(function (sn) { return !sn.cleaned; });
+      .filter(function (sn) { return !sn.cleaned && !_state.snIgnored[sn.norm]; });
     if (!shortNames.length || _state.cleaning || _state.merging || _state.scanning) return;
 
     var byPerf = {}; // id -> { norms: {归一化键:true} }
@@ -697,7 +706,7 @@
     var ids = Object.keys(byPerf);
     if (!ids.length) return;
 
-    var pendingTotal = (_state.shortNames || []).filter(function (sn) { return !sn.cleaned; }).length;
+    var pendingTotal = pendingShortNames().length;
     var allKeys = shortNames.length === pendingTotal;
     if (!confirm(allKeys
       ? tc(
@@ -783,6 +792,7 @@
       for (var k in attrs) {
         if (k === "onclick") node.onclick = attrs[k];
         else if (k === "onchange") node.onchange = attrs[k];
+        else if (k === "oninput") node.oninput = attrs[k];
         else if (k === "type") node.type = attrs[k];
         else if (k === "value") node.value = attrs[k];
         else if (k === "placeholder") node.placeholder = attrs[k];
@@ -840,7 +850,7 @@
       ]),
       el("div", "pdm-header-actions", [
         _state.groups && pendingGroups().length === 0
-          ? el("span", "pdm-btn-state", tc("无待合并", "Nothing to Merge"), { title: "" })
+          ? el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待合并", "Nothing to Merge"), { title: "" })
           : el("button", "pdm-btn pdm-btn-primary", tc("合并全部", "Merge All"), {
               onclick: handleMergeAll,
               disabled: _state.merging || _state.scanning || _state.cleaning || !_state.groups,
@@ -883,12 +893,14 @@
       ]));
     }
 
-    // 统计 + 分组列表
+    // 统计 + Tabs + 内容（Tabs 扫描后显示 — 短名清单来自扫描，需先扫描，与 tagMerge 分组页一致）
     if (_state.groups) {
       var involved = 0, reducible = 0, mergedCount = 0;
-      _state.groups.forEach(function (g) {
+      pendingGroups().forEach(function (g) {
         involved += g.members.length;
         reducible += g.members.length - 1;
+      });
+      _state.groups.forEach(function (g) {
         if (_state.merged[g.key]) mergedCount++;
       });
       frag.appendChild(el("div", "pdm-stats", [
@@ -898,10 +910,9 @@
         buildStat(involved, tc("涉及演员", "Performers Involved"), "#ced4da"),
       ]));
 
-      // 短名清理页扫描后常显：计数为未清理键数（已清理卡片收缩变灰，不计入），0 = 无待清理
-      var snCount = _state.shortNames
-        ? _state.shortNames.filter(function (sn) { return !sn.cleaned; }).length
-        : 0;
+      // 两页 tab 计数均为扫描到的全量（含已合并/已忽略/已清理）— 忽略不改变计数，
+      // 反映扫描结果本身；已清理/已忽略态在页面内有文案与卡片状态兜底
+      var snCount = _state.shortNames ? _state.shortNames.length : 0;
       var tabs = [
         { id: "groups", label: tc("重名分组", "Duplicate Groups") + " (" + _state.groups.length + ")" },
         { id: "cleanup", label: tc("短名清理", "Short Names") + " (" + snCount + ")" },
@@ -915,6 +926,7 @@
       });
       frag.appendChild(tabContainer);
 
+      // 内容区与 tabs 同在扫描后渲染：未扫描时弹窗仅剩 header + 扫描表单，保持紧凑
       var content = el("div", "pdm-content");
       if (_state.activeTab === "groups") {
         if (_state.groups.length === 0) {
@@ -923,10 +935,18 @@
           content.appendChild(buildChunkedList(_state.groups, buildGroupCard));
         }
       } else if (_state.activeTab === "cleanup") {
-        content.appendChild(buildCleanupTab());
+        if (!_state.shortNames) {
+          content.appendChild(el("div", "pdm-empty", tc("未发现共享短名", "No shared short names")));
+        } else {
+          content.appendChild(buildCleanupTab());
+        }
       } else {
         var logBox = el("div", "pdm-log");
-        _state.log.forEach(function (line) { logBox.appendChild(el("div", null, line)); });
+        if (_state.log.length === 0) {
+          content.appendChild(el("div", "pdm-empty", tc("暂无日志", "No logs yet")));
+        } else {
+          _state.log.forEach(function (line) { logBox.appendChild(el("div", null, line)); });
+        }
         content.appendChild(logBox);
       }
       frag.appendChild(content);
@@ -938,6 +958,7 @@
   function buildGroupCard(g) {
     var isMerged = !!_state.merged[g.key];
     var isFailed = !!_state.failed[g.key];
+    var isIgnored = !!_state.ignored[g.key];
     var targetId = _state.targets[g.key];
 
     var names = g.sharedNames.slice(0, 2).join(" / ");
@@ -951,6 +972,12 @@
     var headerRight = el("div", "pdm-card-actions");
     if (isMerged) {
       headerRight.appendChild(el("span", "pdm-badge pdm-badge-done", tc("已合并", "Merged")));
+    } else if (isIgnored) {
+      headerRight.appendChild(el("span", "pdm-btn-state", tc("已忽略", "Ignored")));
+      headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("恢复", "Restore"), {
+        onclick: function () { delete _state.ignored[g.key]; render(); },
+        title: tc("恢复为待合并分组", "Restore this group to pending"),
+      }));
     } else {
       if (isFailed) headerRight.appendChild(el("span", "pdm-badge pdm-badge-fail", tc("失败", "Failed")));
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-merge", tc("合并", "Merge"), {
@@ -958,9 +985,15 @@
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
         title: tc("将其他演员合并到选中目标", "Merge the others into the selected target"),
       }));
+      headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
+        onclick: function () { _state.ignored[g.key] = true; render(); },
+        disabled: _state.merging || _state.cleaning || _state.versionOk === false,
+        title: tc("忽略该分组：合并全部时跳过，整组收缩成一行，可随时恢复",
+          "Ignore this group: skipped by Merge All, collapsed to one line; restorable anytime"),
+      }));
     }
 
-    var card = el("div", "pdm-group" + (isMerged ? " pdm-group-done" : ""));
+    var card = el("div", "pdm-group" + (isMerged || isIgnored ? " pdm-group-done" : ""));
     var nameCell = el("div", "pdm-shared-name", [
       names,
       el("span", "pdm-member-count", tc(" · " + g.members.length + " 个演员", " · " + g.members.length + " performers")),
@@ -972,6 +1005,9 @@
       }));
     }
     card.appendChild(el("div", "pdm-group-header", [nameCell, headerRight]));
+
+    // 忽略：收缩为仅头部一行（成员列表不渲染）；已合并组保持灰显展开
+    if (isIgnored) return card;
 
     var list = el("div", "pdm-perf-list");
     g.members.forEach(function (p) {
@@ -986,7 +1022,8 @@
 
   function buildCleanupTab() {
     var shortNames = _state.shortNames || [];
-    var pending = shortNames.filter(function (sn) { return !sn.cleaned; });
+    var pending = pendingShortNames();
+    var ignoredCount = shortNames.filter(function (sn) { return _state.snIgnored[sn.norm]; }).length;
     var frag = document.createDocumentFragment();
 
     var perfIds = {};
@@ -995,16 +1032,20 @@
       sn.holders.forEach(function (h) { perfIds[h.id] = true; totalDel += h.raws.length; });
     });
 
-    var cleanedCount = shortNames.length - pending.length;
+    var cleanedCount = shortNames.length - pending.length - ignoredCount;
+    var ignoredSuffix = ignoredCount ? tc(" · 已忽略 " + ignoredCount, " · " + ignoredCount + " ignored") : "";
     var statusText = pending.length
       ? tc("共 " + pending.length + " 个单词短名被 ≥2 人共享 · 涉及 " + Object.keys(perfIds).length
-          + " 个演员 · 可删除 " + totalDel + " 条别名",
+          + " 个演员 · 可删除 " + totalDel + " 条别名" + ignoredSuffix,
           pending.length + " single-word short names shared by 2+ performers · "
-          + Object.keys(perfIds).length + " performers · " + totalDel + " aliases removable")
+          + Object.keys(perfIds).length + " performers · " + totalDel + " aliases removable" + ignoredSuffix)
       : (cleanedCount
           ? tc("全部 " + cleanedCount + " 个共享短名已清理完成 — 重名分组为清理前快照，重新扫描后纯短名分组消失",
               "All " + cleanedCount + " shared short names cleaned — duplicate groups are a pre-clean snapshot; rescan to refresh")
-          : tc("未发现共享短名", "No shared short names"));
+          : (ignoredCount
+              ? tc("已忽略全部 " + ignoredCount + " 个共享短名 — 可在卡片上恢复",
+                  "All " + ignoredCount + " shared short names ignored — restorable on the cards")
+              : tc("未发现共享短名", "No shared short names")));
     frag.appendChild(el("div", "pdm-config", [
       el("div", "pdm-config-status", statusText),
       el("div", "pdm-actions", [
@@ -1015,21 +1056,23 @@
               title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
                 "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched. Cards collapse afterwards; no automatic rescan."),
             })
-          : el("span", "pdm-btn-state", tc("已全部清理", "All Cleaned")),
+          : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待清理", "Nothing to Clean")),
       ]),
     ]));
 
     if (shortNames.length) {
-      frag.appendChild(buildChunkedList(shortNames, buildShortNameCard));
-    } else {
-      frag.appendChild(el("div", "pdm-empty", tc("未发现共享短名", "No shared short names")));
+      frag.appendChild(buildSnSearchRow());
     }
+    var listHost = buildSnList();
+    listHost.id = "pdm-sn-list";
+    frag.appendChild(listHost);
     return frag;
   }
 
   function buildShortNameCard(sn) {
     var isCleaned = !!sn.cleaned;
-    var card = el("div", "pdm-group" + (isCleaned ? " pdm-group-done" : ""));
+    var isIgnored = !!_state.snIgnored[sn.norm];
+    var card = el("div", "pdm-group" + ((isCleaned || isIgnored) ? " pdm-group-done" : ""));
     card.appendChild(el("div", "pdm-group-header", [
       el("div", "pdm-shared-name", [
         sn.raws.join(" / "),
@@ -1037,16 +1080,30 @@
       ]),
       isCleaned
         ? el("span", "pdm-badge pdm-badge-done", tc("已清理", "Cleaned"))
-        : el("div", "pdm-card-actions", [
+        : isIgnored
+          ? el("div", "pdm-card-actions", [
+              el("span", "pdm-btn-state", tc("已忽略", "Ignored")),
+              el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("恢复", "Restore"), {
+                onclick: function () { delete _state.snIgnored[sn.norm]; render(); },
+                title: tc("恢复为待清理", "Restore this short name to pending"),
+              }),
+            ])
+          : el("div", "pdm-card-actions", [
             el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("清理", "Clean"), {
               onclick: function () { handleCleanShortNames([sn]); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
               title: tc("仅删除该短名的别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
                 "Only this short name's alias entries are removed; names and aliases containing spaces/CJK characters are untouched. The card collapses afterwards; no automatic rescan."),
             }),
+            el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
+              onclick: function () { _state.snIgnored[sn.norm] = true; render(); },
+              disabled: _state.cleaning || _state.merging || _state.scanning,
+              title: tc("忽略该短名：清理全部时跳过，卡片收缩成一行，可随时恢复",
+                "Ignore this short name: skipped by Clean All, collapsed to one line; restorable anytime"),
+            }),
           ]),
     ]));
-    if (isCleaned) return card; // 已清理：收缩为仅头部
+    if (isCleaned || isIgnored) return card; // 已清理/已忽略：收缩为仅头部
     var list = el("div", "pdm-perf-list");
     sn.holders.forEach(function (h) {
       // 其他别名 = 该演员完整别名中除当前短名原始串之外的条目（就地内存数据，清理后即正确）
@@ -1072,6 +1129,85 @@
     });
     card.appendChild(list);
     return card;
+  }
+
+  // 短名搜索：即时过滤（输入即生效，无需回车），匹配短名原始串或持有者名字
+  function snMatches(sn, q) {
+    if (sn.raws.join(" ").toLowerCase().indexOf(q) !== -1) return true;
+    for (var i = 0; i < sn.holders.length; i++) {
+      if ((sn.holders[i].name || "").toLowerCase().indexOf(q) !== -1) return true;
+    }
+    return false;
+  }
+
+  function filteredShortNames() {
+    var all = _state.shortNames || [];
+    var q = (_state.snFilter || "").trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(function (sn) { return snMatches(sn, q); });
+  }
+
+  function buildSnList() {
+    var host = el("div");
+    var list = filteredShortNames();
+    if (!list.length) {
+      host.appendChild(el("div", "pdm-empty", (_state.shortNames || []).length
+        ? tc("无匹配结果", "No matches")
+        : tc("未发现共享短名", "No shared short names")));
+      return host;
+    }
+    host.appendChild(buildChunkedList(list, buildShortNameCard));
+    return host;
+  }
+
+  function setSnFilter(v) {
+    _state.snFilter = v;
+    var clearBtn = document.querySelector(".pdm-search-clear");
+    if (clearBtn) clearBtn.classList.toggle("pdm-hidden", !v);
+    // 输入框内容与状态同步：× 清除路径由 onclick 先 setSnFilter("") 再手动清空，
+    // 此处集中处理，避免「列表还原但输入框残留」
+    var inputEl = document.querySelector(".pdm-search-input");
+    if (inputEl && inputEl.value !== v) {
+      var pos = inputEl.selectionStart;
+      inputEl.value = v;
+      try { inputEl.setSelectionRange(pos, pos); } catch (e) {}
+    }
+    // 就地重建列表而非整体重渲染：输入框保持焦点与光标位置
+    var host = document.getElementById("pdm-sn-list");
+    if (host) {
+      var old = host.querySelector(".pdm-chunked");
+      if (old && old._pdmIo) old._pdmIo.disconnect();
+      host.textContent = "";
+      host.appendChild(buildSnList());
+    }
+  }
+
+  function buildSnSearchRow() {
+    var input = el("input", "pdm-search-input", null, {
+      type: "text",
+      value: _state.snFilter || "",
+      placeholder: tc("搜索短名 / 演员名", "Search short names / performers"),
+      oninput: function (e) {
+        if (e.isComposing) return; // IME 组合输入中不触发过滤
+        setSnFilter(e.target.value);
+      },
+    });
+    input.addEventListener("compositionend", function () {
+      setSnFilter(input.value);
+    });
+    var clearBtn = el("button", "pdm-search-clear", "×", {
+      title: tc("清除搜索", "Clear search"),
+      onclick: function () {
+        setSnFilter("");
+        input.focus();
+      },
+    });
+    // 用类而非 inline style：下方 .pdm-search-clear 的 display:inline-flex !important
+    // 会覆盖 inline display:none（!important 样式表声明优先于普通 inline 样式）
+    if (!(_state.snFilter || "")) clearBtn.classList.add("pdm-hidden");
+    return el("div", "pdm-search-row", [
+      el("div", "pdm-search-wrap", [input, clearBtn]),
+    ]);
   }
 
   // ==================== 演员行悬浮提示（自定义 tooltip：条目分行 + 标签加粗） ====================
@@ -1222,6 +1358,8 @@
         if (entries[0].isIntersecting && rendered < items.length) renderChunk();
       }, { rootMargin: "300px" });
       observer.observe(sentinel);
+      // 暴露 observer：短名搜索就地重建列表前 disconnect 旧的，避免悬挂引用
+      container._pdmIo = observer;
     }
 
     return container;

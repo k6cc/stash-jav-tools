@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.3.0";
+  var PLUGIN_VERSION = "2.3.1";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -480,9 +480,9 @@
       return;
     }
     if (!confirm(tc(
-      "将 " + sources.length + " 个源 tag 合并到「" + g.target + "」？\n\n合并后：源 tag 删除，其场景/标记/图库/图片引用转移到目标，源名补写进目标别名（仍可搜索）。"
+      "将 " + sources.length + " 个源 tag 合并到「" + g.target + "」？源 tag 将被删除。"
         + (g.destId ? "" : "\n目标 tag 不存在，将自动新建。"),
-      "Merge " + sources.length + " source tag(s) into \"" + g.target + "\"?\n\nAfter merge: sources are deleted, their scene/marker/gallery/image references move to the target, source names are kept as aliases (still searchable)."
+      "Merge " + sources.length + " source tag(s) into \"" + g.target + "\"? Source tags will be deleted."
         + (g.destId ? "" : "\nThe target tag does not exist and will be created.")))) return;
 
     runGroup(g).then(function (r) {
@@ -512,9 +512,9 @@
     pending.forEach(function (g) { reduce += effectiveSources(g).length; });
     var createCount = pending.filter(function (g) { return !g.destId; }).length;
     if (!confirm(tc(
-      "确认批量合并 " + pending.length + " 组？将删除 " + reduce + " 个源 tag，引用转移到各自目标，源名保留为别名。"
+      "确认批量合并 " + pending.length + " 组？将删除 " + reduce + " 个源 tag。"
         + (createCount ? "其中 " + createCount + " 组的目标 tag 不存在，将自动新建。" : ""),
-      "Merge " + pending.length + " groups? " + reduce + " source tags will be deleted, references moved to targets, source names kept as aliases."
+      "Merge " + pending.length + " groups? " + reduce + " source tags will be deleted."
         + (createCount ? " " + createCount + " target tag(s) do not exist and will be created." : "")))) return;
 
     _state.merging = true;
@@ -775,7 +775,7 @@
       cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略组", "Ignore Group"), {
         onclick: function () { _state.ignoredGroups[g.key] = true; render(); },
         disabled: _state.merging || _state.scanning,
-        title: tc("折叠该组并从「合并全部」中排除（仅本次会话，重新扫描重置）", "Collapse this group and exclude it from Merge All (current session only; rescan resets)"),
+        title: tc("忽略该组：从「合并全部」中排除（仅本次会话，重新扫描重置）", "Ignore this group: excluded from Merge All (current session only; rescan resets)"),
       }));
     }
 

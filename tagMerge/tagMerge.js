@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.4.0";
+  var PLUGIN_VERSION = "2.4.1";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -778,11 +778,11 @@
       cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("恢复", "Undo"), {
         onclick: function () { delete _state.ignoredGroups[g.key]; render(); },
         disabled: _state.merging || _state.scanning,
-        title: tc("恢复该组的合并资格（仅本次会话）", "Restore this group for merging (current session only)"),
+        title: tc("恢复该组的合并资格", "Restore this group for merging"),
       }));
     } else if (isEmptied || eff.length === 0) {
       headerBadges.appendChild(el("span", "tgm-badge tgm-badge-state", tc("无有效源", "No Sources"), {
-        title: tc("源已被忽略或被先前的合并消耗", "Sources ignored or consumed by earlier merges"),
+        title: tc("源已被忽略或合并消耗", "Sources ignored or consumed by merges"),
       }));
     } else {
       if (isFailed) headerBadges.appendChild(el("span", "tgm-badge tgm-badge-fail", tc("失败", "Failed")));
@@ -794,7 +794,7 @@
       cardActions.appendChild(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略组", "Ignore Group"), {
         onclick: function () { _state.ignoredGroups[g.key] = true; render(); },
         disabled: _state.merging || _state.scanning,
-        title: tc("忽略该组：从「合并全部」中排除（仅本次会话，重新扫描重置）", "Ignore this group: excluded from Merge All (current session only; rescan resets)"),
+        title: tc("忽略该组", "Ignore this group"),
       }));
     }
 
@@ -810,7 +810,7 @@
       el("div", "tgm-shared-name", [
         el("span", "tgm-target-name", g.target),
         !g.destId ? el("span", "tgm-badge tgm-badge-new", tc("新建", "New"), {
-          title: tc("目标 tag 不存在，合并时自动新建", "Target tag does not exist; it will be created on merge"),
+          title: tc("目标不存在，合并时新建", "Target does not exist; created on merge"),
         }) : null,
         el("span", "tgm-member-count", tc(" · " + srcCount + " 个源", " · " + srcCount + " sources")),
       ]),
@@ -833,7 +833,7 @@
           title: s.name,
         }),
         s.variant ? el("span", "tgm-badge tgm-badge-count", tc("变体", "Variant"), {
-          title: tc("未列入映射，按目标名的归一化变体匹配", "Not listed in the mapping; matched as a normalized variant of the target name"),
+          title: tc("未列入映射，按归一化变体匹配", "Not in the mapping; matched as a normalized variant"),
         }) : null,
       ]));
       var badges = el("div", "tgm-src-badges");
@@ -845,7 +845,7 @@
           render();
         },
         disabled: _state.merging || _state.scanning,
-        title: tc("本次会话内不合并该源（不写入任何数据，重新扫描后重置）", "Skip this source for the current session only (nothing is persisted; rescan resets it)"),
+        title: tc("忽略该源", "Ignore this source"),
       }));
       row.appendChild(badges);
       list.appendChild(row);
@@ -1044,8 +1044,8 @@
           }
           render();
         },
-        title: tc(ed.conflictOnly ? "退出冲突筛选，显示全部条目" : "筛选显示所有含冲突源（归一化重复/跨条目重复/与其他条目目标重名）的条目",
-          ed.conflictOnly ? "Exit conflict filter and show all entries" : "Show only entries with conflict sources (normalized duplicates / cross-entry duplicates / other-target name collisions)"),
+        title: tc(ed.conflictOnly ? "退出冲突筛选" : "筛选显示含冲突源的条目",
+          ed.conflictOnly ? "Exit conflict filter" : "Show only entries with conflict sources"),
       }) : null,
       // 已忽略筛选：常驻显示（无已忽略条目也不隐藏），保留恢复入口的可发现性
       el("button", "tgm-btn tgm-btn-warn" + (ed.ignoredOnly ? " tgm-btn-warn-on" : ""), tc("已忽略", "Ignored"), {
@@ -1057,14 +1057,13 @@
           }
           render();
         },
-        title: tc(ed.ignoredOnly ? "退出忽略筛选，显示全部条目" : "筛选显示所有已忽略的映射条目（不参与扫描）",
-          ed.ignoredOnly ? "Exit ignored filter and show all entries" : "Show only ignored mapping entries (excluded from scans)"),
+        title: tc(ed.ignoredOnly ? "退出忽略筛选" : "筛选显示已忽略的条目",
+          ed.ignoredOnly ? "Exit ignored filter" : "Show only ignored entries"),
       }),
       el("button", "tgm-btn tgm-btn-primary", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
         onclick: handleEditorExport,
         disabled: ed.saving,
-        title: tc("下载完整映射表 JSON — 手动替换插件目录中的 tag_merge_map.json",
-          "Download the full mapping JSON — manually replace tag_merge_map.json in the plugin folder"),
+        title: tc("下载完整映射表 JSON", "Download the full mapping JSON"),
       }),
     ].filter(Boolean);
     wrap.appendChild(el("div", "tgm-editor-toolbar", [
@@ -1237,8 +1236,7 @@
       actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-warn", tc("清理", "Clean"), {
         onclick: function () { handleEditorClean(item); },
         disabled: ed.saving,
-        title: tc("移除本组的冲突源（组内归一化重复保留首个；跨条目重复本组让出；与其他条目目标重名直接移除）",
-          "Remove this entry's conflict sources (in-group duplicates keep the first; cross-entry duplicates are yielded; other-target name collisions are removed)"),
+        title: tc("移除本条目的冲突源", "Remove this entry's conflict sources"),
       }));
     }
     actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("编辑", "Edit"), {
@@ -1253,7 +1251,7 @@
     actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略", "Ignore"), {
       onclick: function () { handleEditorIgnore(item); },
       disabled: ed.saving,
-      title: tc("忽略该映射：扫描时跳过，可随时恢复", "Ignore this mapping: skipped in scans; restorable anytime"),
+      title: tc("忽略该映射", "Ignore this mapping"),
     }));
     actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-danger", tc("删除", "Delete"), {
       onclick: function () { handleEditorRemove(item); },
@@ -1345,7 +1343,7 @@
           el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("恢复", "Restore"), {
             onclick: function () { handleEditorRestore(item); },
             disabled: ed.saving,
-            title: tc("恢复该映射参与扫描分组", "Restore this mapping to scan grouping"),
+            title: tc("恢复该映射", "Restore this mapping"),
           }),
         ]),
       ]),

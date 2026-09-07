@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` 六个插件 + 根 `README.md` 版本表。插件版本由各 `<name>.yml` 的 `version:` 声明，Stash 实际读取该字段；发版时**所有版本号位置必须同步**，否则会漂移。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` 六个插件 + 根 `README.md` 版本表。插件版本由各 `<name>.yml` 的 `version:` 声明，Stash 实际读取该字段。
 
 ## 发版清单（六插件通用）
 
@@ -25,8 +25,9 @@
 2. 校验：`git grep -nE "[0-9]\.[0-9]+\.[0-9]+"` 逐项核对
 3. commit 风格：`fix(插件名): 描述, vX.Y.Z` / `feat(插件名): ...` / `docs(插件名): ...` / `chore: ...`
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
-5. `git push && git push --tags`
-6. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 不支持 heredoc，commit 用 `-m "..."` 即可
+5. `git push; git push --tags`（分号分隔，勿用 `&&`）
+6. 验证发版完成：`gh run list --limit 1` 找到 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
+7. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 5.1 不支持 heredoc 与 `&&`/`||` 语句分隔符，commit 用 `-m "..."`、命令链用 `;`
 
 ## 文件编辑（agent 工作约定）
 
@@ -58,10 +59,11 @@
 | 中（动作按钮） | 常规整行操作：打开面板、单卡片主操作 | 介于两者之间 |
 | 小（行内/组按钮） | 卡片行内密集操作：应用、忽略、更多、▲ | padding 3×10，字号 11，定高 22px |
 
-同级按钮（含 badge、图标按钮）**必须等高**，混排不齐即为 bug；层级差异只体现在尺寸，不体现在语义。
+层级差异只体现在尺寸，不体现在语义。
 
 硬性规则：
 
+- 同级按钮（含 badge、图标按钮）**必须等高**，混排不齐即为 bug
 - **可点击元素必须实心**；透明框元素**禁止**绑定点击事件、hover 变色和指针光标
 - 同一行混排的小按钮/badge/图标按钮用 `inline-flex` + `align-items: center` + `line-height: 1` + `border-box` + 固定高度（小号 22px）保持等高；**等高基座声明在小号类上**（如 `.tgm-btn-sm` + `.tgm-badge`），大按钮（面板级主操作：合并全部/开始扫描/添加/导出文件等）保持自然高度、不强制盒模型 — 等高盒模型混排只发生在小号元素之间，禁止把 `line-height: 1`/定高上移到大按钮基类（会压缩大按钮高度，已复现）
 - **禁止用垂直 margin 微调徽章/按钮的垂直位置**（`margin-top: 2px` 式"视觉补偿"会造成整组元素相对徽章下沉，已两次复现）；垂直对齐只靠容器 `align-items: center` 与等高盒模型解决
@@ -96,6 +98,17 @@
 - 样式：实心灰（中性可点击语义）、hover 变红（清除=危险暗示）、22px 定高（与图标按钮统一）；点击后清空筛选并把焦点还给输入框
 
 **计数反馈**：筛选时显示「匹配 N / 总数 M」暗淡文字，无筛选时显示「全部 N 个」；有关联排除项（已忽略等）时追加「（已忽略 X 个）」
+
+### 幂等守卫（所有 UI 插件入口必须）
+
+插件 script 可能被 Stash 重复执行，入口必须带全局幂等守卫，防止双重初始化（面板重复注入、监听器翻倍）：
+
+```js
+if (window.__<插件缩写>Loaded) return;
+window.__<插件缩写>Loaded = true;
+```
+
+现有插件缩写：jsm（JavStashLinker）/ pdm（performerMerge）/ tgm（tagMerge）。动态注入的子机制（如 Refract 主题 tile）用独立标志位（`__<缩写>RefractTileInit`）。
 
 ### 极窄屏适配（所有 UI 插件必须兼容）
 

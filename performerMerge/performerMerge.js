@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.5.1";
+  var PLUGIN_VERSION = "1.6.0";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -77,8 +77,11 @@
     mergeProgress: null,  // {current,total}
     performerCount: 0,
     groups: null,
-    conflictPairs: null,  // ID 冲突阻断的重名对（强制合并页，纯手动，不参与「合并全部」）
+    conflictPairs: null,  // ID/URL 冲突阻断的重名对（强制合并页，纯手动，不参与「合并全部」）
     shortNames: null,     // 共享短名键列表（短名清理页）
+    aliasRepairs: null,   // 别名单行合并错误列表（别名修复页，按演员聚合）
+    arIgnored: {},        // 修复项 key（"ar"+演员id）-> true（忽略的：收缩成一行，修复全部跳过）
+    arFilter: "",         // 别名修复页搜索词（即时过滤）
     performers: null,     // 扫描得到的完整演员列表（清理时按 id 取用）
     targets: {},          // groupKey -> 目标演员 id
     merged: {},           // groupKey -> true
@@ -132,15 +135,28 @@
     if (titleEl && title != null) titleEl.textContent = title;
   }
 
+  // 组是否被冲突标记阻断（组级 ID/URL 冲突）：
+  // 阻断组退出「合并全部」与待合并统计，仍在列表中以徽章标示，供人工逐组处理
+  function groupBlocked(g) {
+    return !!(g.conflictInfo && (g.conflictInfo.hasId || g.conflictInfo.hasUrl));
+  }
+
   function pendingGroups() {
     return (_state.groups || []).filter(function (g) {
-      return !_state.merged[g.key] && !_state.failed[g.key] && !_state.ignored[g.key];
+      return !_state.merged[g.key] && !_state.failed[g.key] && !_state.ignored[g.key] && !groupBlocked(g);
     });
   }
 
   function pendingShortNames() {
     return (_state.shortNames || []).filter(function (sn) {
       return !sn.cleaned && !_state.snIgnored[sn.norm];
+    });
+  }
+
+  // 别名修复页待处理项（排除已修复/忽略）
+  function pendingAliasRepairs() {
+    return (_state.aliasRepairs || []).filter(function (ar) {
+      return !ar.repaired && !_state.arIgnored[ar.key];
     });
   }
 
@@ -159,6 +175,10 @@
     // 全角括号统一为半角（数据源混用），其余保留
     s = s.replace(/（/g, "(").replace(/）/g, ")");
     s = s.replace(/\s+/g, "");
+    // 片假名折叠为平假名（なな 与 ナナ 视为同名，修漏报方向）
+    s = s.replace(/[\u30A1-\u30F6]/g, function (ch) {
+      return String.fromCharCode(ch.charCodeAt(0) - 0x60);
+    });
     // 注意：不剥离 "(2)" 消歧后缀 — 该后缀语义是「同名不同人」，
     // 剥离会把不同演员并成一组（曾产生 169 人大组误报）
     return s;
@@ -235,6 +255,63 @@
     return out;
   }
 
+  // ==================== 别名修复（单行合并错误拆分） ====================
+
+  // 别名单行合并错误：某些操作把多个别名写成一个条目（"Ai, Mion Sonoda, あい"）。
+  // Stash 的 alias_list 是数组，损坏条目在数据层一眼可辨（元素含分隔符），
+  // 演员页 UI 把数组渲染成 ", " 连接，肉眼分不出 — 检测是确定性字符串操作。
+  // 分隔符全收：半角逗号 / 全角逗号 / 顿号（JAV 与西文人名均不含这些字符，无误拆风险）。
+  var ALIAS_SPLIT_RE = /[,，、]/;
+
+  // 拆分单条别名：返回有效片段数组；非损坏条目返回 null。
+  // 损坏 = 含分隔符且拆出 ≥2 个有效片段（合并错误），或 1 个片段但与原文不同（尾部悬逗号清尾）
+  function splitBrokenAlias(raw) {
+    var s = String(raw || "");
+    if (!ALIAS_SPLIT_RE.test(s)) return null;
+    var parts = s.split(ALIAS_SPLIT_RE).map(function (x) { return x.trim(); }).filter(Boolean);
+    if (parts.length >= 2) return parts;
+    if (parts.length === 1 && parts[0] !== s.trim()) return parts; // "Ai," → ["Ai"]
+    return null;
+  }
+
+  // 计算修复后的完整别名列表（提交前预览与提交共用）：
+  // 损坏条目原地展开为片段，丢弃与主名相同的片段（后端校验会拒），全局精确去重保序；
+  // 返回 { list, changed }，changed=false 时调用方不提交
+  function computeRepairedAliases(p) {
+    var orig = parseAliasList(p.alias_list);
+    var out = [], seen = {}, changed = false;
+    orig.forEach(function (raw) {
+      var parts = splitBrokenAlias(raw);
+      if (parts) {
+        parts.forEach(function (part) {
+          if (part === p.name || seen[part]) return;
+          seen[part] = true;
+          out.push(part);
+        });
+        changed = true;
+      } else if (!seen[raw]) {
+        seen[raw] = true;
+        out.push(raw);
+      }
+    });
+    return { list: out, changed: changed || out.length !== orig.length };
+  }
+
+  // 扫描收集：按演员聚合损坏条目（一名演员可有多条），key 用演员 id（忽略状态跨扫描持久）
+  function findBrokenAliases(performers) {
+    var out = [];
+    performers.forEach(function (p) {
+      var entries = [];
+      parseAliasList(p.alias_list).forEach(function (raw) {
+        var parts = splitBrokenAlias(raw);
+        if (parts) entries.push({ raw: raw, parts: parts });
+      });
+      if (entries.length) out.push({ key: "ar" + p.id, id: p.id, name: p.name, entries: entries });
+    });
+    out.sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    return out;
+  }
+
   // 同 endpoint stash_id 冲突：两人在同一 endpoint 都有 id 且不同。
   // 策展库（stashdb 等）一人一条目，同 endpoint 不同 id = 不同的人，
   // 用于阻断「碰巧共享罕见别名」的假阳性名字匹配。
@@ -253,25 +330,139 @@
     return out;
   }
 
-  function idConflict(a, b) {
-    return pairConflicts(a, b).length > 0;
+
+  // ==================== URL 证据（共享=同人 / 同平台不同账号=可能不同的人） ====================
+
+  // URL 归一化：去协议/www/查询串/尾斜杠，统一小写；x.com / twitter.com / mobile.twitter.com
+  // 统一为 twitter。已知社交平台仅取第一段路径（账号名，兼容 twitter.com/A/status/123 类推文链接），
+  // 其余域名（博客/个人站）保留完整路径。
+  var SOCIAL_FIRST_SEGMENT = {
+    "twitter": 1, "instagram.com": 1, "facebook.com": 1, "tiktok.com": 1,
+    "onlyfans.com": 1, "fansly.com": 1, "patreon.com": 1, "youtube.com": 1,
+  };
+
+  function urlNormKey(raw) {
+    var s = String(raw || "").trim().toLowerCase();
+    if (!s) return "";
+    s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, "");
+    s = s.replace(/^www\./, "");
+    s = s.replace(/[?#].*$/, "");
+    s = s.replace(/\/+$/, "");
+    if (!s) return "";
+    var slash = s.indexOf("/");
+    var host = slash === -1 ? s : s.slice(0, slash);
+    var path = slash === -1 ? "" : s.slice(slash + 1);
+    if (host === "x.com" || host === "twitter.com" || host === "mobile.twitter.com") host = "twitter";
+    if (SOCIAL_FIRST_SEGMENT[host]) path = path.split("/")[0] || "";
+    return host + (path ? "/" + path : "");
   }
 
-  // 并查集分组，信号分两级：
+  function urlHostOf(normKey) {
+    var i = normKey.indexOf("/");
+    return i === -1 ? normKey : normKey.slice(0, i);
+  }
+
+  // 同平台（host）不同账号 = 可能不同的人（与 stash_id 冲突同级的异人证据）
+  function urlConflicts(a, b) {
+    if (!a.urls || !a.urls.length || !b.urls || !b.urls.length) return [];
+    var am = {};
+    a.urls.forEach(function (u) {
+      var k = urlNormKey(u);
+      if (!k) return;
+      var h = urlHostOf(k);
+      if (!am[h]) am[h] = k;
+    });
+    var out = [];
+    b.urls.forEach(function (u) {
+      var k = urlNormKey(u);
+      if (!k) return;
+      var h = urlHostOf(k);
+      if (am[h] && am[h] !== k) out.push({ host: h, a: am[h], b: k });
+    });
+    return out;
+  }
+
+  // 组级冲突后验：组内两两 ID/URL 冲突（并查集经 stash_id/URL 硬证据无条件连组
+  // 可能引入矛盾对，边级检查拦不到）。byMember 记录每个成员命中的冲突端点/URL
+  // 警示（成员行徽章换色用）。
+  function groupConflictInfo(members) {
+    var idPairs = [], urlPairs = [], byMember = {};
+    function flagsOf(id) {
+      var k = String(id);
+      return byMember[k] || (byMember[k] = { endpoints: {}, urlWarn: false, urlHosts: {} });
+    }
+    for (var i = 0; i < members.length; i++) {
+      for (var j = i + 1; j < members.length; j++) {
+        var a = members[i], b = members[j];
+        var cs = pairConflicts(a, b);
+        if (cs.length) {
+          idPairs.push({ a: a, b: b, list: cs });
+          cs.forEach(function (c) {
+            flagsOf(a.id).endpoints[c.endpoint] = true;
+            flagsOf(b.id).endpoints[c.endpoint] = true;
+          });
+        }
+        var us = urlConflicts(a, b);
+        if (us.length) {
+          urlPairs.push({ a: a, b: b, list: us });
+          us.forEach(function (c) {
+            flagsOf(a.id).urlWarn = true; flagsOf(a.id).urlHosts[c.host] = true;
+            flagsOf(b.id).urlWarn = true; flagsOf(b.id).urlHosts[c.host] = true;
+          });
+        }
+      }
+    }
+    return {
+      hasId: idPairs.length > 0, hasUrl: urlPairs.length > 0,
+      idPairs: idPairs, urlPairs: urlPairs, byMember: byMember,
+    };
+  }
+
+  // 并查集分组（约束式合并），证据分四级，按强度降序处理 — 强证据先生效，
+  // 弱证据后检验，保证确定性：
   // 1. stash_id：同 endpoint + 同 stash_id = 同一外部实体（硬证据，无条件连组）
-  // 2. 名字键（name + alias）：仅当全局恰好 2 人共享（fanout≤2，排除「Ai」「AYAKA」类
-  //    常见短名被几十人共享导致的超大组），且两人无同 endpoint stash_id 冲突时连组
+  // 2. 共享 URL：同一归一化 URL 恰好 2 人持有（≥3 人共享视为机构页，不作证据）
+  // 3. 名字键（name + alias）：仅当全局恰好 2 人共享（fanout≤2，排除「Ai」「AYAKA」类
+  //    常见短名被几十人共享导致的超大组）
+  // 2/3 类边连组前做树级冲突检查：两棵树任意成员对存在同端点 stash_id 冲突或同平台
+  // 不同账号 URL → 拒绝该边，送「强制合并」页人工复核（防止传递链把冲突实体连进一组）。
+  // 名字边强度：主名匹配(3) > 全名匹配(2，含空格/汉字等) > 单词短名(1)；
+  // 双方 disambiguation 互异 → 降为弱证据(1)。
   function buildGroups(performers) {
     var n = performers.length;
     var parent = [];
-    for (var i = 0; i < n; i++) parent.push(i);
+    var treeMembers = []; // 根 -> 成员索引表（树级冲突检查用）
+    for (var i = 0; i < n; i++) { parent.push(i); treeMembers.push([i]); }
     function find(i) {
       while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
       return i;
     }
     function union(a, b) {
       var ra = find(a), rb = find(b);
-      if (ra !== rb) parent[rb] = ra;
+      if (ra === rb) return;
+      parent[rb] = ra;
+      var mb = treeMembers[rb] || [];
+      for (var j = 0; j < mb.length; j++) treeMembers[ra].push(mb[j]);
+      treeMembers[rb] = null;
+    }
+    // 两棵树之间所有成员对的 ID/URL 冲突（空 = 可安全连组）
+    function treeConflicts(a, b) {
+      var ra = find(a), rb = find(b);
+      if (ra === rb) return []; // 已同组：边仅作组内展示，不重复检查
+      var out = [];
+      var ma = treeMembers[ra] || [a], mb = treeMembers[rb] || [b];
+      for (var x = 0; x < ma.length; x++) {
+        for (var y = 0; y < mb.length; y++) {
+          var pa = performers[ma[x]], pb = performers[mb[y]];
+          pairConflicts(pa, pb).forEach(function (c) {
+            out.push({ kind: "id", x: pa, y: pb, key: c.endpoint, va: c.a, vb: c.b });
+          });
+          urlConflicts(pa, pb).forEach(function (c) {
+            out.push({ kind: "url", x: pa, y: pb, key: c.host, va: c.a, vb: c.b });
+          });
+        }
+      }
+      return out;
     }
 
     // 全局 fanout 统计：每个名字键被多少个不同演员持有
@@ -285,40 +476,72 @@
       });
     });
 
-    var keyOwners = {}; // 键（保留的名字键或 "sid:endpoint|stash_id"）-> [演员索引]
+    var keyOwners = {}; // 保留的名字键 -> [演员索引]
     var keyDisplayAll = {}; // 名字键 -> 展示键（优先真实演员名；冲突对标题用）
+    var keyIsMainName = {}; // 名字键 -> 是否某持有者的主名
+    var urlOwners = {}; // 归一化 URL -> [演员索引]
+    var sidOwners = {}; // "endpoint|stash_id" -> [演员索引]
     performers.forEach(function (p, i) {
       perfKeys(p).forEach(function (k) {
         if ((nameFanout[k.norm] || 0) > 2) return; // 常见名抑制
         if (!keyDisplayAll[k.norm] || (k.isName && !keyDisplayAll[k.norm].isName)) keyDisplayAll[k.norm] = k;
+        if (k.isName) keyIsMainName[k.norm] = true;
         if (!keyOwners[k.norm]) keyOwners[k.norm] = [];
         keyOwners[k.norm].push(i);
       });
+      var seenUrl = {};
+      (p.urls || []).forEach(function (u) {
+        var k = urlNormKey(u);
+        if (!k || seenUrl[k]) return;
+        seenUrl[k] = true;
+        if (!urlOwners[k]) urlOwners[k] = [];
+        urlOwners[k].push(i);
+      });
       (p.stash_ids || []).forEach(function (sid) {
         if (!sid.endpoint || !sid.stash_id) return;
-        var k = "sid:" + sid.endpoint + "|" + sid.stash_id;
-        if (!keyOwners[k]) keyOwners[k] = [];
-        keyOwners[k].push(i);
+        var k = sid.endpoint + "|" + sid.stash_id;
+        if (!sidOwners[k]) sidOwners[k] = [];
+        sidOwners[k].push(i);
       });
     });
 
-    // 连边；名字键（fanout≤2 → 至多 2 人）需通过冲突检测才生效。
-    // 冲突对保留在 blockedEdges，供「强制合并」页人工复核
-    var nameEdges = {}; // norm -> true（实际生效的名字连接，用于组内展示）
-    var blockedEdges = {}; // norm -> [i, j]（ID 冲突阻断的名字键）
+    // 待处理边收集（名字/URL）+ 强度排序（强度降序 → 键升序，保证确定性）
+    var edges = []; // {kind, key, display, owners, strength}
     for (var norm in keyOwners) {
+      if (keyOwners[norm].length !== 2) continue;
       var owners = keyOwners[norm];
-      if (norm.indexOf("sid:") === 0) {
-        for (var j = 1; j < owners.length; j++) union(owners[0], owners[j]);
-      } else if (owners.length === 2) {
-        if (idConflict(performers[owners[0]], performers[owners[1]])) {
-          blockedEdges[norm] = owners;
-        } else {
-          union(owners[0], owners[1]);
-          nameEdges[norm] = true;
-        }
-      }
+      var disp = keyDisplayAll[norm].display;
+      var strength = keyIsMainName[norm] ? 3 : (isShortName(disp) ? 1 : 2);
+      var da = performers[owners[0]].disambiguation, db = performers[owners[1]].disambiguation;
+      if (da && db && String(da) !== String(db)) strength = 1; // 消歧互异 → 降为弱证据
+      edges.push({ kind: "name", key: norm, display: disp, owners: owners, strength: strength });
     }
+    for (var uk in urlOwners) {
+      if (urlOwners[uk].length !== 2) continue; // ≥3 人共享同一 URL 不作为证据
+      edges.push({ kind: "url", key: uk, display: uk, owners: urlOwners[uk], strength: 4 });
+    }
+    edges.sort(function (a, b) {
+      return b.strength - a.strength || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    });
+
+    // 连边：stash_id 硬证据无条件；名字/URL 边需通过树级冲突检查。
+    // 被阻断的边保留在 blockedRecords，供「强制合并」页人工复核
+    var nameEdgeStrength = {}; // 生效名字键 -> 强度（1 弱 / 2+ 强）
+    var blockedRecords = []; // 被冲突阻断的边
+    for (var sk in sidOwners) {
+      var so = sidOwners[sk];
+      for (var j2 = 1; j2 < so.length; j2++) union(so[0], so[j2]);
+    }
+    edges.forEach(function (e) {
+      var tcs = treeConflicts(e.owners[0], e.owners[1]);
+      if (tcs.length) {
+        e.conflicts = tcs;
+        blockedRecords.push(e);
+        return;
+      }
+      union(e.owners[0], e.owners[1]);
+      if (e.kind === "name") nameEdgeStrength[e.key] = e.strength;
+    });
 
     var rootMembers = {};
     for (var i2 = 0; i2 < n; i2++) {
@@ -340,7 +563,7 @@
       var sharedNorms = {};
       members.forEach(function (p) {
         perfKeys(p).forEach(function (k) {
-          if (!nameEdges[k.norm]) return;
+          if (!nameEdgeStrength[k.norm]) return;
           if (!keyDisplay[k.norm] || (k.isName && !keyDisplay[k.norm].isName)) keyDisplay[k.norm] = k;
           sharedNorms[k.norm] = true;
         });
@@ -357,18 +580,45 @@
       });
       var sharedStashIds = [];
       var sharedSidKeys = {};
-      for (var sk in sidCount) {
-        if (sidCount[sk] >= 2) {
-          sharedSidKeys[sk] = true;
-          var bar = sk.indexOf("|");
-          sharedStashIds.push({ endpoint: sk.slice(0, bar), stash_id: sk.slice(bar + 1) });
+      for (var sk2 in sidCount) {
+        if (sidCount[sk2] >= 2) {
+          sharedSidKeys[sk2] = true;
+          var bar = sk2.indexOf("|");
+          sharedStashIds.push({ endpoint: sk2.slice(0, bar), stash_id: sk2.slice(bar + 1) });
         }
       }
+      // 组内共享 URL（被 ≥2 个成员使用）
+      var urlCount = {};
+      members.forEach(function (p) {
+        var seenU = {};
+        (p.urls || []).forEach(function (u) {
+          var k = urlNormKey(u);
+          if (!k || seenU[k]) return;
+          seenU[k] = true;
+          urlCount[k] = (urlCount[k] || 0) + 1;
+        });
+      });
+      var sharedUrlKeys = {};
+      for (var ukey in urlCount) {
+        if (urlCount[ukey] >= 2) sharedUrlKeys[ukey] = true;
+      }
+      // 强证据判定：共享 stash_id / 共享 URL / 强度≥2 的名字边（主名或全名匹配）；
+      // 仅单词短名（或被消歧降级）连成的组 → 低可信度
+      var strong = sharedStashIds.length > 0 || Object.keys(sharedUrlKeys).length > 0;
+      if (!strong) {
+        for (var sn in sharedNorms) {
+          if (nameEdgeStrength[sn] >= 2) { strong = true; break; }
+        }
+      }
+      // 组级冲突后验（硬证据无条件连组可能引入的矛盾）
+      var conflictInfo = groupConflictInfo(members);
 
       groups.push({
         key: "g" + root, members: members,
         sharedNames: shared, sharedNorms: sharedNorms,
         sharedStashIds: sharedStashIds, sharedSidKeys: sharedSidKeys,
+        sharedUrlKeys: sharedUrlKeys, strongEvidence: strong,
+        conflictInfo: conflictInfo,
       });
     }
 
@@ -381,18 +631,30 @@
       return an.localeCompare(bn);
     });
 
-    // 强制合并页数据：被 ID 冲突阻断的名字对，按演员对聚合（一对可共享多个被阻断名）。
-    // 已通过其他证据（stash_id/其他名字键）连成组的对不收 — 那些组在重名分组页可正常合并。
+    // 强制合并页数据：被 ID/URL 冲突阻断的名字/URL 对，按演员对聚合（一对可含多条被阻断边）。
+    // 已通过其他证据连成组的对不收 — 那些组在重名分组页以冲突徽章标示。
     var pairMap = {}; // "小id|大id" -> 冲突对
-    for (var bnorm in blockedEdges) {
-      var bij = blockedEdges[bnorm];
-      if (find(bij[0]) === find(bij[1])) continue;
-      var pa = performers[bij[0]], pb = performers[bij[1]];
+    blockedRecords.forEach(function (e) {
+      if (find(e.owners[0]) === find(e.owners[1])) return;
+      var pa = performers[e.owners[0]], pb = performers[e.owners[1]];
       var pkey = Math.min(Number(pa.id), Number(pb.id)) + "|" + Math.max(Number(pa.id), Number(pb.id));
-      if (!pairMap[pkey]) pairMap[pkey] = { members: [pa, pb], displays: [], norms: {} };
-      pairMap[pkey].displays.push(keyDisplayAll[bnorm].display);
-      pairMap[pkey].norms[bnorm] = true;
-    }
+      if (!pairMap[pkey]) {
+        pairMap[pkey] = { members: [pa, pb], displays: [], norms: {}, conflicts: [], conflictSigs: {}, byMember: {} };
+      }
+      var pm = pairMap[pkey];
+      if (pm.displays.indexOf(e.display) === -1) pm.displays.push(e.display);
+      if (e.kind === "name") pm.norms[e.key] = true;
+      e.conflicts.forEach(function (c) {
+        var sig = c.kind + "|" + c.key + "|" + c.va + "|" + c.vb;
+        if (pm.conflictSigs[sig]) return;
+        pm.conflictSigs[sig] = true;
+        pm.conflicts.push(c);
+        var fx = pm.byMember[String(c.x.id)] || (pm.byMember[String(c.x.id)] = { endpoints: {}, urlWarn: false, urlHosts: {} });
+        var fy = pm.byMember[String(c.y.id)] || (pm.byMember[String(c.y.id)] = { endpoints: {}, urlWarn: false, urlHosts: {} });
+        if (c.kind === "id") { fx.endpoints[c.key] = true; fy.endpoints[c.key] = true; }
+        else { fx.urlWarn = true; fy.urlWarn = true; fx.urlHosts[c.key] = true; fy.urlHosts[c.key] = true; }
+      });
+    });
     var blockedPairs = [];
     for (var pk in pairMap) {
       var bp = pairMap[pk];
@@ -410,6 +672,7 @@
       bp.sharedNorms = bp.norms;
       bp.sharedStashIds = [];
       bp.sharedSidKeys = {};
+      bp.sharedUrlKeys = {};
     });
 
     return { groups: groups, blockedPairs: blockedPairs };
@@ -435,7 +698,7 @@
 
   async function handleScan(keepLog) {
     setState({
-      scanning: true, abortFlag: false, groups: null, conflictPairs: null, shortNames: null, performerCount: 0,
+      scanning: true, abortFlag: false, groups: null, conflictPairs: null, shortNames: null, aliasRepairs: null, performerCount: 0,
       log: keepLog ? _state.log : [], merged: {}, failed: {}, targets: {}, scanProgress: { current: 0, total: 0, title: "" },
     });
     addLog(tc("正在获取演员列表...", "Fetching performers..."));
@@ -452,6 +715,7 @@
       var scan = buildGroups(performers);
       var groups = scan.groups;
       var conflictPairs = scan.blockedPairs;
+
       groups.forEach(function (g) {
         _state.targets[g.key] = String(pickDefaultTarget(g.members).id);
       });
@@ -459,11 +723,30 @@
         _state.targets[pr.key] = String(pickDefaultTarget(pr.members).id);
       });
       var shortNames = findSharedShortNames(performers);
+      var aliasRepairs = findBrokenAliases(performers);
 
       addLog(tc("发现 " + groups.length + " 组重名演员", "Found " + groups.length + " duplicate groups"));
+      var idC = 0, urlC = 0, lowC = 0;
+      groups.forEach(function (g) {
+        if (g.conflictInfo.hasId) idC++;
+        if (g.conflictInfo.hasUrl) urlC++;
+        if (!g.strongEvidence) lowC++;
+      });
+      if (idC) {
+        addLog(tc("其中 " + idC + " 组含同端点不同 stash_id（可能为不同的人），已退出「合并全部」",
+          idC + " group(s) hold different stash_ids on the same endpoint (possibly different people), excluded from Merge All"));
+      }
+      if (urlC) {
+        addLog(tc("其中 " + urlC + " 组含同平台不同账号 URL（可能为不同的人），已退出「合并全部」",
+          urlC + " group(s) hold different accounts on the same platform (possibly different people), excluded from Merge All"));
+      }
+      if (lowC) {
+        addLog(tc("其中 " + lowC + " 组仅弱证据匹配（低可信度），建议核实",
+          lowC + " group(s) matched by weak evidence only (low confidence); verify recommended"));
+      }
       if (conflictPairs.length) {
-        addLog(tc("发现 " + conflictPairs.length + " 对被 ID 冲突阻断的重名（可能为不同的人），详见「强制合并」页",
-          conflictPairs.length + " name-matched pair(s) blocked by stash_id conflicts (possibly different people), see the Force Merge tab"));
+        addLog(tc("发现 " + conflictPairs.length + " 对重名被 ID/URL 冲突阻断（可能为不同的人），详见「强制合并」页",
+          conflictPairs.length + " name-matched pair(s) blocked by ID/URL conflicts (possibly different people), see the Force Merge tab"));
       }
       if (shortNames.length) {
         var snDel = 0, snPerf = {};
@@ -475,9 +758,17 @@
           shortNames.length + " shared short-name keys (" + Object.keys(snPerf).length
           + " performers, " + snDel + " aliases), see the Short Names tab"));
       }
+      if (aliasRepairs.length) {
+        var arEntries = 0;
+        aliasRepairs.forEach(function (ar) { arEntries += ar.entries.length; });
+        addLog(tc("发现 " + aliasRepairs.length + " 个演员的 " + arEntries
+          + " 条别名存在单行合并错误，详见「别名修复」页",
+          aliasRepairs.length + " performers with " + arEntries
+          + " merged-into-one-line aliases, see the Alias Repair tab"));
+      }
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
       setState({
-        groups: groups, conflictPairs: conflictPairs, shortNames: shortNames, performers: performers,
+        groups: groups, conflictPairs: conflictPairs, shortNames: shortNames, aliasRepairs: aliasRepairs, performers: performers,
         scanning: false, scanProgress: null, performerCount: performers.length,
       });
     } catch (e) {
@@ -679,9 +970,13 @@
   function handleMergeGroup(group) {
     var dest = groupTarget(group);
     var srcCount = group.members.length - 1;
+    var warn = groupBlocked(group)
+      ? "\n\n" + tc("注意：该组含冲突标记（ID/URL，可能包含不同的人），请确认已逐对核实。",
+          "Note: this group has conflict flags (ID/URL; may contain different people). Confirm each pair has been verified.")
+      : "";
     if (!confirm(tc(
-      "将 " + srcCount + " 个演员合并到「" + dest.name + "」？\n\n合并后：名字与图片保留目标的；源演员的名字+别名原样并入目标别名（仅去重）；其余字段按官方规则合并。源演员将被删除，其场景/图库/图片/标签转移到目标。",
-      "Merge " + srcCount + " performer(s) into \"" + dest.name + "\"?\n\nAfter merge: the target's name and image are kept; source names+aliases go into the target's aliases; other fields follow the official merge rules. Sources will be deleted and their scenes/galleries/images/tags moved to the target."))) return;
+      "将 " + srcCount + " 个演员合并到「" + dest.name + "」？源演员将被删除。" + warn,
+      "Merge " + srcCount + " performer(s) into \"" + dest.name + "\"? Source performers will be deleted." + warn))) return;
 
     mergeOne(group).then(function () {
       _state.merged[group.key] = true;
@@ -704,8 +999,8 @@
     var reduce = 0;
     pending.forEach(function (g) { reduce += g.members.length - 1; });
     if (!confirm(tc(
-      "确认批量合并 " + pending.length + " 组重名演员？将删除 " + reduce + " 个重复演员，其内容转移到各自目标。",
-      "Merge " + pending.length + " duplicate groups? " + reduce + " duplicate performers will be deleted, their content moved to the targets."))) return;
+      "确认批量合并 " + pending.length + " 组重名演员？将删除 " + reduce + " 个重复演员。",
+      "Merge " + pending.length + " duplicate groups? " + reduce + " duplicate performers will be deleted."))) return;
 
     _state.merging = true;
     _state.activeTab = "log";
@@ -736,7 +1031,7 @@
     render();
   }
 
-  // ==================== 强制合并（ID 冲突阻断对，纯手动，不参与「合并全部」） ====================
+  // ==================== 强制合并（ID/URL 冲突阻断对，纯手动，不参与「合并全部」） ====================
 
   // 源演员是否还出现在其他待处理分组/冲突对中（合并后那些卡片是过期快照）
   function srcInPending(srcId) {
@@ -750,9 +1045,9 @@
     var dest = groupTarget(pair);
     if (!confirm(tc(
       "强制合并该重名对到「" + dest.name + "」？\n\n"
-      + "两人存在同端点 stash_id 冲突，扫描时被判定为可能不同的人，请确认是同一人后再继续。",
+      + "该重名对被冲突证据（stash_id/URL）阻断，可能为不同的人，请确认是同一人后再继续。",
       "Force-merge this pair into \"" + dest.name + "\"?\n\n"
-      + "The two performers hold different stash_ids on the same endpoint and were treated as possibly different people. Continue only if you are sure they are the same person."))) return;
+      + "This pair was blocked by conflict evidence (stash_id/URL) as possibly different people. Continue only if you are sure they are the same person."))) return;
 
     mergeOne(pair).then(function (r) {
       _state.merged[pair.key] = true;
@@ -808,11 +1103,11 @@
     var allKeys = shortNames.length === pendingTotal;
     if (!confirm(allKeys
       ? tc(
-          "删除 " + totalDel + " 条被 ≥2 人共享的单词短名别名（涉及 " + ids.length + " 个演员）？\n\n仅删除别名条目，主名与其余别名不受影响。完成后卡片收缩变灰，不自动重新扫描。",
-          "Delete " + totalDel + " single-word short-name aliases shared by 2+ performers (" + ids.length + " performers)?\n\nOnly alias entries are removed; names and other aliases are untouched. Cards collapse afterwards; no automatic rescan.")
+          "删除 " + totalDel + " 条被 ≥2 人共享的单词短名别名（涉及 " + ids.length + " 个演员）？",
+          "Delete " + totalDel + " single-word short-name aliases shared by 2+ performers (" + ids.length + " performers)?")
       : tc(
-          "删除短名「" + shortNames[0].raws.join(" / ") + "」的 " + totalDel + " 条别名（涉及 " + ids.length + " 个演员）？\n\n仅删除别名条目，主名与其余别名不受影响。完成后卡片收缩变灰，不自动重新扫描。",
-          "Delete " + totalDel + " aliases of the short name \"" + shortNames[0].raws.join(" / ") + "\" (" + ids.length + " performers)?\n\nOnly alias entries are removed; names and other aliases are untouched. Cards collapse afterwards; no automatic rescan."))) return;
+          "删除短名「" + shortNames[0].raws.join(" / ") + "」的 " + totalDel + " 条别名（涉及 " + ids.length + " 个演员）？",
+          "Delete " + totalDel + " aliases of the short name \"" + shortNames[0].raws.join(" / ") + "\" (" + ids.length + " performers)?"))) return;
 
     _state.cleaning = true;
     _state.cleanProgress = { current: 0, total: ids.length };
@@ -863,6 +1158,69 @@
       + ok + tc(" 成功, ", " OK, ") + fail + tc(" 失败", " failed") + " ===");
     if (fail === 0 && shortNames.length === pendingTotal) {
       addLog(tc("提示：重名分组为清理前快照，纯短名分组需重新扫描后消失", "Note: duplicate groups are a pre-clean snapshot; rescan to refresh"));
+    }
+    _state.cleaning = false;
+    _state.cleanProgress = null;
+    render();
+  }
+
+  // 别名修复：把单行合并的损坏条目拆回多个别名（computeRepairedAliases 定拆分规则），
+  // 逐演员提交完整别名列表（与短名清理同一条提交路径）；
+  // 修复后卡片收缩变灰保留，拆出的片段在重新扫描后才参与名字匹配（快照语义与清理一致）
+  async function handleRepairAliases(arList) {
+    var repairs = (arList && arList.length ? arList : (_state.aliasRepairs || []))
+      .filter(function (ar) { return !ar.repaired && !_state.arIgnored[ar.key]; });
+    if (!repairs.length || _state.cleaning || _state.merging || _state.scanning) return;
+
+    var entryCount = 0, partCount = 0;
+    repairs.forEach(function (ar) {
+      ar.entries.forEach(function (e) { entryCount++; partCount += e.parts.length; });
+    });
+    var allItems = repairs.length === pendingAliasRepairs().length;
+    if (!confirm(allItems
+      ? tc(
+          "拆分 " + repairs.length + " 个演员的 " + entryCount + " 条单行合并别名（可拆出 " + partCount + " 个名字）？",
+          "Split " + entryCount + " aliases merged into one line across " + repairs.length + " performers (" + partCount + " names recoverable)?")
+      : tc(
+          "拆分「" + repairs[0].name + "」的 " + entryCount + " 条单行合并别名（可拆出 " + partCount + " 个名字）？",
+          "Split " + entryCount + " aliases merged into one line for \"" + repairs[0].name + "\" (" + partCount + " names recoverable)?"))) return;
+
+    _state.cleaning = true;
+    _state.cleanProgress = { current: 0, total: repairs.length };
+    render();
+
+    var ok = 0, fail = 0;
+    for (var i = 0; i < repairs.length; i++) {
+      var ar = repairs[i];
+      var p = perfById(ar.id);
+      var plan = p ? computeRepairedAliases(p) : null;
+      if (p && plan && plan.changed) {
+        updateProgressDOM(i, repairs.length, p.name);
+        try {
+          await callGQL(M_UPDATE, { input: { id: p.id, alias_list: plan.list } });
+          p.alias_list = plan.list; // 就地更新内存数据，短名清理页的「其他别名」立即反映修复结果
+          ar.repaired = true;
+          ar.failed = false;
+          ok++;
+        } catch (e) {
+          ar.failed = true;
+          fail++;
+          addLog("[" + (i + 1) + "/" + repairs.length + "] " + ar.name + " " + tc("修复失败", "repair failed") + ": " + mergeErrMsg(e));
+        }
+      } else if (p) {
+        ar.repaired = true; // 数据已无损坏条目（他处已处理），无需提交
+      }
+    }
+
+    var namesLabel = repairs.length === 1
+      ? repairs[0].name
+      : repairs.slice(0, 5).map(function (ar) { return ar.name; }).join(", ")
+        + tc(" 等 " + repairs.length + " 项", " + " + (repairs.length - 5) + " more");
+    updateProgressDOM(repairs.length, repairs.length, "");
+    addLog(tc("=== 别名修复完成（", "=== Alias repair (") + namesLabel + "): "
+      + ok + tc(" 成功, ", " OK, ") + fail + tc(" 失败", " failed") + " ===");
+    if (fail === 0 && allItems) {
+      addLog(tc("提示：拆出的别名片段需重新扫描后才参与名字匹配", "Note: split alias parts take part in name matching only after a rescan"));
     }
     _state.cleaning = false;
     _state.cleanProgress = null;
@@ -1008,13 +1366,15 @@
         buildStat(involved, tc("涉及演员", "Performers Involved"), "#ced4da"),
       ]));
 
-      // 各页 tab 计数均为扫描到的全量（含已合并/已忽略/已清理）— 忽略不改变计数，
+      // 各页 tab 计数均为扫描到的全量（含已合并/已忽略/已清理/已修复）— 忽略不改变计数，
       // 反映扫描结果本身；已处理态在页面内有文案与卡片状态兜底
       var snCount = _state.shortNames ? _state.shortNames.length : 0;
+      var arCount = _state.aliasRepairs ? _state.aliasRepairs.length : 0;
       var fmCount = _state.conflictPairs ? _state.conflictPairs.length : 0;
       var tabs = [
         { id: "groups", label: tc("重名分组", "Duplicate Groups") + " (" + _state.groups.length + ")" },
         { id: "cleanup", label: tc("短名清理", "Short Names") + " (" + snCount + ")" },
+        { id: "aliasfix", label: tc("别名修复", "Alias Repair") + " (" + arCount + ")" },
         { id: "force", label: tc("强制合并", "Force Merge") + " (" + fmCount + ")" },
         { id: "log", label: tc("日志", "Log") },
       ];
@@ -1040,9 +1400,15 @@
         } else {
           content.appendChild(buildCleanupTab());
         }
+      } else if (_state.activeTab === "aliasfix") {
+        if (!_state.aliasRepairs) {
+          content.appendChild(el("div", "pdm-empty", tc("未发现别名单行合并错误", "No merged-into-one-line aliases")));
+        } else {
+          content.appendChild(buildAliasFixTab());
+        }
       } else if (_state.activeTab === "force") {
         if (!_state.conflictPairs) {
-          content.appendChild(el("div", "pdm-empty", tc("未发现 ID 冲突阻断的重名对", "No conflict-blocked pairs")));
+          content.appendChild(el("div", "pdm-empty", tc("未发现 ID/URL 冲突阻断的重名对", "No conflict-blocked pairs")));
         } else {
           content.appendChild(buildForceTab());
         }
@@ -1094,8 +1460,8 @@
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
         onclick: function () { _state.ignored[g.key] = true; render(); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略该分组：合并全部时跳过，整组收缩成一行，可随时恢复",
-          "Ignore this group: skipped by Merge All, collapsed to one line; restorable anytime"),
+        title: tc("忽略该分组：合并全部时跳过，可随时恢复",
+          "Ignore this group: skipped by Merge All; restorable anytime"),
       }));
     }
 
@@ -1109,6 +1475,27 @@
       nameCell.appendChild(el("span", "pdm-badge pdm-badge-stash", tc("stash_id 匹配", "stash_id match"), {
         title: tc("名字不同但共享 stash_id（同一外部实体）", "Different names but share stash_id (same external entity)"),
       }));
+    }
+    // 冲突/可信度徽章（已合并组不再提示）：ID 冲突/URL 冲突 = 琥珀警示，退出「合并全部」；
+    // 低可信度 = 透明框提示（仅单词短名/消歧降级连组，无强证据）
+    if (!isMerged) {
+      var ci = g.conflictInfo || {};
+      if (ci.hasId) {
+        nameCell.appendChild(el("span", "pdm-badge pdm-badge-conflict", tc("ID 冲突", "ID Conflict"), {
+          title: groupConflictTip(g, "id"),
+        }));
+      }
+      if (ci.hasUrl) {
+        nameCell.appendChild(el("span", "pdm-badge pdm-badge-conflict", tc("URL 冲突", "URL Conflict"), {
+          title: groupConflictTip(g, "url"),
+        }));
+      }
+      if (!g.strongEvidence) {
+        nameCell.appendChild(el("span", "pdm-badge pdm-badge-lowconf", tc("低可信度", "Low Confidence"), {
+          title: tc("仅单词短名匹配（无共享 stash_id/URL/主名全名），建议核实后合并",
+            "Matched by single-word short names only (no shared stash_id/URL/main or full name); verify before merging"),
+        }));
+      }
     }
     card.appendChild(el("div", "pdm-group-header", [nameCell, headerRight]));
 
@@ -1159,8 +1546,8 @@
           ? el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
               onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
-                "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched. Cards collapse afterwards; no automatic rescan."),
+              title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响",
+                "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched"),
             })
           : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待清理", "Nothing to Clean")),
       ]),
@@ -1198,14 +1585,14 @@
             el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("清理", "Clean"), {
               onclick: function () { handleCleanShortNames([sn]); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("仅删除该短名的别名条目，主名与含空格/汉字的全名别名不受影响；完成后卡片收缩变灰，不自动重新扫描",
-                "Only this short name's alias entries are removed; names and aliases containing spaces/CJK characters are untouched. The card collapses afterwards; no automatic rescan."),
+              title: tc("仅删除该短名的别名条目，主名与含空格/汉字的全名别名不受影响",
+                "Only this short name's alias entries are removed; names and aliases containing spaces/CJK characters are untouched"),
             }),
             el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
               onclick: function () { _state.snIgnored[sn.norm] = true; render(); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("忽略该短名：清理全部时跳过，卡片收缩成一行，可随时恢复",
-                "Ignore this short name: skipped by Clean All, collapsed to one line; restorable anytime"),
+              title: tc("忽略该短名：清理全部时跳过，可随时恢复",
+                "Ignore this short name: skipped by Clean All; restorable anytime"),
             }),
           ]),
     ]));
@@ -1324,15 +1711,190 @@
     return buildSearchRow(tc("搜索短名 / 演员名", "Search short names / performers"), _state.snFilter, setSnFilter);
   }
 
-  // ==================== 强制合并页（ID 冲突阻断的重名对，纯手动，不参与「合并全部」） ====================
+  // ==================== 别名修复页 ====================
 
-  // ID 冲突徽章的悬浮说明：逐行列出冲突端点与两人的 stash_id
-  function conflictTip(pair) {
-    var lines = pairConflicts(pair.members[0], pair.members[1]).map(function (c) {
-      return endpointShort(c.endpoint) + ": " + c.a + " ≠ " + c.b;
+  function buildAliasFixTab() {
+    var repairs = _state.aliasRepairs || [];
+    var pending = pendingAliasRepairs();
+    var ignoredCount = repairs.filter(function (ar) { return _state.arIgnored[ar.key]; }).length;
+    var frag = document.createDocumentFragment();
+
+    var entryCount = 0, partCount = 0;
+    pending.forEach(function (ar) {
+      ar.entries.forEach(function (e) {
+        entryCount++;
+        partCount += e.parts.length;
+      });
     });
-    lines.push(tc("两人在同一端点持有不同 stash_id，扫描判定为可能不同的人",
-      "The two hold different stash_ids on the same endpoint; the scan treats them as possibly different people"));
+
+    var repairedCount = repairs.filter(function (ar) { return ar.repaired; }).length;
+    var ignoredSuffix = ignoredCount ? tc(" · 已忽略 " + ignoredCount, " · " + ignoredCount + " ignored") : "";
+    var statusText = pending.length
+      ? tc("共 " + pending.length + " 个演员的 " + entryCount + " 条别名被合并成单行 · 可拆出 "
+          + partCount + " 个名字" + ignoredSuffix,
+          pending.length + " performers with " + entryCount + " aliases merged into one line · "
+          + partCount + " names recoverable" + ignoredSuffix)
+      : (repairedCount
+          ? tc("全部 " + repairedCount + " 个演员的别名已修复完成 — 损坏条目原本不参与名字匹配，重新扫描后拆出的片段才生效",
+              "All " + repairedCount + " performers' aliases repaired — broken entries never matched by name; rescan to activate the split parts")
+          : (ignoredCount
+              ? tc("已忽略全部 " + ignoredCount + " 个修复项 — 可在卡片上恢复",
+                  "All " + ignoredCount + " repair item(s) ignored — restorable on the cards")
+              : tc("未发现别名单行合并错误", "No merged-into-one-line aliases")));
+    frag.appendChild(el("div", "pdm-config pdm-config-compact", [
+      el("div", "pdm-config-status", statusText),
+      el("div", "pdm-actions", [
+        pending.length
+          ? el("button", "pdm-btn pdm-btn-primary", tc("修复全部", "Repair All"), {
+              onclick: function () { handleRepairAliases(_state.aliasRepairs.slice()); },
+              disabled: _state.cleaning || _state.merging || _state.scanning,
+              title: tc("把合并成单行的别名条目拆回多个（半角/全角逗号、顿号分隔），丢弃与主名相同的片段并去重",
+                "Split aliases merged into one line (separated by half/full-width commas or 、), drop parts equal to the name and dedupe"),
+            })
+          : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待修复", "Nothing to Repair")),
+      ]),
+    ]));
+
+    if (repairs.length) {
+      frag.appendChild(buildArSearchRow());
+    }
+    var listHost = buildArList();
+    listHost.id = "pdm-ar-list";
+    frag.appendChild(listHost);
+    return frag;
+  }
+
+  // 修复卡片：按演员聚合（一名演员的所有损坏条目一次提交），
+  // 头部演员名 + 条目数 + 修复（主题色，改写语义非删除）/忽略，正文逐条 原始串 → 拆分预览
+  function buildAliasCard(ar) {
+    var isRepaired = !!ar.repaired;
+    var isIgnored = !!_state.arIgnored[ar.key];
+
+    var headerRight = el("div", "pdm-card-actions");
+    if (isRepaired) {
+      headerRight.appendChild(el("span", "pdm-badge pdm-badge-done", tc("已修复", "Repaired")));
+    } else if (isIgnored) {
+      headerRight.appendChild(el("span", "pdm-btn-state", tc("已忽略", "Ignored")));
+      headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("恢复", "Restore"), {
+        onclick: function () { delete _state.arIgnored[ar.key]; render(); },
+        title: tc("恢复为待修复", "Restore this item to pending"),
+      }));
+    } else {
+      if (ar.failed) headerRight.appendChild(el("span", "pdm-badge pdm-badge-fail", tc("失败", "Failed")));
+      headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-primary", tc("修复", "Repair"), {
+        onclick: function () { handleRepairAliases([ar]); },
+        disabled: _state.cleaning || _state.merging || _state.scanning,
+        title: tc("拆分该演员的损坏别名条目并提交完整别名列表",
+          "Split this performer's broken alias entries and submit the full alias list"),
+      }));
+      headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
+        onclick: function () { _state.arIgnored[ar.key] = true; render(); },
+        disabled: _state.cleaning || _state.merging || _state.scanning,
+        title: tc("忽略该修复项：修复全部时跳过，可随时恢复",
+          "Ignore this item: skipped by Repair All; restorable anytime"),
+      }));
+    }
+
+    var card = el("div", "pdm-group" + ((isRepaired || isIgnored) ? " pdm-group-done" : ""));
+    card.appendChild(el("div", "pdm-group-header", [
+      el("div", "pdm-shared-name", [
+        ar.name,
+        el("span", "pdm-member-count", tc(" · " + ar.entries.length + " 条损坏", " · " + ar.entries.length + " broken")),
+        el("span", "pdm-badge pdm-badge-count", "#" + ar.id),
+      ]),
+      headerRight,
+    ]));
+
+    // 已修复/已忽略：收缩为仅头部一行（条目列表不渲染）
+    if (isRepaired || isIgnored) return card;
+
+    var list = el("div", "pdm-perf-list");
+    ar.entries.forEach(function (e) {
+      list.appendChild(el("div", "pdm-ar-entry", [
+        el("div", "pdm-ar-raw", e.raw),
+        el("div", "pdm-ar-parts", e.parts.map(function (part) {
+          return el("span", "pdm-ar-part", part);
+        })),
+      ]));
+    });
+    card.appendChild(list);
+    return card;
+  }
+
+  // 修复搜索：即时过滤，匹配演员名或损坏原始串
+  function arMatches(ar, q) {
+    if ((ar.name || "").toLowerCase().indexOf(q) !== -1) return true;
+    for (var i = 0; i < ar.entries.length; i++) {
+      if (ar.entries[i].raw.toLowerCase().indexOf(q) !== -1) return true;
+    }
+    return false;
+  }
+
+  function filteredAliasRepairs() {
+    var all = _state.aliasRepairs || [];
+    var q = (_state.arFilter || "").trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(function (ar) { return arMatches(ar, q); });
+  }
+
+  function buildArList() {
+    var host = el("div");
+    var list = filteredAliasRepairs();
+    if (!list.length) {
+      host.appendChild(el("div", "pdm-empty", (_state.aliasRepairs || []).length
+        ? tc("无匹配结果", "No matches")
+        : tc("未发现别名单行合并错误", "No merged-into-one-line aliases")));
+      return host;
+    }
+    host.appendChild(buildChunkedList(list, buildAliasCard));
+    return host;
+  }
+
+  function setArFilter(v) {
+    _state.arFilter = v;
+    applySearchFilter("pdm-ar-list", v, buildArList);
+  }
+
+  function buildArSearchRow() {
+    return buildSearchRow(tc("搜索演员名 / 别名内容", "Search performers / alias text"), _state.arFilter, setArFilter);
+  }
+
+  // ==================== 强制合并页（ID/URL 冲突阻断的重名对，纯手动，不参与「合并全部」） ====================
+
+  // 冲突徽章的悬浮说明：逐行列出冲突明细（端点 stash_id / 平台账号）
+  function urlConflictLine(host, va, vb) {
+    var acc = function (v) { var i = v.indexOf("/"); return i === -1 ? v : v.slice(i + 1); };
+    return host + ": " + acc(va) + " ≠ " + acc(vb);
+  }
+
+  function conflictTip(pair) {
+    var lines = (pair.conflicts || []).map(function (c) {
+      return c.kind === "id"
+        ? endpointShort(c.key) + ": " + c.va + " ≠ " + c.vb
+        : urlConflictLine(c.key, c.va, c.vb);
+    });
+    lines.push(tc("冲突证据阻断（可能不同的人），请逐对核实后手动处理",
+      "Blocked by conflict evidence (possibly different people); verify each pair before merging manually"));
+    return lines.join("\n");
+  }
+
+  // 组级冲突徽章悬浮提示：列出冲突明细（端点/平台账号），便于逐对核实
+  function groupConflictTip(g, kind) {
+    var ci = g.conflictInfo || {};
+    var lines = [], seen = {};
+    (kind === "id" ? ci.idPairs || [] : ci.urlPairs || []).forEach(function (pr) {
+      pr.list.forEach(function (c) {
+        var l = kind === "id"
+          ? endpointShort(c.endpoint) + ": " + c.a + " ≠ " + c.b
+          : urlConflictLine(c.host, c.a, c.b);
+        if (!seen[l]) { seen[l] = true; lines.push(l); }
+      });
+    });
+    lines.push(kind === "id"
+      ? tc("组内成员在同端点持有不同 stash_id（可能不同的人），已退出「合并全部」",
+          "Members hold different stash_ids on the same endpoint (possibly different people); excluded from Merge All")
+      : tc("组内成员在同平台持有不同账号（可能不同的人），已退出「合并全部」",
+          "Members hold different accounts on the same platform (possibly different people); excluded from Merge All"));
     return lines.join("\n");
   }
 
@@ -1350,9 +1912,9 @@
     if (pending.length) {
       var ignoredSuffix = ignoredCount ? tc(" · 已忽略 " + ignoredCount, " · " + ignoredCount + " ignored") : "";
       statusText = tc(
-        "共 " + pending.length + " 对重名被 ID 冲突阻断（可能为不同的人）· 涉及 "
+        "共 " + pending.length + " 对重名被 ID/URL 冲突阻断（可能为不同的人）· 涉及 "
         + Object.keys(perfIds).length + " 个演员" + ignoredSuffix,
-        pending.length + " name-matched pair(s) blocked by stash_id conflicts (possibly different people) · "
+        pending.length + " name-matched pair(s) blocked by ID/URL conflicts (possibly different people) · "
         + Object.keys(perfIds).length + " performers" + ignoredSuffix);
     } else if (mergedCount) {
       statusText = tc("全部 " + mergedCount + " 对冲突重名已强制合并 — 其他页数据为合并前快照，重新扫描后刷新",
@@ -1361,7 +1923,7 @@
       statusText = tc("已忽略全部 " + ignoredCount + " 对冲突重名 — 可在卡片上恢复",
         "All " + ignoredCount + " blocked pair(s) ignored — restorable on the cards");
     } else {
-      statusText = tc("未发现 ID 冲突阻断的重名对", "No conflict-blocked pairs");
+      statusText = tc("未发现 ID/URL 冲突阻断的重名对", "No conflict-blocked pairs");
     }
     frag.appendChild(el("div", "pdm-config pdm-config-compact", [
       el("div", "pdm-config-status", statusText),
@@ -1376,7 +1938,7 @@
     return frag;
   }
 
-  // 强制合并卡片：与重名分组同款（目标单选/悬浮提示/忽略恢复），头部多一枚 ID 冲突徽章
+  // 强制合并卡片：与重名分组同款（目标单选/悬浮提示/忽略恢复），头部按冲突类型挂 ID/URL 冲突徽章
   function buildPairCard(pair) {
     var isMerged = !!_state.merged[pair.key];
     var isFailed = !!_state.failed[pair.key];
@@ -1400,25 +1962,35 @@
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("强制合并", "Force Merge"), {
         onclick: function () { handleForceMergePair(pair); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略 ID 冲突强制合并该对（有强化确认提示）",
-          "Merge this pair ignoring the stash_id conflict (confirmation required)"),
+        title: tc("忽略冲突证据强制合并该对（有强化确认提示）",
+          "Merge this pair ignoring the conflict evidence (confirmation required)"),
       }));
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
         onclick: function () { _state.ignored[pair.key] = true; render(); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略该冲突对：卡片收缩成一行，可随时恢复",
-          "Ignore this pair: collapsed to one line; restorable anytime"),
+        title: tc("忽略该冲突对：可随时恢复",
+          "Ignore this pair; restorable anytime"),
       }));
     }
+
+    // 冲突类型徽章：按 pair.conflicts 实际内容挂（ID/URL 可同时存在）
+    var hasIdC = false, hasUrlC = false;
+    (pair.conflicts || []).forEach(function (c) {
+      if (c.kind === "id") hasIdC = true;
+      else hasUrlC = true;
+    });
 
     var card = el("div", "pdm-group" + (isMerged || isIgnored ? " pdm-group-done" : ""));
     card.appendChild(el("div", "pdm-group-header", [
       el("div", "pdm-shared-name", [
         names,
         el("span", "pdm-member-count", tc(" · 2 个演员", " · 2 performers")),
-        el("span", "pdm-badge pdm-badge-conflict", tc("ID 冲突", "ID Conflict"), {
+        hasIdC ? el("span", "pdm-badge pdm-badge-conflict", tc("ID 冲突", "ID Conflict"), {
           title: conflictTip(pair),
-        }),
+        }) : null,
+        hasUrlC ? el("span", "pdm-badge pdm-badge-conflict", tc("URL 冲突", "URL Conflict"), {
+          title: conflictTip(pair),
+        }) : null,
       ]),
       headerRight,
     ]));
@@ -1426,15 +1998,9 @@
     // 忽略：收缩为仅头部一行（成员列表不渲染）
     if (isIgnored) return card;
 
-    // 冲突端点集合：成员行对应的 stash_id 徽章换警示色，便于核对
-    var conflictEndpoints = {};
-    pairConflicts(pair.members[0], pair.members[1]).forEach(function (c) {
-      conflictEndpoints[c.endpoint] = true;
-    });
-
     var list = el("div", "pdm-perf-list");
     pair.members.forEach(function (p) {
-      list.appendChild(buildPerfRow(pair, p, String(p.id) === String(targetId), conflictEndpoints));
+      list.appendChild(buildPerfRow(pair, p, String(p.id) === String(targetId)));
     });
     card.appendChild(list);
     return card;
@@ -1463,7 +2029,7 @@
     if (!list.length) {
       host.appendChild(el("div", "pdm-empty", (_state.conflictPairs || []).length
         ? tc("无匹配结果", "No matches")
-        : tc("未发现 ID 冲突阻断的重名对", "No conflict-blocked pairs")));
+        : tc("未发现 ID/URL 冲突阻断的重名对", "No conflict-blocked pairs")));
       return host;
     }
     host.appendChild(buildChunkedList(list, buildPairCard));
@@ -1518,9 +2084,13 @@
     if (_tipEl) _tipEl.classList.remove("pdm-tip-show");
   }
 
-  function buildPerfRow(g, p, isTarget, conflictEndpoints) {
+  function buildPerfRow(g, p, isTarget) {
     var aliases = parseAliasList(p.alias_list);
-    // 悬浮提示条目：ID / 别名 / 创建 / 组内重名 / 同 stash_id（匹配原因，便于核对分组是否合理）
+    // 成员冲突标记：重名分组用组级后验 conflictInfo.byMember，强制合并对用 buildGroups 附带的 byMember；
+    // endpoints 供 stash_id 徽章换警示色，urlWarn/urlHosts 供 URL 徽章标黄与悬浮提示
+    var flags = (g.conflictInfo && g.conflictInfo.byMember && g.conflictInfo.byMember[String(p.id)])
+      || (g.byMember && g.byMember[String(p.id)]) || null;
+    // 悬浮提示条目：ID / 别名 / 创建 / 组内重名 / 同 stash_id / URL 冲突（匹配原因，便于核对分组是否合理）
     var tipRows = [{ label: "ID", value: String(p.id) }];
     if (aliases.length) tipRows.push({ label: tc("别名", "Aliases"), value: aliases.join(", ") });
     if (p.created_at) tipRows.push({ label: tc("创建", "Created"), value: String(p.created_at).slice(0, 10) });
@@ -1533,6 +2103,10 @@
       var sidMatched = (p.stash_ids || []).filter(function (s) { return g.sharedSidKeys[s.endpoint + "|" + s.stash_id]; })
         .map(function (s) { return endpointShort(s.endpoint) + ": " + s.stash_id; });
       if (sidMatched.length) tipRows.push({ label: tc("同 stash_id", "Same stash_id"), value: sidMatched.join(", ") });
+    }
+    if (flags && flags.urlWarn) {
+      tipRows.push({ label: tc("URL 冲突", "URL Conflict"),
+        value: Object.keys(flags.urlHosts || {}).join(", ") || tc("同平台不同账号", "different accounts on the same platform") });
     }
 
     var row = el("label", "pdm-perf-row" + (isTarget ? " pdm-row-target" : ""), null, {
@@ -1584,9 +2158,20 @@
     if (p.gallery_count) badges.appendChild(el("span", "pdm-badge pdm-badge-count", tc("图库 ", "Gals ") + p.gallery_count));
     if (p.image_count) badges.appendChild(el("span", "pdm-badge pdm-badge-count", tc("图片 ", "Imgs ") + p.image_count));
     if (aliases.length) badges.appendChild(el("span", "pdm-badge pdm-badge-count", tc("别名 ", "Aliases ") + aliases.length));
+    // URL 数量徽章（仅数量，不展示具体 URL）；组内同平台不同账号 → 标黄警示
+    var urlCount = (p.urls || []).length;
+    if (urlCount) {
+      var urlWarn = !!(flags && flags.urlWarn);
+      badges.appendChild(el("span", "pdm-badge " + (urlWarn ? "pdm-badge-warn" : "pdm-badge-count"), tc("URL ", "URLs ") + urlCount, {
+        title: urlWarn
+          ? tc("同平台不同账号（可能不同的人）：" + (Object.keys(flags.urlHosts || {}).join(", ") || "—"),
+              "Different accounts on the same platform (possibly different people): " + (Object.keys(flags.urlHosts || {}).join(", ") || "—"))
+          : tc("链接 " + urlCount + " 条", urlCount + " URL(s)"),
+      }));
+    }
     (p.stash_ids || []).forEach(function (sid) {
-      // 冲突端点的 stash_id 徽章换用琥珀警示色（强制合并页核对用）
-      var cls = "pdm-badge " + (conflictEndpoints && conflictEndpoints[sid.endpoint] ? "pdm-badge-conflict" : "pdm-badge-stash");
+      // 冲突端点的 stash_id 徽章换用琥珀警示色（核对阻断原因用）
+      var cls = "pdm-badge " + (flags && flags.endpoints[sid.endpoint] ? "pdm-badge-conflict" : "pdm-badge-stash");
       badges.appendChild(el("span", cls, endpointShort(sid.endpoint), {
         title: sid.endpoint + " · " + sid.stash_id,
       }));

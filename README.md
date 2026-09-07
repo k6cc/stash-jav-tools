@@ -9,7 +9,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
-| [JavStashLinker](./JavStashLinker/) | 1.3.1 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则） |
+| [JavStashLinker](./JavStashLinker/) | 1.4.0 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则，无图演员自动补图、空白信息补全不覆盖、StashDB 交叉链接转 stash_id） |
 | [performerMerge](./performerMerge/) | 1.6.1 | 纯 UI | 重名演员检测与合并：证据分级连组（stash_id/共享 URL/主名全名/短名）+ 树级 ID/URL 冲突检查，冲突/低可信度组挂徽章并退出「合并全部」，被阻断对在「强制合并」页人工核实后手动合并；附带共享短名别名一键清理与别名单行合并错误拆分修复（无需 Python） |
 | [tagMerge](./tagMerge/) | 2.4.1 | 纯 UI | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，面板预览后一键合并，源名保留为别名；映射表可在面板内编辑并导出文件（单行紧凑格式），冲突检测一键清理，条目可忽略/恢复（无需 Python） |
 
@@ -53,7 +53,7 @@ plugins/
 | sceneTranslate | 需要 | 需要 | 不需要 |
 | sceneGallerySync | 需要 | 需要 | 不需要 |
 | studioTools | 不需要 | 不需要 | Search 模块需要（StashDB/ThePornDB/JAVStash 任一） |
-| JavStashLinker | 需要 | 需要 | JAVStash |
+| JavStashLinker | 需要 | 需要 | JAVStash（经「设置 → 元数据提供者」stash-box 端点配置，插件自动复用） |
 | performerMerge | 不需要 | 不需要 | 不需要（需 Stash v0.31.0+） |
 | tagMerge | 不需要 | 不需要 | 不需要（需 Stash v0.30+） |
 
@@ -125,7 +125,7 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 5. 在「待审核」标签页审核 medium 置信度匹配（纯名称/别名匹配）
 6. 在「未匹配」标签页为多演员场景手动选择本地演员
 7. 点击「应用全部」批量应用 high 置信度匹配，或逐条点击「应用」按钮
-8. 在「手动搜索」标签页：列出全部未绑定演员（可按名称/别名筛选），点「搜索」逐词搜 JAVStash，命中高可信度即停止，「更多」展开全部候选（StashDB 交叉/URL 交集/多名称一致/生日比对）
+8. 在「手动搜索」标签页：列出全部未绑定演员（可按名称/别名筛选），点「搜索」逐词搜 JAVStash，命中高可信度即停止，「更多」展开全部候选（StashDB 交叉/URL 交集/多名称一致/生日比对）；应用时本地演员无图片则后台自动补入 JAVStash 图片，空白信息字段（性别/生日/国家/人种等）按「已有不覆盖」补齐
 
 详细说明见 [JavStashLinker/README.md](./JavStashLinker/README.md)。
 

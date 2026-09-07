@@ -1,5 +1,7 @@
 # JavStashLinker
 
+> v1.4.0：所有应用路径（单条应用、「应用全部」、手动搜索、Python 批量任务）新增**后台自动补图 + 演员信息补全** — 本地演员无自定义图片时补入 JAVStash 图片 URL（Stash 服务端下载，不占浏览器 CSP/无需 base64）；性别/生日/卒日/国家/人种/发色/瞳色/身高/三围/生涯/纹身/穿孔按「已有不覆盖」原则补齐，别名和 URL 增量添加；批量走独立限流队列（2 并发/300ms 间隔）；链接中的 StashDB / ThePornDB 演员链接（UUID 格式）转为对应端点的 stash_id 而非写入 urls（ThePornDB slug 格式链接无法经其 API 解析，忽略不进 urls）；同时修正 README 安装说明（API Key 经「元数据提供者」stash-box 配置自动复用，插件自身无设置项）
+>
 > v1.3.1：按钮悬浮提示文案按新规范精简 — title 只写操作影响的数据（`忽略该演员`、`仅应用 high 置信度`），会话级作用域等机制描述去冗，机制细节见 README
 >
 > v1.3.0：适配 Refract 主题移动端导航 — 按钮自动镜像进移动端抽屉（更多选项），并可在 Settings → Interface → Refract → Mobile dock 中固定到底部 dock；含 v1.2.3 源链接更新
@@ -21,9 +23,9 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 
 ## 安装
 
-1. 将整个 `javstash_performer_matcher` 文件夹复制到 Stash 插件目录（通常为 `~/.stash/plugins/` 或 Stash 数据目录下的 `plugins/`）
+1. 将整个 `JavStashLinker` 文件夹复制到 Stash 插件目录（通常为 `~/.stash/plugins/` 或 Stash 数据目录下的 `plugins/`）
 2. 重启 Stash
-3. 进入 **设置 → 插件**，在插件设置中填入 JAVStash API Key（从 javstash.org 账号设置页获取）
+3. 在 **设置 → 元数据提供者 → Stash-box 端点** 中添加 JAVStash 实例（端点 `https://javstash.org/graphql` + API Key，从 javstash.org 账号设置页获取）— 插件自动复用该配置，自身无任何设置项；未配置时扫描/搜索会弹窗提示
 
 ## 使用方法
 
@@ -44,8 +46,8 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 
 在 **设置 → 任务** 中运行：
 
-- **Batch Scan**：扫描所有有 JAVStash ID 的场景，输出匹配结果到 `match_results.json`
-- **Apply High-Confidence Matches**：应用高置信度匹配（仅 stashdb_id 和单演员匹配）
+- **Batch Scan**：扫描所有有 JAVStash ID 的场景，输出匹配结果到 `match_results.json`（含演员详情/链接，供 Apply 使用）
+- **Apply High-Confidence Matches**：应用高置信度匹配（仅 stashdb_id 和单演员匹配），与 UI 应用同规则 — 补全空白信息字段、跨站链接转 stash_id；需先（重新）运行 Batch Scan 以缓存演员详情，旧版扫描结果无详情数据则跳过补全
 
 ### 方式三：手动搜索（单个演员）
 
@@ -54,7 +56,7 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 1. 打开面板，切到 **手动搜索** 标签页 — 自动列出所有未绑定 JAVStash ID 的本地演员（顶部可按名称/别名实时筛选）
 2. 点击演员行右侧 **搜索** — 用该演员的主名+全部别名（去重后最多 15 个词）逐词调 JAVStash `searchPerformer`（4 req/s 限流）
 3. **命中高可信度即停止搜索**：组框向下展开，只显示 high 候选，卡片显示证据明细（命中票数、生日/身高对比 ✓/△/✗、URL 交集、StashDB 交叉）
-4. 点击 **应用** → 写入 stash_id + 别名 + URL 合并（与场景扫描应用同一条路径，只追加不覆盖）；应用后按钮显示 **已应用**，组框收缩
+4. 点击 **应用** → 写入 stash_id + 别名 + URL 合并（与场景扫描应用同一条路径，只追加不覆盖）；**本地演员无自定义图片时后台自动补入图片，空白信息字段（性别/生日/国家/人种等）按「已有不覆盖」补齐**（见下方「应用效果」第 6、7 条）；应用后按钮显示 **已应用**，组框收缩
 5. 点击 **更多**（应用按钮右侧，或「未找到高可信度候选」提示行右侧）：继续搜索剩余词 — **高可信度结果保持置顶可见、可随时应用**，进度行追加在下方；搜完后追加全部 medium / 手动确认候选（靠 high/medium 徽章颜色区分）
 6. 状态行右侧 **▲** 可收起该组搜索结果，恢复搜索前状态；未找到高可信度时显示简短提示（JAVStash 未返回任何候选时仅显示状态行）
 7. **忽略**（搜索按钮右侧）：本轮将该演员从列表中排除，关闭面板后重置
@@ -81,17 +83,20 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 1. 在本地演员的 `stash_ids` 中添加 `{endpoint: "https://javstash.org/graphql", stash_id: "javstash演员ID"}`（已有 JAVStash ID 则跳过）
 2. 将 JAVStash 演员名添加到本地演员的 `aliases`（如不存在）
 3. 将 JAVStash 演员的所有别名添加到本地演员的 `aliases`（如不存在）
-4. 将 JAVStash 演员的所有链接（URLs）追加到本地演员的 `urls`（去重合并，已有链接保留，无新增时不提交该字段）
+4. 将 JAVStash 演员的链接（URLs）追加到本地演员的 `urls`（去重合并，已有链接保留，无新增时不提交该字段；`stashdb.org` / `theporndb.net` 演员链接除外 — 见第 8 条）
 5. **不修改**本地演员的现有名字
+6. **后台补图**（所有应用路径：单条应用、「应用全部」、手动搜索）：本地演员无自定义图片（`image_path` 含 `default=true`）时，取 JAVStash 演员的第一张图片 URL 交给 `performerUpdate` 的 `image` 字段 — Stash 服务端自行下载（60s 超时，经 Referer/UA 头），不占浏览器 CSP、无需前端 base64，UI 不等待下载完成；补图经独立限流队列（2 并发/300ms 间隔）执行，失败仅记日志，不影响匹配结果。已有图片则跳过
+7. **演员信息补全**（所有应用路径，与主更新同一 mutation）：性别、生日、卒日、国家（ISO 码）、人种、发色、瞳色、身高、三围（拼为 `34C-26-36` 式）、生涯（`2009` / `2009 - 2015`）、纹身/穿孔（`位置: 描述` 多条以 `; ` 连接）— 逐字段「本地已有值则跳过」，从不覆盖；枚举转显示字符串（如 `CAUCASIAN`→`Caucasian`、`MIDDLE_EASTERN`→`Middle Eastern`）；补了哪些字段记入日志
+8. **跨站链接转 stash_id**（所有应用路径）：JAVStash 演员链接中的 `stashdb.org/performers/<uuid>` 和 `theporndb.net/performers/<uuid>`（UUID 格式）不写入 urls，本地演员无对应端点 stash_id 时直接转为该端点的 stash_id；`theporndb.net/performers/<slug>`（slug 格式，如 `arata-arina`）因 ThePornDB 的 stash_id 是 UUID、slug 无法经其 API 解析，忽略不写入 urls；已有对应端点 stash_id 的不重复添加。仅匹配主机名恰为这两站（含 `www.` 变体）的链接 — 嵌在查询参数、路径中或仿冒域名里的子串不会误命中，照常并入 urls
 
 ## 文件说明
 
 | 文件 | 说明 |
 |------|------|
-| `javstash_performer_matcher.yml` | 插件定义文件（`interface: raw`，`{pluginDir}` 路径） |
-| `javstash_performer_matcher.py` | Python 批量任务脚本（StashInterface + Stash 日志协议） |
-| `javstash_performer_matcher.js` | 交互式 UI（DOM 注入 + MutationObserver + i18n bridge） |
-| `javstash_performer_matcher.css` | 独立样式表（`jsm-` 前缀，`!important` 覆盖） |
+| `JavStashLinker.yml` | 插件定义文件（`interface: raw`，`{pluginDir}` 路径） |
+| `JavStashLinker.py` | Python 批量任务脚本（StashInterface + Stash 日志协议） |
+| `JavStashLinker.js` | 交互式 UI（DOM 注入 + MutationObserver + i18n bridge） |
+| `JavStashLinker.css` | 独立样式表（`jsm-` 前缀，`!important` 覆盖） |
 | `match_results.json` | 批量扫描结果（运行后生成） |
 
 ## 技术细节
@@ -124,7 +129,7 @@ Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
 
 - Python 3.6+ + `requests` 库
 - Stash 最新版
-- JAVStash API Key
+- JAVStash stash-box 端点（含 API Key，在 **设置 → 元数据提供者** 中配置）
 
 ## 注意事项
 

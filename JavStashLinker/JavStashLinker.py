@@ -11,6 +11,7 @@ import unicodedata
 import requests
 
 STASHDB_ENDPOINT = "https://stashdb.org/graphql"
+TPDB_ENDPOINT = "https://theporndb.net/graphql"
 JAVSTASH_ENDPOINT = "https://javstash.org/graphql"
 
 # ==================== Logging (Stash protocol) ====================
@@ -162,13 +163,25 @@ class StashInterface:
             alias_list
             urls
             stash_ids { endpoint stash_id }
+            gender
+            birthdate
+            death_date
+            country
+            ethnicity
+            hair_color
+            eye_color
+            height_cm
+            measurements
+            career_length
+            tattoos
+            piercings
           }
         }
         """
         data = self.client.query(query, {"id": performer_id})
         return data.get("findPerformer")
 
-    def update_performer(self, performer_id, stash_ids, alias_list, urls=None):
+    def update_performer(self, performer_id, stash_ids, alias_list, urls=None, details=None):
         mutation = """
         mutation($input: PerformerUpdateInput!) {
           performerUpdate(input: $input) { id }
@@ -181,6 +194,8 @@ class StashInterface:
         }
         if urls is not None:
             inp["urls"] = urls
+        if details:
+            inp.update(details)
         self.client.query(mutation, {
             "input": inp
         })
@@ -287,6 +302,90 @@ def match_scene(local_scene, javstash_scene):
 
 _applied_performers = set()
 
+# stash-box enum value (e.g. MIDDLE_EASTERN) -> Stash display string (e.g. Middle Eastern)
+def enum_to_display(v):
+    def cap(m):
+        return (" " if m.group(1) else "") + m.group(2).upper()
+    return re.sub(r"(^|_)([a-z])", cap, str(v).lower())
+
+# stash-box body modifications [{location, description}] -> Stash free-text string
+def mods_to_string(mods):
+    parts = []
+    for t in mods or []:
+        loc = t.get("location", "")
+        desc = t.get("description") or ""
+        parts.append(f"{loc}: {desc}" if desc else loc)
+    return "; ".join(parts)
+
+# Build performer detail fields to fill: only fields the local performer lacks.
+def build_perf_details(local_perf, js_perf):
+    def empty(v):
+        return v is None or v == ""
+    d = {}
+    if empty(local_perf.get("gender")) and not empty(js_perf.get("gender")):
+        d["gender"] = js_perf["gender"]
+    if empty(local_perf.get("birthdate")) and not empty(js_perf.get("birth_date")):
+        d["birthdate"] = js_perf["birth_date"]
+    if empty(local_perf.get("death_date")) and not empty(js_perf.get("death_date")):
+        d["death_date"] = js_perf["death_date"]
+    if empty(local_perf.get("country")) and not empty(js_perf.get("country")):
+        d["country"] = js_perf["country"]
+    if empty(local_perf.get("ethnicity")) and not empty(js_perf.get("ethnicity")):
+        d["ethnicity"] = enum_to_display(js_perf["ethnicity"])
+    if empty(local_perf.get("hair_color")) and not empty(js_perf.get("hair_color")):
+        d["hair_color"] = enum_to_display(js_perf["hair_color"])
+    if empty(local_perf.get("eye_color")) and not empty(js_perf.get("eye_color")):
+        d["eye_color"] = enum_to_display(js_perf["eye_color"])
+    if empty(local_perf.get("height_cm")) and not empty(js_perf.get("height")):
+        d["height_cm"] = js_perf["height"]
+    if empty(local_perf.get("measurements")) and not (empty(js_perf.get("band_size")) and empty(js_perf.get("cup_size")) and empty(js_perf.get("waist_size")) and empty(js_perf.get("hip_size"))):
+        parts = []
+        bust = f"{js_perf.get('band_size') or ''}{js_perf.get('cup_size') or ''}"
+        if bust:
+            parts.append(bust)
+        if not empty(js_perf.get("waist_size")):
+            parts.append(str(js_perf["waist_size"]))
+        if not empty(js_perf.get("hip_size")):
+            parts.append(str(js_perf["hip_size"]))
+        if parts:
+            d["measurements"] = "-".join(parts)
+    if empty(local_perf.get("career_length")) and not (empty(js_perf.get("career_start_year")) and empty(js_perf.get("career_end_year"))):
+        if not empty(js_perf.get("career_start_year")) and not empty(js_perf.get("career_end_year")):
+            d["career_length"] = f"{js_perf['career_start_year']} - {js_perf['career_end_year']}"
+        else:
+            d["career_length"] = str(js_perf.get("career_start_year") or js_perf.get("career_end_year"))
+    if empty(local_perf.get("tattoos")) and js_perf.get("tattoos"):
+        d["tattoos"] = mods_to_string(js_perf["tattoos"])
+    if empty(local_perf.get("piercings")) and js_perf.get("piercings"):
+        d["piercings"] = mods_to_string(js_perf["piercings"])
+    return d
+
+# Stash-box cross links (stashdb.org / theporndb.net performer URLs) never merge into
+# local urls. Only URLs whose host is exactly one of those sites (www. allowed) count —
+# UUID-form links convert to stash_ids for the matching endpoint, ThePornDB slug links
+# (unresolvable by their API) are dropped. Everything else, including URLs merely
+# embedding such a link in a query param or on a lookalike domain, is left alone.
+_CROSS_SITE_RE = re.compile(r"^https?://([^/?#]+)/performers/([^/?#]+)", re.I)
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_CROSS_SITE_HOSTS = {
+    "stashdb.org": "stashdb.org",
+    "www.stashdb.org": "stashdb.org",
+    "theporndb.net": "theporndb.net",
+    "www.theporndb.net": "theporndb.net",
+}
+
+def cross_site_performer_ref(url_str):
+    m = _CROSS_SITE_RE.match(url_str or "")
+    if not m:
+        return None
+    site = _CROSS_SITE_HOSTS.get(m.group(1).lower())
+    if not site:
+        return None
+    return {
+        "endpoint": f"https://{site}/graphql",
+        "stash_id": m.group(2) if _UUID_RE.match(m.group(2)) else None,
+    }
+
 
 def apply_match(stash, local_perf_id, js_perf):
     if local_perf_id in _applied_performers:
@@ -312,15 +411,34 @@ def apply_match(stash, local_perf_id, js_perf):
         if alias and alias not in existing_aliases:
             existing_aliases.append(alias)
 
+    # Merge URLs (dedup); stash-box cross links (stashdb/theporndb) become stash_ids
     existing_urls = perf.get("urls", []) or []
     new_urls = list(existing_urls)
+    have_endpoints = {sid["endpoint"] for sid in new_stash_ids}
+    cross_added = []
     for url_obj in js_perf.get("urls", []) or []:
         url_str = url_obj if isinstance(url_obj, str) else url_obj.get("url", "")
-        if url_str and url_str not in new_urls:
+        if not url_str:
+            continue
+        ref = cross_site_performer_ref(url_str)
+        if ref:
+            if ref["stash_id"] and ref["endpoint"] not in have_endpoints:
+                new_stash_ids.append({"endpoint": ref["endpoint"], "stash_id": ref["stash_id"]})
+                have_endpoints.add(ref["endpoint"])
+                cross_added.append(ref["endpoint"])
+            continue
+        if url_str not in new_urls:
             new_urls.append(url_str)
     urls_to_send = new_urls if len(new_urls) != len(existing_urls) else None
 
-    stash.update_performer(local_perf_id, new_stash_ids, existing_aliases, urls_to_send)
+    details = build_perf_details(perf, js_perf)
+
+    stash.update_performer(local_perf_id, new_stash_ids, existing_aliases, urls_to_send, details)
+
+    if details:
+        log_info(f"  Filled performer info ({', '.join(details.keys())})")
+    for ep in cross_added:
+        log_info(f"  Filled stash_id from link ({ep})")
 
 
 # ==================== Main ====================
@@ -381,6 +499,23 @@ def main():
                         name
                         disambiguation
                         aliases
+                        urls { url }
+                        gender
+                        birth_date
+                        death_date
+                        career_start_year
+                        career_end_year
+                        height
+                        cup_size
+                        band_size
+                        waist_size
+                        hip_size
+                        hair_color
+                        eye_color
+                        ethnicity
+                        country
+                        tattoos { location description }
+                        piercings { location description }
                       }
                     }
                   }

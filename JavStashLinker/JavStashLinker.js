@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.3.1";
+  var PLUGIN_VERSION = "1.4.0";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -150,6 +150,7 @@
 
   var _jsRateLimiter = createRateLimiter(4, 250);   // JAVStash: 4 concurrent, 250ms spacing
   var _localRateLimiter = createRateLimiter(5, 0);   // Local Stash: 5 concurrent, no spacing
+  var _imgRateLimiter = createRateLimiter(2, 300);  // Image fills: 2 concurrent, 300ms spacing (each mutation triggers a server-side javstash.org download)
 
   // ==================== Render Throttle ====================
 
@@ -192,7 +193,7 @@
 
     function fetchPage() {
       return callGQL(
-        "query($filter: FindFilterType!) { findScenes(filter: $filter) { count scenes { id title code performers { id name alias_list urls stash_ids { endpoint stash_id } } stash_ids { endpoint stash_id } } } }",
+        "query($filter: FindFilterType!) { findScenes(filter: $filter) { count scenes { id title code performers { id name alias_list urls image_path stash_ids { endpoint stash_id } gender birthdate death_date country ethnicity hair_color eye_color height_cm measurements career_length tattoos piercings } stash_ids { endpoint stash_id } } } }",
         { filter: { per_page: PAGE_SIZE, page: page, sort: "path" } }
       ).then(function (data) {
         var result = data.findScenes;
@@ -225,14 +226,14 @@
 
   function getJavstashScene(endpoint, apiKey, sceneId) {
     return callJavstashGQL(endpoint, apiKey,
-      "query($id: ID!) { findScene(id: $id) { id title code performers { as performer { id name disambiguation aliases urls { url } } } } }",
+      "query($id: ID!) { findScene(id: $id) { id title code performers { as performer { id name disambiguation aliases urls { url } images { url } gender birth_date death_date height cup_size band_size waist_size hip_size hair_color eye_color ethnicity country career_start_year career_end_year tattoos { location description } piercings { location description } } } } }",
       { id: sceneId }
     ).then(function (data) { return data.findScene; });
   }
 
   function searchJavstashPerformers(endpoint, apiKey, term) {
     return callJavstashGQL(endpoint, apiKey,
-      "query($term: String!) { searchPerformer(term: $term) { id name disambiguation aliases deleted urls { url } birth_date career_start_year height } }",
+      "query($term: String!) { searchPerformer(term: $term) { id name disambiguation aliases deleted urls { url } birth_date death_date career_start_year career_end_year height cup_size band_size waist_size hip_size gender hair_color eye_color ethnicity country tattoos { location description } piercings { location description } images { url } } }",
       { term: term }
     ).then(function (data) { return data.searchPerformer || []; });
   }
@@ -243,7 +244,7 @@
     var page = 1;
     function fetchPage() {
       return callGQL(
-        "query($filter: FindFilterType!) { findPerformers(filter: $filter) { count performers { id name disambiguation alias_list birthdate urls height_cm stash_ids { endpoint stash_id } } } }",
+        "query($filter: FindFilterType!) { findPerformers(filter: $filter) { count performers { id name disambiguation alias_list birthdate death_date urls height_cm measurements country ethnicity hair_color eye_color career_length tattoos piercings gender image_path stash_ids { endpoint stash_id } } } }",
         { filter: { per_page: PAGE_SIZE, page: page, sort: "name" } }
       ).then(function (data) {
         var result = data.findPerformers;
@@ -258,9 +259,12 @@
     return fetchPage();
   }
 
-  function updatePerformer(id, stashIds, aliasArray, urls) {
+  function updatePerformer(id, stashIds, aliasArray, urls, details) {
     var input = { id: id, stash_ids: stashIds, alias_list: aliasArray };
     if (urls) input.urls = urls;
+    if (details) {
+      Object.keys(details).forEach(function (k) { input[k] = details[k]; });
+    }
     return callGQL(
       "mutation($input: PerformerUpdateInput!) { performerUpdate(input: $input) { id } }",
       { input: input }
@@ -480,6 +484,107 @@
 
   var _appliedPerformers = {}; // track local performer IDs already applied
 
+  // Stash-box enum value (e.g. MIDDLE_EASTERN) -> Stash display string (e.g. Middle Eastern)
+  function enumToDisplay(v) {
+    return String(v).toLowerCase().replace(/(^|_)([a-z])/g, function (_, p, c) {
+      return (p ? " " : "") + c.toUpperCase();
+    });
+  }
+
+  // stash-box body modifications [{location, description}] -> Stash free-text string
+  function modsToString(list) {
+    return (list || []).map(function (t) {
+      return t.location + (t.description ? ": " + t.description : "");
+    }).join("; ");
+  }
+
+  // Build performer detail fields to fill: only fields the local performer lacks.
+  // Existing values are never overwritten; aliases/urls stay incremental elsewhere.
+  function buildPerfDetails(localPerf, jsPerf) {
+    function empty(v) { return v === undefined || v === null || v === ""; }
+    var d = {};
+    if (empty(localPerf.gender) && !empty(jsPerf.gender)) d.gender = jsPerf.gender;
+    if (empty(localPerf.birthdate) && !empty(jsPerf.birth_date)) d.birthdate = jsPerf.birth_date;
+    if (empty(localPerf.death_date) && !empty(jsPerf.death_date)) d.death_date = jsPerf.death_date;
+    if (empty(localPerf.country) && !empty(jsPerf.country)) d.country = jsPerf.country;
+    if (empty(localPerf.ethnicity) && !empty(jsPerf.ethnicity)) d.ethnicity = enumToDisplay(jsPerf.ethnicity);
+    if (empty(localPerf.hair_color) && !empty(jsPerf.hair_color)) d.hair_color = enumToDisplay(jsPerf.hair_color);
+    if (empty(localPerf.eye_color) && !empty(jsPerf.eye_color)) d.eye_color = enumToDisplay(jsPerf.eye_color);
+    if (empty(localPerf.height_cm) && !empty(jsPerf.height)) d.height_cm = jsPerf.height;
+    if (empty(localPerf.measurements) && (!empty(jsPerf.band_size) || !empty(jsPerf.cup_size) || !empty(jsPerf.waist_size) || !empty(jsPerf.hip_size))) {
+      var parts = [];
+      var bust = (jsPerf.band_size || "") + (jsPerf.cup_size || "");
+      if (bust) parts.push(bust);
+      if (!empty(jsPerf.waist_size)) parts.push(jsPerf.waist_size);
+      if (!empty(jsPerf.hip_size)) parts.push(jsPerf.hip_size);
+      if (parts.length) d.measurements = parts.join("-");
+    }
+    if (empty(localPerf.career_length) && (!empty(jsPerf.career_start_year) || !empty(jsPerf.career_end_year))) {
+      if (!empty(jsPerf.career_start_year) && !empty(jsPerf.career_end_year)) {
+        d.career_length = jsPerf.career_start_year + " - " + jsPerf.career_end_year;
+      } else {
+        d.career_length = String(jsPerf.career_start_year || jsPerf.career_end_year);
+      }
+    }
+    if (empty(localPerf.tattoos) && jsPerf.tattoos && jsPerf.tattoos.length) d.tattoos = modsToString(jsPerf.tattoos);
+    if (empty(localPerf.piercings) && jsPerf.piercings && jsPerf.piercings.length) d.piercings = modsToString(jsPerf.piercings);
+    return d;
+  }
+
+  // Log which detail fields were filled, labels follow current locale
+  function logPerfDetailsFilled(name, details) {
+    var keys = Object.keys(details);
+    if (!keys.length) return;
+    var labels = {
+      gender: tc("性别", "Gender"),
+      birthdate: tc("生日", "Birthdate"),
+      death_date: tc("卒日", "Death date"),
+      country: tc("国家", "Country"),
+      ethnicity: tc("人种", "Ethnicity"),
+      hair_color: tc("发色", "Hair color"),
+      eye_color: tc("瞳色", "Eye color"),
+      height_cm: tc("身高", "Height"),
+      measurements: tc("三围", "Measurements"),
+      career_length: tc("生涯", "Career"),
+      tattoos: tc("纹身", "Tattoos"),
+      piercings: tc("穿孔", "Piercings"),
+    };
+    var sep = _intlLocale.indexOf("zh") === 0 ? "、" : ", ";
+    var list = keys.map(function (k) { return labels[k] || k; }).join(sep);
+    addLog(tc("已补充演员信息（", "Filled performer info (") + list + tc("）：", "): ") + name);
+  }
+
+  // Stash-box cross links (stashdb.org / theporndb.net performer URLs) never merge into
+  // local urls. Only URLs whose host is exactly one of those sites (www. allowed) count —
+  // UUID-form links convert to stash_ids for the matching endpoint, ThePornDB slug links
+  // (unresolvable by their API) are dropped. Everything else, including URLs merely
+  // embedding such a link in a query param or on a lookalike domain, is left alone.
+  var _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  var _CROSS_SITE_RE = /^https?:\/\/([^\/?#]+)\/performers\/([^\/?#]+)/i;
+  var _CROSS_SITE_HOSTS = {
+    "stashdb.org": "stashdb.org",
+    "www.stashdb.org": "stashdb.org",
+    "theporndb.net": "theporndb.net",
+    "www.theporndb.net": "theporndb.net",
+  };
+
+  function crossSitePerformerRef(urlStr) {
+    var m = (urlStr || "").match(_CROSS_SITE_RE);
+    if (!m) return null;
+    var site = _CROSS_SITE_HOSTS[m[1].toLowerCase()];
+    if (!site) return null;
+    return {
+      endpoint: "https://" + site + "/graphql",
+      id: _UUID_RE.test(m[2]) ? m[2] : null,
+    };
+  }
+
+  function endpointDisplayName(ep) {
+    if (ep.indexOf("stashdb.org") !== -1) return "StashDB";
+    if (ep.indexOf("theporndb.net") !== -1) return "ThePornDB";
+    return ep;
+  }
+
   // Use cached performer data from scan (stash_ids, alias_list, urls)
   function applyMatchCached(localPerformer, jsPerf) {
     var localPerformerId = localPerformer.id;
@@ -501,19 +606,72 @@
       if (a && existingAliases.indexOf(a) === -1) existingAliases.push(a);
     });
 
-    // Merge URLs (dedup)
+    // Merge URLs (dedup); stash-box cross links (stashdb/theporndb) become stash_ids
     var existingUrls = localPerformer.urls || [];
     var newUrls = existingUrls.slice();
+    var haveEndpoints = {};
+    newStashIds.forEach(function (s) { haveEndpoints[s.endpoint] = true; });
+    var crossAdded = [];
     (jsPerf.urls || []).forEach(function (u) {
       var urlStr = typeof u === "string" ? u : (u && u.url) || "";
-      if (urlStr && newUrls.indexOf(urlStr) === -1) newUrls.push(urlStr);
+      if (!urlStr) return;
+      var ref = crossSitePerformerRef(urlStr);
+      if (ref) {
+        if (ref.id && !haveEndpoints[ref.endpoint]) {
+          newStashIds.push({ endpoint: ref.endpoint, stash_id: ref.id });
+          haveEndpoints[ref.endpoint] = true;
+          crossAdded.push(ref.endpoint);
+        }
+        return;
+      }
+      if (newUrls.indexOf(urlStr) === -1) newUrls.push(urlStr);
     });
     var urlsChanged = newUrls.length !== existingUrls.length;
 
     _appliedPerformers[localPerformerId] = true;
 
+    var details = buildPerfDetails(localPerformer, jsPerf);
+
     return _localRateLimiter.submit(function () {
-      return updatePerformer(localPerformerId, newStashIds, existingAliases, urlsChanged ? newUrls : null);
+      return updatePerformer(localPerformerId, newStashIds, existingAliases, urlsChanged ? newUrls : null, details);
+    }).then(function () {
+      logPerfDetailsFilled(localPerformer.name, details);
+      crossAdded.forEach(function (ep) {
+        addLog(tc("已通过链接补齐 stash_id（", "Filled stash_id from link (") + endpointDisplayName(ep) + tc("）：", "): ") + localPerformer.name);
+      });
+      // Fill the performer image in the background once the main update lands —
+      // covers single apply, batch apply-all, and manual search alike.
+      applyPerformerImageAsync(localPerformer, jsPerf);
+    });
+  }
+
+  // Background image fill for every apply path (single apply, batch apply-all, manual search):
+  // pass the JAVStash image URL straight to performerUpdate — Stash downloads it server-side
+  // (no browser CSP/base64 involved). Skipped when the local performer already has a custom
+  // image (image_path carries "default=true" when it does not). Queued through a dedicated
+  // rate limiter so batch applies never hammer javstash.org; the UI never waits on it.
+  function applyPerformerImageAsync(localPerf, jsPerf) {
+    var ip = localPerf.image_path || "";
+    if (ip && ip.indexOf("default=true") === -1) return;
+    var imgs = jsPerf.images || [];
+    var imgUrl = "";
+    for (var i = 0; i < imgs.length; i++) {
+      if (imgs[i] && imgs[i].url) { imgUrl = imgs[i].url; break; }
+    }
+    if (!imgUrl) {
+      addLog(tc("JAVStash 演员无图片，跳过补图: ", "JAVStash performer has no image, skipped: ") + localPerf.name);
+      return;
+    }
+    _imgRateLimiter.submit(function () {
+      return callGQL(
+        "mutation($input: PerformerUpdateInput!) { performerUpdate(input: $input) { id } }",
+        { input: { id: localPerf.id, image: imgUrl } }
+      );
+    }).then(function () {
+      localPerf.image_path = "/performer/" + localPerf.id + "/image";
+      addLog(tc("已设置演员图片: ", "Performer image set: ") + localPerf.name);
+    }).catch(function (e) {
+      addLog(tc("设置演员图片失败: ", "Failed to set performer image: ") + localPerf.name + " — " + (e.message || e));
     });
   }
 

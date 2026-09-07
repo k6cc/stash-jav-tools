@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.6.0";
+  var PLUGIN_VERSION = "1.6.1";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -1460,8 +1460,7 @@
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
         onclick: function () { _state.ignored[g.key] = true; render(); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略该分组：合并全部时跳过，可随时恢复",
-          "Ignore this group: skipped by Merge All; restorable anytime"),
+        title: tc("忽略该分组", "Ignore this group"),
       }));
     }
 
@@ -1473,7 +1472,7 @@
     // 仅按 stash_id 匹配的组（名字不同）显示徽章，提示匹配依据
     if (!g.sharedNames.length && g.sharedStashIds && g.sharedStashIds.length) {
       nameCell.appendChild(el("span", "pdm-badge pdm-badge-stash", tc("stash_id 匹配", "stash_id match"), {
-        title: tc("名字不同但共享 stash_id（同一外部实体）", "Different names but share stash_id (same external entity)"),
+        title: tc("名字不同但共享 stash_id", "Different names but share stash_id"),
       }));
     }
     // 冲突/可信度徽章（已合并组不再提示）：ID 冲突/URL 冲突 = 琥珀警示，退出「合并全部」；
@@ -1492,8 +1491,8 @@
       }
       if (!g.strongEvidence) {
         nameCell.appendChild(el("span", "pdm-badge pdm-badge-lowconf", tc("低可信度", "Low Confidence"), {
-          title: tc("仅单词短名匹配（无共享 stash_id/URL/主名全名），建议核实后合并",
-            "Matched by single-word short names only (no shared stash_id/URL/main or full name); verify before merging"),
+          title: tc("仅单词短名匹配，建议核实后合并",
+            "Matched by single-word short names only; verify before merging"),
         }));
       }
     }
@@ -1546,8 +1545,8 @@
           ? el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
               onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("仅删除别名条目，主名与含空格/汉字的全名别名不受影响",
-                "Only alias entries are removed; names and aliases containing spaces/CJK characters are untouched"),
+              title: tc("仅删除别名条目",
+                "Only alias entries are removed"),
             })
           : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待清理", "Nothing to Clean")),
       ]),
@@ -1585,14 +1584,14 @@
             el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("清理", "Clean"), {
               onclick: function () { handleCleanShortNames([sn]); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("仅删除该短名的别名条目，主名与含空格/汉字的全名别名不受影响",
-                "Only this short name's alias entries are removed; names and aliases containing spaces/CJK characters are untouched"),
+              title: tc("仅删除该短名的别名条目",
+                "Only this short name's alias entries are removed"),
             }),
             el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
               onclick: function () { _state.snIgnored[sn.norm] = true; render(); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("忽略该短名：清理全部时跳过，可随时恢复",
-                "Ignore this short name: skipped by Clean All; restorable anytime"),
+              title: tc("忽略该短名",
+                "Ignore this short name"),
             }),
           ]),
     ]));
@@ -1748,8 +1747,8 @@
           ? el("button", "pdm-btn pdm-btn-primary", tc("修复全部", "Repair All"), {
               onclick: function () { handleRepairAliases(_state.aliasRepairs.slice()); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
-              title: tc("把合并成单行的别名条目拆回多个（半角/全角逗号、顿号分隔），丢弃与主名相同的片段并去重",
-                "Split aliases merged into one line (separated by half/full-width commas or 、), drop parts equal to the name and dedupe"),
+              title: tc("把合并成单行的别名拆回多个",
+                "Split aliases merged into one line back into multiple"),
             })
           : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待修复", "Nothing to Repair")),
       ]),
@@ -1784,14 +1783,14 @@
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-primary", tc("修复", "Repair"), {
         onclick: function () { handleRepairAliases([ar]); },
         disabled: _state.cleaning || _state.merging || _state.scanning,
-        title: tc("拆分该演员的损坏别名条目并提交完整别名列表",
-          "Split this performer's broken alias entries and submit the full alias list"),
+        title: tc("拆分该演员的损坏别名",
+          "Split this performer's broken aliases"),
       }));
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
         onclick: function () { _state.arIgnored[ar.key] = true; render(); },
         disabled: _state.cleaning || _state.merging || _state.scanning,
-        title: tc("忽略该修复项：修复全部时跳过，可随时恢复",
-          "Ignore this item: skipped by Repair All; restorable anytime"),
+        title: tc("忽略该修复项",
+          "Ignore this repair item"),
       }));
     }
 
@@ -1962,14 +1961,14 @@
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-clean", tc("强制合并", "Force Merge"), {
         onclick: function () { handleForceMergePair(pair); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略冲突证据强制合并该对（有强化确认提示）",
-          "Merge this pair ignoring the conflict evidence (confirmation required)"),
+        title: tc("忽略冲突证据强制合并该对",
+          "Merge this pair ignoring the conflict evidence"),
       }));
       headerRight.appendChild(el("button", "pdm-btn pdm-btn-sm pdm-btn-neutral", tc("忽略", "Ignore"), {
         onclick: function () { _state.ignored[pair.key] = true; render(); },
         disabled: _state.merging || _state.cleaning || _state.versionOk === false,
-        title: tc("忽略该冲突对：可随时恢复",
-          "Ignore this pair; restorable anytime"),
+        title: tc("忽略该冲突对",
+          "Ignore this pair"),
       }));
     }
 

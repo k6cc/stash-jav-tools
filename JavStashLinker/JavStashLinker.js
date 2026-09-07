@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.3.0";
+  var PLUGIN_VERSION = "1.3.1";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -1110,7 +1110,7 @@
         el("button", "jsm-btn jsm-btn-primary" + (_state.applying ? " jsm-btn-disabled" : ""), tc("应用全部", "Apply All"), {
           onclick: handleApply,
           disabled: _state.applying || (!getAllMatches().some(function (m) { return !m.dismissed && m.confidence === "high"; }) && !Object.keys(_state.manualSelected).length),
-          title: tc("只会应用 high 置信度", "Only high-confidence matches will be applied"),
+          title: tc("仅应用 high 置信度", "Apply high-confidence matches only"),
         }),
         closeBtn,
       ]),
@@ -1476,7 +1476,7 @@
       }));
     }
     head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Ignore"), {
-      title: tc("本轮忽略该演员", "Ignore this performer for this session"),
+      title: tc("忽略该演员", "Ignore this performer"),
       onclick: function () { handleIgnorePerformer(p); },
     }));
     group.appendChild(head);

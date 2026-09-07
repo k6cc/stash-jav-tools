@@ -1,5 +1,7 @@
 # JavStashLinker
 
+> v1.3.1：按钮悬浮提示文案按新规范精简 — title 只写操作影响的数据（`忽略该演员`、`仅应用 high 置信度`），会话级作用域等机制描述去冗，机制细节见 README
+>
 > v1.3.0：适配 Refract 主题移动端导航 — 按钮自动镜像进移动端抽屉（更多选项），并可在 Settings → Interface → Refract → Mobile dock 中固定到底部 dock；含 v1.2.3 源链接更新
 
 Stash 插件：通过场景反推批量获取演员的 JAVStash ID。

@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.3.1";
+  var PLUGIN_VERSION = "2.4.0";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -98,10 +98,11 @@
       loaded: true, loading: false, error: null,
       meta: meta || {},      // _ 开头的说明键，导出时原样带回
       items: list.map(function (m) {
-        return { id: "e" + (eid++), target: m.target, sources: m.sources.slice(), editing: false, draftTarget: "", draftSources: "" };
+        return { id: "e" + (eid++), target: m.target, sources: m.sources.slice(), ignored: !!m.ignored, editing: false, draftTarget: "", draftSources: "" };
       }),
       search: "",
       conflictOnly: false,       // 冲突筛选开关：列表只显示含冲突源的条目
+      ignoredOnly: false,        // 忽略筛选开关：列表只显示已忽略条目（与冲突筛选互斥）
       dirty: false,
       saving: false,
       saveMsg: null,             // {text, ok} 导出结果提示（数秒淡出）
@@ -170,6 +171,7 @@
   // ==================== 映射库 ====================
 
   // 解析 {目标: [源...]} 对象：返回条目列表、源名计数、_ 开头的元数据键（导出时原样带回）
+  // _ 键按值类型区分：数组 = 被忽略的映射（目标名去掉 _ 前缀，可在面板恢复），字符串 = 说明键
   // keyOrder 为可选的顶层键序数组 — JS 对象遍历（for...in / Object.keys）会把整数键（如 "69"）
   // 强制排在最前、无视插入序，必须显式传入文本键序才能保持文件顺序；缺省时回退对象遍历序
   function parseMapObject(data, keyOrder) {
@@ -188,10 +190,24 @@
     }
     var list = [];
     var names = 0;
+    var ignored = 0;
     var meta = {};
     keys.forEach(function (target) {
       if (target.charAt(0) === "_") {
-        meta[target] = data[target];
+        if (Array.isArray(data[target])) {
+          // _ 前缀 + 数组值 = 被忽略的映射（扫描跳过，面板「已忽略」筛选可恢复）
+          var cleanedIgn = data[target].filter(function (s) {
+            return typeof s === "string" && s.trim();
+          });
+          if (cleanedIgn.length) {
+            ignored++;
+            list.push({ target: target.slice(1), sources: cleanedIgn, ignored: true });
+          } else {
+            meta[target] = data[target]; // 空数组/无效源：留在 meta 原样带回，防丢
+          }
+        } else {
+          meta[target] = data[target]; // 字符串值 = 说明键
+        }
         return;
       }
       var sources = data[target];
@@ -204,7 +220,7 @@
         list.push({ target: target, sources: cleaned });
       }
     });
-    return { list: list, names: names, meta: meta };
+    return { list: list, names: names, meta: meta, ignored: ignored };
   }
 
   // 加载映射：读取插件目录的 tag_merge_map.json（经 /plugin/ 资源路由，绕过缓存）
@@ -255,10 +271,13 @@
       setState({ scanning: false });
       return;
     }
-    _state.mapping = map.list;
-    _state.mapStats = { groups: map.list.length, names: map.names };
-    addLog(tc("映射库 " + map.list.length + " 组 / " + map.names + " 个源名（tag_merge_map.json）",
-      map.list.length + " mapping groups / " + map.names + " source names (tag_merge_map.json)"));
+    var activeMap = map.list.filter(function (m) { return !m.ignored; });
+    _state.mapping = activeMap;
+    _state.mapStats = { groups: activeMap.length, names: map.names };
+    addLog(tc("映射库 " + activeMap.length + " 组 / " + map.names + " 个源名（tag_merge_map.json）"
+        + (map.ignored ? "，已忽略 " + map.ignored + " 组" : ""),
+      activeMap.length + " mapping groups / " + map.names + " source names (tag_merge_map.json)"
+        + (map.ignored ? ", " + map.ignored + " ignored" : "")));
     render();
 
     try {
@@ -886,6 +905,7 @@
     var targets = {};
     var sources = {};
     (_state.editor ? _state.editor.items : []).forEach(function (it) {
+      if (it.ignored) return; // 已忽略条目不参与重复/冲突检测（扫描也不含它们）
       var tn = normalize(it.target);
       if (tn) (targets[tn] = targets[tn] || []).push(it);
       it.sources.forEach(function (s) {
@@ -1018,12 +1038,28 @@
       hasAnyConflict() ? el("button", "tgm-btn tgm-btn-warn" + (ed.conflictOnly ? " tgm-btn-warn-on" : ""), tc("冲突项", "Conflicts"), {
         onclick: function () {
           ed.conflictOnly = !ed.conflictOnly;
-          if (ed.conflictOnly) ed.search = ""; // 进入筛选时清空搜索
+          if (ed.conflictOnly) {
+            ed.search = ""; // 进入筛选时清空搜索
+            ed.ignoredOnly = false; // 与「已忽略」筛选互斥
+          }
           render();
         },
         title: tc(ed.conflictOnly ? "退出冲突筛选，显示全部条目" : "筛选显示所有含冲突源（归一化重复/跨条目重复/与其他条目目标重名）的条目",
           ed.conflictOnly ? "Exit conflict filter and show all entries" : "Show only entries with conflict sources (normalized duplicates / cross-entry duplicates / other-target name collisions)"),
       }) : null,
+      // 已忽略筛选：常驻显示（无已忽略条目也不隐藏），保留恢复入口的可发现性
+      el("button", "tgm-btn tgm-btn-warn" + (ed.ignoredOnly ? " tgm-btn-warn-on" : ""), tc("已忽略", "Ignored"), {
+        onclick: function () {
+          ed.ignoredOnly = !ed.ignoredOnly;
+          if (ed.ignoredOnly) {
+            ed.search = ""; // 进入筛选时清空搜索
+            ed.conflictOnly = false; // 与「冲突项」筛选互斥
+          }
+          render();
+        },
+        title: tc(ed.ignoredOnly ? "退出忽略筛选，显示全部条目" : "筛选显示所有已忽略的映射条目（不参与扫描）",
+          ed.ignoredOnly ? "Exit ignored filter and show all entries" : "Show only ignored mapping entries (excluded from scans)"),
+      }),
       el("button", "tgm-btn tgm-btn-primary", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
         onclick: handleEditorExport,
         disabled: ed.saving,
@@ -1070,27 +1106,40 @@
       return;
     }
 
-    // 冲突已全部清理时自动退出筛选（点击「清理」后条目即时移出，清完回归全列表）
+    // 冲突已全部清理时自动退出筛选（点击「清理」后条目即时移出，清完回归全列表）；
+    // 「已忽略」筛选不自动退出 — 按钮常驻，空列表显示提示文案，手动点击退出
+    // （自动退出会让空态下点击进入后标志位被重置，按钮呈现激活态却永远无法切回）
     if (ed.conflictOnly && !hasAnyConflict()) ed.conflictOnly = false;
 
     var q = ed.search.trim().toLowerCase();
+    // 视图基底：忽略筛选只看已忽略条目，其余视图（全部/冲突）不含已忽略
+    var base = ed.ignoredOnly
+      ? ed.items.filter(function (it) { return it.ignored; })
+      : ed.items.filter(function (it) { return !it.ignored; });
     var filtered = q
-      ? ed.items.filter(function (it) {
+      ? base.filter(function (it) {
           if (it.target.toLowerCase().indexOf(q) >= 0) return true;
           return it.sources.some(function (s) { return s.toLowerCase().indexOf(q) >= 0; });
         })
-      : ed.items;
+      : base;
     if (ed.conflictOnly) {
       filtered = filtered.filter(function (it) { return getConflictSources(it); });
     }
 
     if (!filtered.length) {
       listEl.appendChild(el("div", "tgm-empty",
-        ed.conflictOnly ? tc("无冲突项", "No conflicts") : tc("无匹配结果", "No matches")));
+        q ? tc("无匹配结果", "No matches")
+          : ed.conflictOnly ? tc("无冲突项", "No conflicts")
+          : ed.ignoredOnly ? tc("无已忽略条目", "No ignored entries")
+          : tc("所有条目均已忽略 — 通过「已忽略」筛选恢复", "All entries are ignored — restore them via the Ignored filter")));
       return;
     }
 
-    if (ed.conflictOnly) {
+    if (ed.ignoredOnly) {
+      listEl.appendChild(el("div", "tgm-conflict-hint",
+        tc("● 已忽略筛选: " + filtered.length + " 个条目",
+          "● Ignored filter: " + filtered.length + " entries")));
+    } else if (ed.conflictOnly) {
       listEl.appendChild(el("div", "tgm-conflict-hint",
         tc("● 冲突筛选: " + filtered.length + " 个条目",
           "● Conflict filter: " + filtered.length + " entries")));
@@ -1100,6 +1149,7 @@
   }
 
   function buildEditorItem(item) {
+    if (item.ignored) return buildEditorIgnoredItem(item); // 已忽略条目：只读卡片（状态徽章 + 恢复）
     return item.editing ? buildEditorItemEdit(item) : buildEditorItemView(item);
   }
 
@@ -1133,10 +1183,11 @@
     return conflicts;
   }
 
-  // 编辑器是否存在任何冲突（工具栏「冲突项」按钮的显隐依据）
+  // 编辑器是否存在任何冲突（工具栏「冲突项」按钮的显隐依据；已忽略条目不参与）
   function hasAnyConflict() {
     var items = _state.editor ? _state.editor.items : [];
     for (var i = 0; i < items.length; i++) {
+      if (items[i].ignored) continue;
       if (getConflictSources(items[i])) return true;
     }
     return false;
@@ -1199,15 +1250,23 @@
       },
       disabled: ed.saving,
     }));
+    actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-muted", tc("忽略", "Ignore"), {
+      onclick: function () { handleEditorIgnore(item); },
+      disabled: ed.saving,
+      title: tc("忽略该映射：扫描时跳过，可随时恢复", "Ignore this mapping: skipped in scans; restorable anytime"),
+    }));
     actionBtns.push(el("button", "tgm-btn tgm-btn-sm tgm-btn-danger", tc("删除", "Delete"), {
       onclick: function () { handleEditorRemove(item); },
       disabled: ed.saving,
     }));
 
+    // 头部：目标名 + 右组（徽章+按钮绑成整组）— 放不下时右组整体换行到下方右对齐，不挤压目标名
     card.appendChild(el("div", "tgm-edit-item-head", [
       el("span", "tgm-edit-item-target", item.target, { title: item.target }),
-      el("span", "tgm-badge tgm-badge-count", tc(item.sources.length + " 源", item.sources.length + " sources")),
-      el("div", "tgm-card-actions", actionBtns),
+      el("div", "tgm-edit-item-side", [
+        el("span", "tgm-badge tgm-badge-count", tc(item.sources.length + " 源", item.sources.length + " sources")),
+        el("div", "tgm-card-actions", actionBtns),
+      ]),
     ]));
 
     var srcWrap = el("div", "tgm-edit-item-sources");
@@ -1266,6 +1325,37 @@
     if (dups.length) {
       card.appendChild(el("div", "tgm-edit-item-dup", dups.join(" · ")));
     }
+
+    return card;
+  }
+
+  // 已忽略条目：只读卡片 — 目标名 + N 源徽章 + 透明框「已忽略」状态徽章 + 「恢复」按钮
+  function buildEditorIgnoredItem(item) {
+    var ed = _state.editor;
+    var card = el("div", "tgm-edit-item");
+    card.setAttribute("data-item-id", item.id);
+
+    // 头部结构与列表态一致：目标名 + 右组（徽章+状态+恢复），放不下时右组整体换行
+    card.appendChild(el("div", "tgm-edit-item-head", [
+      el("span", "tgm-edit-item-target", item.target, { title: item.target }),
+      el("div", "tgm-edit-item-side", [
+        el("span", "tgm-badge tgm-badge-count", tc(item.sources.length + " 源", item.sources.length + " sources")),
+        el("span", "tgm-badge tgm-badge-state", tc("已忽略", "Ignored")),
+        el("div", "tgm-card-actions", [
+          el("button", "tgm-btn tgm-btn-sm tgm-btn-primary", tc("恢复", "Restore"), {
+            onclick: function () { handleEditorRestore(item); },
+            disabled: ed.saving,
+            title: tc("恢复该映射参与扫描分组", "Restore this mapping to scan grouping"),
+          }),
+        ]),
+      ]),
+    ]));
+
+    var srcWrap = el("div", "tgm-edit-item-sources");
+    item.sources.forEach(function (s) {
+      srcWrap.appendChild(el("span", "tgm-edit-src", s, { title: s }));
+    });
+    card.appendChild(srcWrap);
 
     return card;
   }
@@ -1375,10 +1465,37 @@
     render();
   }
 
+  // 忽略映射：条目标记 ignored，扫描跳过、导出为 _ 前缀键 — 可恢复，无需确认
+  function handleEditorIgnore(item) {
+    var ed = _state.editor;
+    var key = "_" + item.target;
+    if (Object.prototype.hasOwnProperty.call(ed.meta, key)) {
+      alert(tc("忽略键「" + key + "」与说明键冲突 — 请先删除或重命名该说明键",
+        "Ignore key \"" + key + "\" collides with a description key — remove or rename it first"));
+      return;
+    }
+    item.ignored = true;
+    ed.dirty = true;
+    invalidateDupIndex();
+    addLog(tc("映射编辑器: 忽略「" + item.target + "」", "Mapping editor: ignored \"" + item.target + "\""));
+    render();
+  }
+
+  // 恢复映射：重新参与扫描分组与冲突/重复检测
+  function handleEditorRestore(item) {
+    var ed = _state.editor;
+    item.ignored = false;
+    ed.dirty = true;
+    invalidateDupIndex();
+    addLog(tc("映射编辑器: 恢复「" + item.target + "」", "Mapping editor: restored \"" + item.target + "\""));
+    render();
+  }
+
   function handleEditorAdd() {
     var ed = _state.editor;
     ed.search = "";
     ed.conflictOnly = false; // 新条目无冲突，退出筛选避免被过滤隐藏
+    ed.ignoredOnly = false; // 新条目未被忽略，退出忽略筛选
     var searchEl = document.querySelector("#tgm-panel-root .tgm-search-input");
     if (searchEl) searchEl.value = "";
     ed.items.unshift({
@@ -1411,13 +1528,14 @@
       var t = it.target.trim();
       if (!t || !it.sources.length) return;
       count++;
-      if (byKey[t]) {
+      var key = it.ignored ? "_" + t : t; // 已忽略条目导出为 _ 前缀键（扫描跳过）
+      if (byKey[key]) {
         for (var i = 0; i < pairs.length; i++) {
-          if (pairs[i][0] === t) { pairs[i][1] = it.sources.slice(); break; }
+          if (pairs[i][0] === key) { pairs[i][1] = it.sources.slice(); break; }
         }
       } else {
-        byKey[t] = true;
-        pairs.push([t, it.sources.slice()]);
+        byKey[key] = true;
+        pairs.push([key, it.sources.slice()]);
       }
     });
     if (!count && ed.items.length) {
@@ -1425,9 +1543,13 @@
           "All entries are empty — exporting an empty table means scans match nothing. Continue?"))) return;
     }
 
-    // 保序拼装：JSON.stringify 会把纯数字键（如 "69"）强制排到对象最前，破坏文件键序
+    // 保序拼装：JSON.stringify 会把纯数字键（如 "69"）强制排到对象最前，破坏文件键序；
+    // 数组值（映射源）单行书写（与 README 示例一致），一条映射一行，便于阅读与检索；
+    // 字符串值（_ 说明键）原样序列化
     var blob = new Blob([pairs.length ? "{\n" + pairs.map(function (p) {
-      return "  " + JSON.stringify(p[0]) + ": " + JSON.stringify(p[1], null, 2).split("\n").join("\n  ");
+      return "  " + JSON.stringify(p[0]) + ": " + (Array.isArray(p[1])
+        ? "[" + p[1].map(function (s) { return JSON.stringify(s); }).join(", ") + "]"
+        : JSON.stringify(p[1]));
     }).join(",\n") + "\n}" : "{}"], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -1438,9 +1560,14 @@
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
+    var ignoredCnt = ed.items.filter(function (it) { return it.ignored; }).length;
     ed.dirty = false;
-    ed.saveMsg = { ok: true, text: tc("已导出 " + count + " 组映射 — 请替换插件目录中的 tag_merge_map.json",
-      "Exported " + count + " mappings — replace tag_merge_map.json in the plugin folder") };
+    ed.saveMsg = { ok: true, text: tc("已导出 " + count + " 组映射"
+        + (ignoredCnt ? "（含 " + ignoredCnt + " 组已忽略）" : "")
+        + " — 请替换插件目录中的 tag_merge_map.json",
+      "Exported " + count + " mappings"
+        + (ignoredCnt ? " (" + ignoredCnt + " ignored)" : "")
+        + " — replace tag_merge_map.json in the plugin folder") };
     addLog(tc("映射编辑器: 导出 " + count + " 组映射", "Mapping editor: exported " + count + " mappings"));
     render();
     setTimeout(function () {

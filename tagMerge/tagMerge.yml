@@ -1,6 +1,6 @@
 name: Tag Merge
 description: Merge similar tags into canonical Chinese tags based on an editable mapping database. UI panel with preview, no Python required.
-version: 2.3.1
+version: 2.4.0
 url: https://discourse.stashapp.cc/t/tag-merge/15889
 ui:
   javascript:

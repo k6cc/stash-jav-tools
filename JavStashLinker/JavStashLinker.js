@@ -1726,9 +1726,9 @@
 
   // 圆角长条滑块开关 — 滑块在文字左侧；点击切换（滑块+文字整块可点）；
   // 滑块靠右 = 开启，开启时滑轨显示主题色。
-  function buildToggle(label, checked, tooltip, onchange) {
+  function buildToggle(label, checked, tooltip, onchange, warn) {
     var on = !!checked;
-    var toggle = el("div", "jsm-toggle" + (on ? " on" : ""), [
+    var toggle = el("div", "jsm-toggle" + (warn ? " jsm-toggle-warn" : "") + (on ? " on" : ""), [
       el("span", "jsm-toggle-track", [el("span", "jsm-toggle-knob")]),
       el("span", "jsm-toggle-label", label),
     ]);
@@ -1786,13 +1786,14 @@
               disabled: !!_state.scanning || !_state.javstashApiKey,
             }),
         buildToggle(tc("别名搜索", "Alias Search"), _state.searchOpts.aliasSearch,
-          tc("搜索时使用主名+全部别名；取消后仅搜索主名并只核对第一个结果（更快，但主名搜不到、仅别名可搜的演员会漏）",
-             "Search main name + all aliases; unchecked searches only the main name and checks only the first result (faster, but performers only findable by alias are missed)"),
+          tc("搜索时使用主名+全部别名；取消后仅搜索主名并只核对第一个结果",
+             "Search main name + all aliases; unchecked searches only the main name and checks only the first result"),
           function (checked) { setState({ searchOpts: Object.assign({}, _state.searchOpts, { aliasSearch: checked }) }); }),
         buildToggle(tc("模糊匹配", "Fuzzy Match"), _state.searchOpts.fuzzy,
           tc("勾选后仅按名称相似度评级（≥0.9 自动应用），不再参考 URL/StashDB/生日证据",
              "When checked, rating uses name similarity only (>=0.9 auto-applied); URL/StashDB/birthday evidence is ignored"),
-          function (checked) { setState({ searchOpts: Object.assign({}, _state.searchOpts, { fuzzy: checked }) }); }),
+          function (checked) { setState({ searchOpts: Object.assign({}, _state.searchOpts, { fuzzy: checked }) }); },
+          true),
       ]),
     ]));
 

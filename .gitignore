@@ -8,6 +8,9 @@ __pycache__/
 *.tmp
 *.bak
 
+# 论坛发帖草稿（不随仓库发布）
+forum-post-*.md
+
 # 系统文件
 Thumbs.db
 Desktop.ini

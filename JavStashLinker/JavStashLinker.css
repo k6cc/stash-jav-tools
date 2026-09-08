@@ -208,6 +208,11 @@
   background: #339af0 !important;
 }
 
+/* 警告类开关（模糊匹配）：开启时滑轨显示警告黄而非主题蓝 */
+.jsm-toggle-warn.on .jsm-toggle-track {
+  background: #f59f00 !important;
+}
+
 .jsm-toggle.on .jsm-toggle-knob {
   left: 16px !important;
 }

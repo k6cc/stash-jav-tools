@@ -181,6 +181,36 @@ class StashInterface:
         data = self.client.query(query, {"id": performer_id})
         return data.get("findPerformer")
 
+    def get_all_performers(self):
+        PAGE_SIZE = 1000
+        page = 1
+        result = []
+        while True:
+            query = """
+            query($filter: FindFilterType!) {
+              findPerformers(filter: $filter) {
+                count
+                performers {
+                  id
+                  name
+                  disambiguation
+                  alias_list
+                  birthdate
+                  urls
+                  height_cm
+                  stash_ids { endpoint stash_id }
+                }
+              }
+            }
+            """
+            data = self.client.query(query, {"filter": {"per_page": PAGE_SIZE, "page": page, "sort": "name"}})
+            fp = data["findPerformers"]
+            result.extend(fp.get("performers", []))
+            if page * PAGE_SIZE >= fp["count"]:
+                break
+            page += 1
+        return result
+
     def update_performer(self, performer_id, stash_ids, alias_list, urls=None, details=None):
         mutation = """
         mutation($input: PerformerUpdateInput!) {
@@ -222,6 +252,208 @@ def parse_alias_list(val):
 
 def build_alias_list(arr):
     return "\n".join(arr or [])
+
+
+# ==================== Name Similarity ====================
+
+def levenshtein(a, b):
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for k in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[k - 1] else 1
+            cur[k] = min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + cost)
+        prev = cur
+    return prev[len(b)]
+
+
+# Loose normalization: NFC lowercase, drop parentheticals and punctuation; spaces
+# are KEPT so latin word order can be handled by token sorting.
+def normalize_name_loose(name):
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFC", name).lower().strip()
+    s = re.sub(r'[（(].*?[)）]', '', s)
+    s = re.sub(r"[・·.,'’`\-–—_]", ' ', s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def name_similarity(a, b):
+    la = normalize_name_loose(a)
+    lb = normalize_name_loose(b)
+    if not la or not lb:
+        return 0.0
+    sa = la.replace(" ", "")
+    sb = lb.replace(" ", "")
+    if not sa or not sb:
+        return 0.0
+    if sa == sb:
+        return 1.0
+    direct = 1.0 - levenshtein(sa, sb) / max(len(sa), len(sb))
+    ta = "".join(sorted(la.split(" ")))
+    tb = "".join(sorted(lb.split(" ")))
+    if ta == tb:
+        return 1.0
+    sorted_ratio = 1.0 - levenshtein(ta, tb) / max(len(ta), len(tb))
+    return max(direct, sorted_ratio)
+
+
+def performer_name_similarity(local_perf, js_perf):
+    locals_ = [local_perf.get("name")] + parse_alias_list(local_perf.get("alias_list", ""))
+    jss = [js_perf.get("name")] + list(js_perf.get("aliases", []) or [])
+    best = 0.0
+    for a in locals_:
+        if not a:
+            continue
+        for b in jss:
+            if not b:
+                continue
+            s = name_similarity(a, b)
+            if s > best:
+                best = s
+    return best
+
+
+# ==================== Search Engine (Engine B) ====================
+
+# Build search terms from a local performer: main name + aliases, dedup by
+# normalized form, main first, capped at 15 terms (mirrors the JS plugin).
+def build_search_terms(local_perf):
+    seen = set()
+    terms = []
+
+    def add(raw, is_main):
+        norm = normalize_name(raw)
+        if not norm or norm in seen:
+            return
+        seen.add(norm)
+        terms.append({"raw": str(raw).strip(), "norm": norm, "isMain": bool(is_main)})
+
+    add(local_perf["name"], True)
+    for a in parse_alias_list(local_perf.get("alias_list", "")):
+        add(a, False)
+    return terms[:15]
+
+
+# Evaluate a JAVStash candidate against a local performer (evidence mode —
+# the Python batch task always runs alias search ON / fuzzy OFF, the lowest
+# risk profile; it is not controlled by the UI checkboxes).
+#   stashdb UUID cross-ref equal              -> high
+#   URL intersection >= 2                     -> high
+#   >=3 names exact-matched                   -> high
+#   exactly 2 names, both matched, one long   -> high
+#   name match + full birthdate equal         -> high
+#   sim >= 0.9 + full birthdate equal         -> high
+#   name match + birth year equal             -> medium
+#   sim >= 0.9 (exact-ish name, no evidence)  -> medium (review)
+#   sim 0.7-0.9 (latin variant/word order)    -> medium (review)
+#   2 of >=3 names matched                    -> medium
+#   deleted performer capped at medium
+def evaluate_candidate(local_perf, js_perf, terms):
+    js_names = {normalize_name(js_perf.get("name", ""))}
+    for a in js_perf.get("aliases", []) or []:
+        js_names.add(normalize_name(a))
+    js_names.discard("")
+
+    votes = [t for t in terms if t["norm"] in js_names]
+    has_long_vote = any(len(t["norm"]) >= 3 for t in votes)
+
+    local_stashdb_id = None
+    for sid in local_perf.get("stash_ids", []) or []:
+        if "stashdb.org" in (sid.get("endpoint") or ""):
+            local_stashdb_id = str(sid.get("stash_id") or "").lower()
+    js_stashdb_ids = []
+    for u in js_perf.get("urls", []) or []:
+        url_str = u if isinstance(u, str) else u.get("url", "")
+        m = re.search(r"stashdb\.org/performers/([0-9a-fA-F-]{36})", url_str or "")
+        if m:
+            js_stashdb_ids.append(m.group(1).lower())
+    stashdb_match = bool(local_stashdb_id and local_stashdb_id in js_stashdb_ids)
+
+    local_urls = local_perf.get("urls", []) or []
+    js_urls = []
+    for u in js_perf.get("urls", []) or []:
+        url_str = u if isinstance(u, str) else u.get("url", "")
+        if url_str:
+            js_urls.append(url_str)
+    url_intersect = sum(1 for u in js_urls if u in local_urls)
+
+    lb = local_perf.get("birthdate") or ""
+    jb = js_perf.get("birth_date") or ""
+    bday_full = bool(lb and jb and lb == jb)
+    bday_year = bool(lb and jb and lb[:4] == jb[:4])
+
+    sim = performer_name_similarity(local_perf, js_perf)
+
+    v = len(votes)
+    total = len(terms)
+
+    confidence = None
+    if stashdb_match:
+        confidence = "high"
+    elif url_intersect >= 2:
+        confidence = "high"
+    elif v >= 3:
+        confidence = "high"
+    elif total == 2 and v == 2 and has_long_vote:
+        confidence = "high"
+    elif v >= 1 and bday_full:
+        confidence = "high"
+    elif sim >= 0.9 and bday_full:
+        confidence = "high"
+    elif v >= 1 and bday_year:
+        confidence = "medium"
+    elif sim >= 0.9:
+        confidence = "medium"
+    elif sim >= 0.7:
+        confidence = "medium"
+    elif v == 2:
+        confidence = "medium"
+    if js_perf.get("deleted") and confidence == "high":
+        confidence = "medium"
+
+    return {
+        "confidence": confidence,
+        "voteCount": v,
+        "totalNames": total,
+        "stashdbMatch": stashdb_match,
+        "urlIntersect": url_intersect,
+        "bdayFull": bday_full,
+        "bdayYear": bday_year,
+        "sim": round(sim, 2),
+    }
+
+
+def evidence_better(a, b):
+    rank = {"high": 0, "medium": 1}
+    ra = rank.get(a["confidence"], 2)
+    rb = rank.get(b["confidence"], 2)
+    if ra != rb:
+        return ra < rb
+    if a["stashdbMatch"] != b["stashdbMatch"]:
+        return a["stashdbMatch"]
+    if a["voteCount"] != b["voteCount"]:
+        return a["voteCount"] > b["voteCount"]
+    if a["urlIntersect"] != b["urlIntersect"]:
+        return a["urlIntersect"] > b["urlIntersect"]
+    return a.get("sim", 0) > b.get("sim", 0)
+
+
+def eval_best_candidate(local_perf, cand_map, terms):
+    best = None
+    for jp in cand_map.values():
+        ev = evaluate_candidate(local_perf, jp, terms)
+        if ev["confidence"] is None:
+            continue
+        if best is None or evidence_better(ev, best[1]):
+            best = (jp, ev)
+    return best
 
 
 def match_scene(local_scene, javstash_scene):
@@ -542,17 +774,105 @@ def main():
 
             time.sleep(0.3)
 
-        log_info(f"=== Scan Complete ===")
+        log_info(f"=== Scene engine complete ===")
         log_info(f"Auto-matched (high): {auto_count}")
         log_info(f"Needs review (medium): {review_count}")
         log_info(f"Unmatched: {unmatched_count}")
 
+        # Engine B: search-match performers the scene engine left unmatched.
+        # Fixed profile per spec: alias search ON, fuzzy OFF (not UI-controlled).
+        search_matches = []
+        try:
+            log_info("Search engine: fetching performers...")
+            performers = stash.get_all_performers()
+            scene_matched_local = set()
+            for r in all_results:
+                for m in r["matches"]:
+                    scene_matched_local.add(m["localPerformer"]["id"])
+            targets = [
+                p for p in performers
+                if not any(sid["endpoint"] == JAVSTASH_ENDPOINT for sid in p.get("stash_ids", []))
+                and p["id"] not in scene_matched_local
+            ]
+            log_info(f"Search engine: {len(targets)} unlinked performers")
+
+            search_query = """
+            query($term: String!) {
+              searchPerformer(term: $term) {
+                id
+                name
+                disambiguation
+                aliases
+                deleted
+                urls { url }
+                gender
+                birth_date
+                death_date
+                career_start_year
+                career_end_year
+                height
+                cup_size
+                band_size
+                waist_size
+                hip_size
+                hair_color
+                eye_color
+                ethnicity
+                country
+                tattoos { location description }
+                piercings { location description }
+              }
+            }
+            """
+
+            search_high = 0
+            search_med = 0
+            for i, p in enumerate(targets):
+                log_info(f"[{i + 1}/{len(targets)}] {p['name']}")
+                log_progress((i + 1) / len(targets))
+
+                terms = build_search_terms(p)
+                cand_map = {}
+                best = None
+                try:
+                    for t in terms:
+                        data = javstash.query(search_query, {"term": t["raw"]})
+                        for jp in data.get("searchPerformer", []) or []:
+                            cand_map[jp["id"]] = jp
+                        best = eval_best_candidate(p, cand_map, terms)
+                        if best and best[1]["confidence"] == "high":
+                            break  # early stop
+                        time.sleep(0.25)
+                except Exception as e:
+                    log_error(f"  Search error: {e}")
+
+                if best and best[1]["confidence"]:
+                    js_perf, ev = best
+                    search_matches.append({
+                        "localPerformerId": p["id"],
+                        "localPerformerName": p["name"],
+                        "jsPerf": js_perf,
+                        "confidence": ev["confidence"],
+                    })
+                    if ev["confidence"] == "high":
+                        search_high += 1
+                    else:
+                        search_med += 1
+                    log_info(f"  -> {js_perf['name']} ({ev['confidence']}, sim {ev['sim']})")
+
+                time.sleep(0.3)
+
+            log_info(f"=== Search engine complete ===")
+            log_info(f"Search high: {search_high}, review: {search_med}, no hit: {len(targets) - search_high - search_med}")
+        except Exception as e:
+            log_error(f"Search engine error: {e}")
+
         with open(results_path, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, ensure_ascii=False, indent=2)
+            json.dump({"scenes": all_results, "search_matches": search_matches}, f, ensure_ascii=False, indent=2)
         log_info(f"Results saved to: {results_path}")
 
         print(json.dumps({
-            "output": f"Scan complete. Auto: {auto_count}, Review: {review_count}, Unmatched: {unmatched_count}",
+            "output": f"Scan complete. Auto: {auto_count + search_high}, Review: {review_count + search_med}, Unmatched: {unmatched_count}",
         }))
 
     elif mode == "apply_auto":
@@ -562,28 +882,57 @@ def main():
             return
 
         with open(results_path, "r", encoding="utf-8") as f:
-            all_results = json.load(f)
+            data = json.load(f)
+        # v1.5.0 format: {"scenes": [...], "search_matches": [...]};
+        # older files are plain scene lists (no engine B data).
+        if isinstance(data, list):
+            scene_results = data
+            search_matches = []
+        else:
+            scene_results = data.get("scenes", [])
+            search_matches = data.get("search_matches", [])
+
+        # Candidates: scene highs + search highs
+        candidates = []
+        for result in scene_results:
+            for match in result["matches"]:
+                if match["confidence"] == "high":
+                    candidates.append((match["localPerformer"]["id"], match["javstashPerformer"]))
+        for sm in search_matches:
+            if sm["confidence"] == "high":
+                candidates.append((sm["localPerformerId"], sm["jsPerf"]))
+
+        # Conflict guard: a JAVStash performer high-matched to multiple distinct
+        # local performers is excluded from auto-apply entirely.
+        by_js = {}
+        for local_id, js_perf in candidates:
+            by_js.setdefault(js_perf["id"], set()).add(local_id)
+        conflict_js = {js_id for js_id, locals_ in by_js.items() if len(locals_) >= 2}
+        if conflict_js:
+            log_warn(f"{len(conflict_js)} conflicting JAVStash performers skipped (matched to multiple locals)")
 
         applied = 0
         errors = 0
+        skipped_conflict = 0
 
-        for result in all_results:
-            for match in result["matches"]:
-                if match["confidence"] != "high":
-                    continue
-                try:
-                    apply_match(stash, match["localPerformer"]["id"], match["javstashPerformer"])
-                    applied += 1
-                    log_info(f"Applied: {match['localPerformer']['name']} <- {match['javstashPerformer']['name']}")
-                except Exception as e:
-                    errors += 1
-                    log_error(f"Error applying match: {e}")
-                time.sleep(0.1)
+        for local_id, js_perf in candidates:
+            if js_perf["id"] in conflict_js:
+                skipped_conflict += 1
+                log_warn(f"Skipped conflicting match: {js_perf['name']}")
+                continue
+            try:
+                apply_match(stash, local_id, js_perf)
+                applied += 1
+                log_info(f"Applied: {local_id} <- {js_perf['name']}")
+            except Exception as e:
+                errors += 1
+                log_error(f"Error applying match: {e}")
+            time.sleep(0.1)
 
         log_info(f"=== Apply Complete ===")
-        log_info(f"Applied: {applied}, Errors: {errors}")
+        log_info(f"Applied: {applied}, Errors: {errors}, Conflicts skipped: {skipped_conflict}")
         print(json.dumps({
-            "output": f"Apply complete. Applied: {applied}, Errors: {errors}",
+            "output": f"Apply complete. Applied: {applied}, Errors: {errors}, Conflicts skipped: {skipped_conflict}",
         }))
 
     else:

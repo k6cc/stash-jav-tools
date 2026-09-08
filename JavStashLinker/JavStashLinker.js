@@ -13,10 +13,11 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.4.0";
+  var PLUGIN_VERSION = "1.5.0";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
+  var JAVSTASH_WEB = "https://javstash.org";
 
   var _stashBoxConfig = null;
 
@@ -296,6 +297,73 @@
     return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
   }
 
+  // ==================== Name Similarity ====================
+
+  // Iterative Levenshtein DP (two rolling rows); names are short so O(n*m) is fine.
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    var prev = new Array(b.length + 1);
+    var cur = new Array(b.length + 1);
+    for (var j = 0; j <= b.length; j++) prev[j] = j;
+    for (var i = 1; i <= a.length; i++) {
+      cur[0] = i;
+      for (var k = 1; k <= b.length; k++) {
+        var cost = a.charCodeAt(i - 1) === b.charCodeAt(k - 1) ? 0 : 1;
+        cur[k] = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + cost);
+      }
+      var tmp = prev; prev = cur; cur = tmp;
+    }
+    return prev[b.length];
+  }
+
+  // Loose normalization for similarity: NFC lowercase, drop parentheticals and
+  // punctuation, collapse whitespace. Spaces are KEPT so latin word order can
+  // be handled by token sorting ("Yui Hatano" vs "Hatano Yui").
+  function normalizeNameLoose(name) {
+    if (!name) return "";
+    var s = name.normalize("NFC").toLowerCase().trim();
+    s = s.replace(/[（(].*?[)）]/g, "");
+    s = s.replace(/[・·.,'"’`\-–—_]/g, " ");
+    return s.replace(/\s+/g, " ").trim();
+  }
+
+  // Similarity in [0,1]: max of direct ratio (spaces stripped) and
+  // token-sorted ratio (word order insensitive). Both compare full strings.
+  function nameSimilarity(a, b) {
+    var la = normalizeNameLoose(a);
+    var lb = normalizeNameLoose(b);
+    if (!la || !lb) return 0;
+    var sa = la.replace(/ /g, "");
+    var sb = lb.replace(/ /g, "");
+    if (!sa || !sb) return 0;
+    if (sa === sb) return 1;
+    var direct = 1 - levenshtein(sa, sb) / Math.max(sa.length, sb.length);
+    var ta = la.split(" ").sort().join("");
+    var tb = lb.split(" ").sort().join("");
+    if (ta === tb) return 1;
+    var sorted = 1 - levenshtein(ta, tb) / Math.max(ta.length, tb.length);
+    return Math.max(direct, sorted);
+  }
+
+  // Best similarity across main name + aliases on BOTH sides, so
+  // "Moe Amatsuka" (local main) vs "天使もえ" alias list still scores.
+  function performerNameSimilarity(localPerf, jsPerf) {
+    var locals = [localPerf.name].concat(parseAliasList(localPerf.alias_list));
+    var jss = [jsPerf.name].concat(jsPerf.aliases || []);
+    var best = 0;
+    for (var i = 0; i < locals.length; i++) {
+      if (!locals[i]) continue;
+      for (var j = 0; j < jss.length; j++) {
+        if (!jss[j]) continue;
+        var s = nameSimilarity(locals[i], jss[j]);
+        if (s > best) best = s;
+      }
+    }
+    return best;
+  }
+
   // Extract code from local scene: prefer code field, fallback to title prefix
   function getLocalSceneCode(localScene) {
     // 1. Direct code field (studio code = 番号)
@@ -412,17 +480,23 @@
   }
 
   // Evaluate a JAVStash candidate against a local performer.
-  // Confidence rules (agreed):
+  // opts.fuzzy — Autofill-style rating: name similarity only, evidence signals
+  // (URL/stashdb/birthday) are ignored. sim>=0.9 -> high, 0.7-0.9 -> medium.
+  // Confidence rules (evidence mode, agreed):
   //   stashdb UUID cross-ref equal           -> high (hard evidence)
   //   URL intersection >= 2                  -> high (1 may be a studio site)
   //   >=3 names exact-matched                -> high
   //   exactly 2 local names, both matched,
   //     at least one long (norm >=3 chars)   -> high (short-name collision guard)
   //   name match + full birthdate equal      -> high
+  //   sim >= 0.9 + full birthdate equal      -> high (fuzzy name, hard bday)
   //   name match + birth year equal          -> medium
+  //   sim >= 0.9 (exact-ish name, no other evidence) -> medium (review)
+  //   sim 0.7-0.9 (latin variant/word order) -> medium (review)
   //   2 of >=3 names matched                 -> medium
   //   deleted performer capped at medium
-  function evaluateCandidate(localPerf, jsPerf, terms) {
+  function evaluateCandidate(localPerf, jsPerf, terms, opts) {
+    var fuzzy = !!(opts && opts.fuzzy);
     var jsNames = {};
     jsNames[normalizeName(jsPerf.name)] = true;
     (jsPerf.aliases || []).forEach(function (a) { jsNames[normalizeName(a)] = true; });
@@ -456,16 +530,28 @@
     var bdayFull = !!(lb && jb && lb === jb);
     var bdayYear = !!(lb && jb && lb.slice(0, 4) === jb.slice(0, 4));
 
+    var sim = performerNameSimilarity(localPerf, jsPerf);
+
     var v = votes.length;
     var total = terms.length;
+
     var confidence = null;
-    if (stashdbMatch) confidence = "high";
-    else if (urlIntersect >= 2) confidence = "high";
-    else if (v >= 3) confidence = "high";
-    else if (total === 2 && v === 2 && hasLongVote) confidence = "high";
-    else if (v >= 1 && bdayFull) confidence = "high";
-    else if (v >= 1 && bdayYear) confidence = "medium";
-    else if (v === 2) confidence = "medium";
+    if (fuzzy) {
+      // Pure name-similarity rating (Autofill architecture): evidence ignored.
+      if (sim >= 0.9) confidence = "high";
+      else if (sim >= 0.7) confidence = "medium";
+    } else {
+      if (stashdbMatch) confidence = "high";
+      else if (urlIntersect >= 2) confidence = "high";
+      else if (v >= 3) confidence = "high";
+      else if (total === 2 && v === 2 && hasLongVote) confidence = "high";
+      else if (v >= 1 && bdayFull) confidence = "high";
+      else if (sim >= 0.9 && bdayFull) confidence = "high";
+      else if (v >= 1 && bdayYear) confidence = "medium";
+      else if (sim >= 0.9) confidence = "medium";
+      else if (sim >= 0.7) confidence = "medium";
+      else if (v === 2) confidence = "medium";
+    }
     if (jsPerf.deleted && confidence === "high") confidence = "medium";
 
     return {
@@ -477,6 +563,7 @@
       urlIntersect: urlIntersect,
       bdayFull: bdayFull,
       bdayYear: bdayYear,
+      sim: Math.round(sim * 100) / 100,
     };
   }
 
@@ -686,6 +773,8 @@
     abortFlag: false,
     scanProgress: null,
     results: null,
+    searchMatches: null,   // engine B results
+    searchOpts: { aliasSearch: true, fuzzy: false },
     emptyReason: "",
     activeTab: "auto",
     applying: false,
@@ -701,6 +790,7 @@
       listFilter: "",
       search: {},
       ignoredIds: {},
+      fpComplete: { scenes: null, loading: false, running: false, done: false },
     },
   };
 
@@ -712,6 +802,131 @@
 
   // ==================== Scan ====================
 
+  // Engine B: name search on JAVStash for local performers that engine A
+  // (scene back-fill) left unmatched. Runs after the scene phase with the
+  // checkbox options snapshotted at scan start:
+  //   opts.aliasSearch — main name + aliases, all candidates, early stop on high
+  //                      vs main name only, first result only (faster, narrower)
+  //   opts.fuzzy       — Autofill-style rating (name similarity only)
+  async function runSearchEngine(config, opts) {
+    var performers = await fetchAllLocalPerformers();
+    var aMatched = {};
+    (_state.results || []).forEach(function (r) {
+      r.matches.forEach(function (m) { aMatched[m.localPerformer.id] = true; });
+    });
+    var targets = performers.filter(function (p) {
+      if ((p.stash_ids || []).some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; })) return false;
+      return !aMatched[p.id];
+    });
+
+    if (targets.length === 0) {
+      addLog(tc("没有需要搜索匹配的未绑定演员", "No unlinked performers left for search matching"));
+      setState({ searchMatches: [] });
+      return;
+    }
+
+    addLog(tc("搜索引擎：", "Search engine: ") + targets.length +
+      tc(" 名未绑定演员（", " unlinked performers (") +
+      (opts.aliasSearch ? tc("别名搜索", "alias search") : tc("仅主名搜索", "main-name only")) +
+      (opts.fuzzy ? tc("，模糊匹配", ", fuzzy matching") : "") + "）");
+
+    setState({ scanProgress: { current: 0, total: targets.length, title: "" } });
+
+    var matches = [];
+    var processed = 0;
+
+    for (var i = 0; i < targets.length; i++) {
+      if (_state.abortFlag) break;
+      var local = targets[i];
+      processed++;
+      updateProgressDOM(processed, targets.length, local.name);
+
+      var allTerms = buildSearchTerms(local);
+      var terms = opts.aliasSearch ? allTerms : allTerms.filter(function (t) { return t.isMain; });
+      var candMap = {};
+      var best = null;
+
+      for (var t = 0; t < terms.length; t++) {
+        if (_state.abortFlag) break;
+        var term = terms[t];
+        var list = [];
+        try {
+          list = await _jsRateLimiter.submit(function () {
+            return searchJavstashPerformers(config.javstashEndpoint, config.javstashApiKey, term.raw);
+          });
+        } catch (e) {
+          addLogBatch(tc("搜索失败", "Search failed") + " [" + term.raw + "]: " + e.message);
+          continue;
+        }
+        if (opts.aliasSearch) {
+          list.forEach(function (p) { if (!candMap[p.id]) candMap[p.id] = p; });
+        } else {
+          // Main-name fast path: only the rank-1 result is worth checking —
+          // JAVStash sorts exact hits first, so deeper results add noise.
+          if (list.length > 0) candMap[list[0].id] = list[0];
+        }
+
+        best = evalBestCandidate(local, candMap, allTerms, opts);
+        if (opts.aliasSearch && best && best.evidence.confidence === "high") break; // early stop
+      }
+
+      best = best || evalBestCandidate(local, candMap, allTerms, opts);
+      if (best && best.evidence.confidence) {
+        matches.push({
+          key: local.id + "|" + best.jsPerf.id,
+          localPerformer: local,
+          jsPerf: best.jsPerf,
+          confidence: best.evidence.confidence,
+          evidence: best.evidence,
+        });
+        addLogBatch("[" + processed + "/" + targets.length + "] " + local.name +
+          " → " + best.jsPerf.name + " (" + best.evidence.confidence + ", " +
+          tc("相似度", "sim") + " " + best.evidence.sim + ")");
+      }
+
+      if (processed % 10 === 0) {
+        var start = _state.log.length - 10;
+        if (start >= 0) {
+          for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+        }
+      }
+    }
+
+    _state.log.forEach(function (line) { appendLogDOM(line); });
+
+    var high = matches.filter(function (m) { return m.confidence === "high"; }).length;
+    var med = matches.filter(function (m) { return m.confidence === "medium"; }).length;
+    addLog(tc("=== 搜索引擎完成: ", "=== Search engine done: ") + targets.length +
+      tc(" 名演员 — 高可信 ", " performers — high ") + high +
+      tc("，待审核 ", ", review ") + med +
+      tc("，未命中 ", ", no hit ") + (targets.length - high - med) + " ===");
+
+    setState({ searchMatches: matches });
+  }
+
+  // Best non-null candidate from candMap under the current rating options.
+  function evalBestCandidate(local, candMap, terms, opts) {
+    var best = null;
+    for (var id in candMap) {
+      var ev = evaluateCandidate(local, candMap[id], terms, opts);
+      if (!ev.confidence) continue;
+      if (!best || evidenceBetter(ev, best.evidence)) best = { jsPerf: candMap[id], evidence: ev };
+    }
+    return best;
+  }
+
+  // Ranking for "better evidence": confidence first, then hard signals.
+  function evidenceBetter(a, b) {
+    var rank = { high: 0, medium: 1 };
+    var ra = a.confidence !== null ? rank[a.confidence] : 2;
+    var rb = b.confidence !== null ? rank[b.confidence] : 2;
+    if (ra !== rb) return ra < rb;
+    if (a.stashdbMatch !== b.stashdbMatch) return a.stashdbMatch;
+    if (a.voteCount !== b.voteCount) return a.voteCount > b.voteCount;
+    if (a.urlIntersect !== b.urlIntersect) return a.urlIntersect > b.urlIntersect;
+    return (a.sim || 0) > (b.sim || 0);
+  }
+
   async function handleScan() {
     var config = await getStashBoxConfig();
     if (!config.javstashApiKey) {
@@ -719,79 +934,75 @@
                "JAVStash not configured. Add it in Settings → Metadata Providers first."));
       return;
     }
-    setState({ scanning: true, abortFlag: false, results: null, emptyReason: "", log: [], dismissed: {}, manualSelected: {}, applied: {}, applyDone: false });
+    // Snapshot checkbox options at scan start — mid-scan changes have no effect.
+    var opts = { aliasSearch: _state.searchOpts.aliasSearch, fuzzy: _state.searchOpts.fuzzy };
+    setState({ scanning: true, abortFlag: false, results: null, searchMatches: null, emptyReason: "", log: [], dismissed: {}, manualSelected: {}, applied: {}, applyDone: false });
     _appliedPerformers = {};
     addLog(tc("正在获取含 JAVStash ID 的场景（跳过已全部匹配的）...", "Fetching scenes with JAVStash IDs (skipping fully matched)..."));
 
     try {
       var scenes = await getScenesWithJavstashId();
       addLog(tc("找到 " + scenes.length + " 个场景", "Found " + scenes.length + " scenes"));
-      if (scenes.length === 0) {
-        setState({
-          scanning: false,
-          results: [],
-          emptyReason: tc("没有需要扫描的场景 — 含 JAVStash ID 的场景已全部匹配完成",
-                          "Nothing to scan — all scenes with JAVStash IDs are already fully matched"),
-        });
-        return;
-      }
-
-      // Initial progress render
-      setState({ scanProgress: { current: 0, total: scenes.length, title: "" } });
-
       var results = [];
       var processed = 0;
       var aborted = false;
 
-      // Submit all scenes to rate limiter (4 concurrent, 250ms spacing)
-      var promises = scenes.map(function (scene, idx) {
-        var javstashId = null;
-        for (var j = 0; j < (scene.stash_ids || []).length; j++) {
-          if (scene.stash_ids[j].endpoint === JAVSTASH_ENDPOINT) {
-            javstashId = scene.stash_ids[j].stash_id;
-            break;
-          }
-        }
-        if (!javstashId) return Promise.resolve(null);
+      if (scenes.length > 0) {
+        // Initial progress render
+        setState({ scanProgress: { current: 0, total: scenes.length, title: "" } });
 
-        return _jsRateLimiter.submit(function () {
-          if (_state.abortFlag || aborted) return Promise.resolve(null);
-          return getJavstashScene(config.javstashEndpoint, config.javstashApiKey, javstashId);
-        }).then(function (jsScene) {
-          if (_state.abortFlag) { aborted = true; return null; }
-          if (!jsScene) {
-            addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("未找到", "Not found") + ": " + (scene.title || scene.id));
-            return null;
-          }
-          var result = matchScene(scene, jsScene);
-          results.push(result);
-          var high = result.matches.filter(function (m) { return m.confidence === "high"; }).length;
-          var med = result.matches.filter(function (m) { return m.confidence === "medium"; }).length;
-          var unc = result.unmatchedJavstash.length;
-          if (high + med + unc > 0) {
-            addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + (scene.title || scene.id) +
-              " — " + tc("高", "High") + ":" + high + " " + tc("中", "Med") + ":" + med + " " + tc("未匹配", "Unmatched") + ":" + unc);
-          }
-          return result;
-        }).catch(function (e) {
-          addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("错误", "Error") + ": " + e.message);
-          return null;
-        }).then(function (r) {
-          processed++;
-          // Throttled DOM update (no full render)
-          updateProgressDOM(processed, scenes.length, scene.title || scene.id);
-          if (processed % 10 === 0) {
-            // Flush batched logs to DOM every 10 scenes
-            var start = _state.log.length - 10;
-            if (start >= 0) {
-              for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+        // Submit all scenes to rate limiter (4 concurrent, 250ms spacing)
+        var promises = scenes.map(function (scene, idx) {
+          var javstashId = null;
+          for (var j = 0; j < (scene.stash_ids || []).length; j++) {
+            if (scene.stash_ids[j].endpoint === JAVSTASH_ENDPOINT) {
+              javstashId = scene.stash_ids[j].stash_id;
+              break;
             }
           }
-          return r;
-        });
-      });
+          if (!javstashId) return Promise.resolve(null);
 
-      await Promise.all(promises);
+          return _jsRateLimiter.submit(function () {
+            if (_state.abortFlag || aborted) return Promise.resolve(null);
+            return getJavstashScene(config.javstashEndpoint, config.javstashApiKey, javstashId);
+          }).then(function (jsScene) {
+            if (_state.abortFlag) { aborted = true; return null; }
+            if (!jsScene) {
+              addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("未找到", "Not found") + ": " + (scene.title || scene.id));
+              return null;
+            }
+            var result = matchScene(scene, jsScene);
+            results.push(result);
+            var high = result.matches.filter(function (m) { return m.confidence === "high"; }).length;
+            var med = result.matches.filter(function (m) { return m.confidence === "medium"; }).length;
+            var unc = result.unmatchedJavstash.length;
+            if (high + med + unc > 0) {
+              addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + (scene.title || scene.id) +
+                " — " + tc("高", "High") + ":" + high + " " + tc("中", "Med") + ":" + med + " " + tc("未匹配", "Unmatched") + ":" + unc);
+            }
+            return result;
+          }).catch(function (e) {
+            addLogBatch("[" + (processed + 1) + "/" + scenes.length + "] " + tc("错误", "Error") + ": " + e.message);
+            return null;
+          }).then(function (r) {
+            processed++;
+            // Throttled DOM update (no full render)
+            updateProgressDOM(processed, scenes.length, scene.title || scene.id);
+            if (processed % 10 === 0) {
+              // Flush batched logs to DOM every 10 scenes
+              var start = _state.log.length - 10;
+              if (start >= 0) {
+                for (var k = start; k < _state.log.length; k++) appendLogDOM(_state.log[k]);
+              }
+            }
+            return r;
+          });
+        });
+
+        await Promise.all(promises);
+      } else {
+        addLog(tc("没有含 JAVStash ID 的未匹配场景，跳过场景引擎", "No unmatched scenes with JAVStash IDs — skipping scene engine"));
+      }
 
       if (aborted || _state.abortFlag) {
         addLog(tc("用户中止扫描", "Scan aborted by user"));
@@ -800,7 +1011,22 @@
       // Flush remaining logs
       _state.log.forEach(function (line) { appendLogDOM(line); });
 
-      setState({ scanProgress: null, results: results, scanning: false });
+      setState({ results: results });
+
+      // Engine B: search-match performers the scene engine left unmatched.
+      if (!_state.abortFlag) {
+        await runSearchEngine(config, opts);
+      }
+
+      var searchMatches = _state.searchMatches || [];
+      if (results.length === 0 && searchMatches.length === 0) {
+        _state.emptyReason = scenes.length === 0
+          ? tc("所有含 JAVStash ID 的场景已全部匹配完成，且没有需要搜索的未绑定演员",
+               "All scenes with JAVStash IDs are fully matched and no unlinked performers remain to search")
+          : tc("本次扫描没有产生新匹配", "This scan produced no new matches");
+      }
+
+      setState({ scanProgress: null, scanning: false });
       addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
     } catch (e) {
       addLog(tc("扫描错误", "Scan error") + ": " + e.message);
@@ -808,6 +1034,7 @@
         scanning: false,
         scanProgress: null,
         results: [],
+        searchMatches: [],
         emptyReason: tc("扫描未完成，详见下方日志", "Scan did not finish — see log below"),
       });
     }
@@ -815,11 +1042,19 @@
 
   function handleApply() {
     var rawItems = [];
+    var conflict = computeConflicts();
 
-    // Collect high-confidence matches only (not dismissed)
+    // Collect high-confidence matches only (not dismissed, not conflicting)
     getAllMatches().forEach(function (m) {
-      if (!m.dismissed && m.confidence === "high") {
+      if (!m.dismissed && m.confidence === "high" && !conflict[m.key]) {
         rawItems.push({ localPerformer: m.localPerformer, jsPerf: m.javstashPerformer, key: m.key });
+      }
+    });
+
+    // Collect engine B search matches (high only)
+    getAllSearchMatches().forEach(function (sm) {
+      if (!sm.dismissed && sm.confidence === "high" && !conflict[sm.key]) {
+        rawItems.push({ localPerformer: sm.localPerformer, jsPerf: sm.jsPerf, key: sm.key });
       }
     });
 
@@ -996,6 +1231,192 @@
     });
   }
 
+  // ==================== Fingerprint Completion (单演员场景指纹补全) ====================
+
+  // Local scenes with exactly one performer whose performer is not yet linked
+  // to JAVStash and that carry at least one file fingerprint. Each entry maps
+  // the scene to its local performer and fingerprint list.
+  function fetchCompletableScenes() {
+    var PAGE_SIZE = 1000;
+    var all = [];
+    var page = 1;
+
+    function fetchPage() {
+      return callGQL(
+        "query($filter: FindFilterType!) { findScenes(filter: $filter, scene_filter: { performer_count: { value: 1, modifier: EQUALS } }) { count scenes { id title files { fingerprints { type value } } performers { id name disambiguation alias_list birthdate death_date urls height_cm measurements country ethnicity hair_color eye_color career_length tattoos piercings gender image_path stash_ids { endpoint stash_id } } } } }",
+        { filter: { per_page: PAGE_SIZE, page: page, sort: "path" } }
+      ).then(function (data) {
+        var result = data.findScenes;
+        result.scenes.forEach(function (s) {
+          var fps = [];
+          var seen = {};
+          (s.files || []).forEach(function (f) {
+            (f.fingerprints || []).forEach(function (fp) {
+              if (!fp || !fp.value || !fp.type) return;
+              var k = fp.type.toUpperCase() + ":" + fp.value;
+              if (seen[k]) return;
+              seen[k] = true;
+              fps.push({ hash: fp.value, algorithm: fp.type.toUpperCase() });
+            });
+          });
+          if (fps.length === 0) return;
+          var p = (s.performers || [])[0];
+          if (!p) return;
+          var linked = (p.stash_ids || []).some(function (sid) { return sid.endpoint === JAVSTASH_ENDPOINT; });
+          if (linked) return;
+          all.push({ sceneId: s.id, sceneTitle: s.title || "", local: p, fps: fps });
+        });
+        if (page * PAGE_SIZE < result.count) {
+          page++;
+          return fetchPage();
+        }
+        return all;
+      });
+    }
+
+    return fetchPage();
+  }
+
+  function ensureFpScenes() {
+    var fp = _state.manualTab.fpComplete;
+    if (fp.scenes !== null || fp.loading || fp.running) return;
+    setManualTab({ fpComplete: { scenes: fp.scenes, loading: true, running: false, done: fp.done } });
+    fetchCompletableScenes().then(function (scenes) {
+      setManualTab({ fpComplete: { scenes: scenes, loading: false, running: false, done: fp.done } });
+    }).catch(function (e) {
+      addLog(tc("加载单演员场景失败", "Failed to load single-performer scenes") + ": " + e.message);
+      setManualTab({ fpComplete: { scenes: [], loading: false, running: false, done: fp.done } });
+    });
+  }
+
+  // Search JAVStash by a scene's fingerprints. Resolves to:
+  //   { status: "hit",       scene, jsPerf } — remote scene with exactly one performer
+  //   { status: "ambiguous", scene }         — matched but remote scene has multiple performers
+  //   { status: "none" }                     — no fingerprint match
+  function fingerprintSearchPerformer(endpoint, apiKey, fps) {
+    return _jsRateLimiter.submit(function () {
+      return callJavstashGQL(endpoint, apiKey,
+        "query($fingerprints: [[FingerprintQueryInput!]!]!) { findScenesBySceneFingerprints(fingerprints: $fingerprints) { id title release_date performers { as performer { id name disambiguation aliases urls { url } images { url } gender birth_date death_date height cup_size band_size waist_size hip_size hair_color eye_color ethnicity country career_start_year career_end_year tattoos { location description } piercings { location description } } } } }",
+        { fingerprints: [fps] }
+      );
+    }).then(function (data) {
+      var groups = data.findScenesBySceneFingerprints || [];
+      var matches = groups[0] || [];
+      var ambiguous = null;
+      for (var i = 0; i < matches.length; i++) {
+        var perfs = (matches[i].performers || []).map(function (pa) { return pa.performer; });
+        if (perfs.length === 1 && perfs[0]) return { status: "hit", scene: matches[i], jsPerf: perfs[0] };
+        if (!ambiguous) ambiguous = matches[i];
+      }
+      return ambiguous ? { status: "ambiguous", scene: ambiguous } : { status: "none" };
+    });
+  }
+
+  function updateFpStatusDOM(text) {
+    var node = document.querySelector("[data-jsm-fpstatus]");
+    if (node) node.textContent = text;
+  }
+
+  // 补全单演员: fingerprint-search JAVStash for every completable single-performer
+  // scene and apply the matched remote performer to the local one. Scenes with
+  // no fingerprint result are skipped, as are ambiguous multi-performer hits.
+  function handleCompletePerformers() {
+    var fp = _state.manualTab.fpComplete;
+    if (fp.running || !fp.scenes || fp.scenes.length === 0) return;
+
+    getStashBoxConfig().then(function (config) {
+      if (!config.javstashApiKey) {
+        alert(tc("未找到 JAVStash 配置，请在 设置 → 元数据提供者 中添加 JAVStash stash-box 实例",
+                 "JAVStash not configured. Add it in Settings → Metadata Providers first."));
+        return;
+      }
+
+      var scenes = fp.scenes;
+      setManualTab({ fpComplete: { scenes: scenes, loading: false, running: true, done: false } });
+      addLog(tc("=== 指纹补全开始: ", "=== Fingerprint completion start: ") + scenes.length +
+        tc(" 个单演员场景 ===", " single-performer scenes ==="));
+
+      var applied = 0, noResult = 0, skipped = 0, already = 0, failed = 0;
+      var okNames = [], failNames = [];
+      var i = 0;
+
+      function step() {
+        if (i >= scenes.length) return Promise.resolve();
+        var item = scenes[i];
+        i++;
+
+        // The performer may have been linked by an earlier scene in this run.
+        if ((item.local.stash_ids || []).some(function (s) { return s.endpoint === JAVSTASH_ENDPOINT; })) {
+          already++;
+          updateFpStatusDOM(tc("补全中 ", "Completing ") + i + "/" + scenes.length +
+            tc("（已补全 ", " (") + applied + tc("）", ")"));
+          return step();
+        }
+
+        updateFpStatusDOM(tc("补全中 ", "Completing ") + i + "/" + scenes.length +
+          tc("（已补全 ", " (") + applied + tc("）", ")"));
+
+        return fingerprintSearchPerformer(config.javstashEndpoint, config.javstashApiKey, item.fps)
+          .then(function (res) {
+            if (res.status === "none") {
+              noResult++;
+              addLog(tc("指纹未命中（JAVStash 无该指纹的场景）: ", "Fingerprint no result (no scene with this fingerprint on JAVStash): ") +
+                item.local.name + (item.sceneTitle ? " [" + item.sceneTitle + "]" : ""));
+              return null;
+            }
+            if (res.status === "ambiguous") {
+              skipped++;
+              addLog(tc("指纹命中多演员场景，跳过: ", "Fingerprint matched a multi-performer scene, skipped: ") +
+                item.local.name + (res.scene.title ? " [" + res.scene.title + "]" : ""));
+              return null;
+            }
+            addLog(tc("指纹命中: ", "Fingerprint hit: ") + item.local.name + " → " + res.jsPerf.name +
+              (res.scene.title ? " [" + res.scene.title + "]" : ""));
+            return applyMatchCached(item.local, res.jsPerf).then(function () {
+              applied++;
+              okNames.push(item.local.name);
+              item.local.stash_ids = (item.local.stash_ids || [])
+                .concat([{ endpoint: JAVSTASH_ENDPOINT, stash_id: res.jsPerf.id }]);
+              // Mark the manual row as applied without a full re-render.
+              _state.manualTab.search[item.local.id] = Object.assign(
+                {}, _state.manualTab.search[item.local.id],
+                { appliedJsId: res.jsPerf.id, searching: false });
+              return null;
+            });
+          })
+          .catch(function (e) {
+            failed++;
+            failNames.push(item.local.name);
+            addLog(tc("补全失败", "Completion failed") + " " + item.local.name +
+              " [" + (item.sceneTitle || item.sceneId) + "]: " + (e.message || e));
+            return null;
+          })
+          .then(step);
+      }
+
+      return step().then(function () {
+        // Drop scenes whose performer is now linked; keep the rest countable.
+        var remaining = _state.manualTab.fpComplete.scenes.filter(function (s) {
+          return !(s.local.stash_ids || []).some(function (sid) { return sid.endpoint === JAVSTASH_ENDPOINT; });
+        });
+        addLog(tc("=== 指纹补全完成: 补全 ", "=== Fingerprint completion done: applied ") + applied +
+          (okNames.length ? "（" + okNames.join("、") + "）" : "") +
+          tc("，未命中 ", ", no result ") + noResult +
+          tc("，多演员跳过 ", ", multi-performer skipped ") + skipped +
+          tc("，已绑定 ", ", already linked ") + already +
+          tc("，失败 ", ", failed ") + failed +
+          (failNames.length ? "（" + failNames.join("、") + "）" : "") + " ===");
+        setManualTab({ fpComplete: { scenes: remaining, loading: false, running: false, done: true } });
+      }).catch(function (e) {
+        // Unexpected abort — still finalize so the button greys out (done no matter what).
+        addLog(tc("指纹补全异常终止: ", "Fingerprint completion aborted: ") + (e.message || e));
+        setManualTab({ fpComplete: {
+          scenes: _state.manualTab.fpComplete.scenes,
+          loading: false, running: false, done: true } });
+      });
+    });
+  }
+
   function hasHighCandidate(local, candMap, terms) {
     for (var id in candMap) {
       if (evaluateCandidate(local, candMap[id], terms).confidence === "high") return true;
@@ -1104,6 +1525,13 @@
     setManualTab({ ignoredIds: ignored, search: search });
   }
 
+  function handleRestorePerformer(local) {
+    var ignored = {};
+    for (var k in _state.manualTab.ignoredIds) ignored[k] = true;
+    delete ignored[local.id];
+    setManualTab({ ignoredIds: ignored });
+  }
+
   function handleApplyManual(local, jsPerf) {
     addLog(tc("手动应用: ", "Manual apply: ") + jsPerf.name + " → " + local.name);
     applyMatchCached(local, jsPerf).then(function () {
@@ -1154,6 +1582,53 @@
       });
     });
     return all;
+  }
+
+  function getAllSearchMatches() {
+    var list = _state.searchMatches;
+    if (!list) return [];
+    return list.map(function (sm) {
+      return {
+        key: sm.key,
+        localPerformer: sm.localPerformer,
+        jsPerf: sm.jsPerf,
+        confidence: sm.confidence,
+        evidence: sm.evidence,
+        dismissed: !!_state.dismissed[sm.key],
+      };
+    });
+  }
+
+  // A JAVStash performer high-matched to more than one DISTINCT local performer
+  // (across both engines) is a conflict: badge + excluded from apply-all.
+  // Dismissing one side resolves the conflict dynamically.
+  function computeConflicts() {
+    var map = {};
+    function add(key, jsId, localId) {
+      if (!map[jsId]) map[jsId] = { locals: {}, keys: [] };
+      map[jsId].locals[localId] = true;
+      map[jsId].keys.push(key);
+    }
+    getAllMatches().forEach(function (m) {
+      if (m.confidence === "high" && !m.dismissed) add(m.key, m.javstashPerformer.id, m.localPerformer.id);
+    });
+    getAllSearchMatches().forEach(function (sm) {
+      if (sm.confidence === "high" && !sm.dismissed) add(sm.key, sm.jsPerf.id, sm.localPerformer.id);
+    });
+    var out = {};
+    for (var jsId in map) {
+      if (Object.keys(map[jsId].locals).length >= 2) {
+        map[jsId].keys.forEach(function (k) { out[k] = true; });
+      }
+    }
+    return out;
+  }
+
+  function hasApplicableMatches() {
+    if (Object.keys(_state.manualSelected).length) return true;
+    var conflict = computeConflicts();
+    if (getAllMatches().some(function (m) { return m.confidence === "high" && !m.dismissed && !conflict[m.key]; })) return true;
+    return getAllSearchMatches().some(function (sm) { return sm.confidence === "high" && !sm.dismissed && !conflict[sm.key]; });
   }
 
   function addLog(msg) {
@@ -1249,6 +1724,27 @@
     return node;
   }
 
+  // 圆角长条滑块开关 — 滑块在文字左侧；点击切换（滑块+文字整块可点）；
+  // 滑块靠右 = 开启，开启时滑轨显示主题色。
+  function buildToggle(label, checked, tooltip, onchange) {
+    var on = !!checked;
+    var toggle = el("div", "jsm-toggle" + (on ? " on" : ""), [
+      el("span", "jsm-toggle-track", [el("span", "jsm-toggle-knob")]),
+      el("span", "jsm-toggle-label", label),
+    ]);
+    if (tooltip) toggle.title = tooltip;
+    if (_state.scanning) {
+      toggle.classList.add("jsm-toggle-disabled");
+    } else {
+      toggle.onclick = function () {
+        on = !on;
+        toggle.classList.toggle("on", on);
+        onchange(on);
+      };
+    }
+    return toggle;
+  }
+
   function buildPanel() {
     var frag = document.createDocumentFragment();
 
@@ -1267,8 +1763,8 @@
       el("div", "jsm-header-actions", [
         el("button", "jsm-btn jsm-btn-primary" + (_state.applying ? " jsm-btn-disabled" : ""), tc("应用全部", "Apply All"), {
           onclick: handleApply,
-          disabled: _state.applying || (!getAllMatches().some(function (m) { return !m.dismissed && m.confidence === "high"; }) && !Object.keys(_state.manualSelected).length),
-          title: tc("仅应用 high 置信度", "Apply high-confidence matches only"),
+          disabled: _state.applying || !hasApplicableMatches(),
+          title: tc("仅应用 high 置信度（冲突组除外）", "Apply high-confidence matches only (conflicts excluded)"),
         }),
         closeBtn,
       ]),
@@ -1289,6 +1785,14 @@
               onclick: handleScan,
               disabled: !!_state.scanning || !_state.javstashApiKey,
             }),
+        buildToggle(tc("别名搜索", "Alias Search"), _state.searchOpts.aliasSearch,
+          tc("搜索时使用主名+全部别名；取消后仅搜索主名并只核对第一个结果（更快，但主名搜不到、仅别名可搜的演员会漏）",
+             "Search main name + all aliases; unchecked searches only the main name and checks only the first result (faster, but performers only findable by alias are missed)"),
+          function (checked) { setState({ searchOpts: Object.assign({}, _state.searchOpts, { aliasSearch: checked }) }); }),
+        buildToggle(tc("模糊匹配", "Fuzzy Match"), _state.searchOpts.fuzzy,
+          tc("勾选后仅按名称相似度评级（≥0.9 自动应用），不再参考 URL/StashDB/生日证据",
+             "When checked, rating uses name similarity only (>=0.9 auto-applied); URL/StashDB/birthday evidence is ignored"),
+          function (checked) { setState({ searchOpts: Object.assign({}, _state.searchOpts, { fuzzy: checked }) }); }),
       ]),
     ]));
 
@@ -1311,26 +1815,44 @@
     }
 
     // Stats (only when a scan produced results)
-    var hasResults = !!_state.results;
-    var hasResultItems = hasResults && _state.results.length > 0;
-    var autoMatches = hasResultItems ? getAllMatches().filter(function (m) { return m.confidence === "high" && !m.dismissed; }) : [];
-    var reviewMatches = hasResultItems ? getAllMatches().filter(function (m) { return m.confidence === "medium"; }) : [];
-    var unmatched = hasResultItems ? getAllUnmatched() : [];
+    var hasResults = _state.results !== null;
+    var conflictMap = hasResults ? computeConflicts() : {};
+    var searchAll = hasResults ? getAllSearchMatches() : [];
+    // 列表含已忽略项（收窄行）与冲突项（冲突徽章，见 buildMatchCard/buildSearchMatchCard）；
+    // 「应用全部」与数据大屏计数另行排除。
+    var autoMatches = hasResults
+      ? getAllMatches().filter(function (m) { return m.confidence === "high"; })
+      : [];
+    var autoSearch = searchAll.filter(function (sm) { return sm.confidence === "high"; });
+    var reviewMatches = hasResults ? getAllMatches().filter(function (m) { return m.confidence === "medium"; }) : [];
+    var reviewSearch = searchAll.filter(function (sm) { return sm.confidence === "medium"; });
+    var unmatched = hasResults ? getAllUnmatched() : [];
+    var hasResultItems = hasResults && (_state.results.length > 0 || searchAll.length > 0);
 
     if (hasResultItems) {
-      var manualCount = Object.keys(_state.manualSelected).length;
+      // 数据大屏计数排除已忽略项；页签计数按惯例保留总数（不受忽略影响）。
+      var activeCount = function (arr, conflicts) {
+        return arr.filter(function (x) {
+          return !x.dismissed && (conflicts ? !!conflictMap[x.key] : !conflictMap[x.key]);
+        }).length;
+      };
+      var autoCount = activeCount(autoMatches) + activeCount(autoSearch);
+      var reviewCount = activeCount(reviewMatches) + activeCount(reviewSearch);
+      var conflictCount = activeCount(autoMatches, true) + activeCount(autoSearch, true);
+      var dismissedCount = autoMatches.length + autoSearch.length + reviewMatches.length + reviewSearch.length
+        - autoCount - reviewCount - conflictCount;
       frag.appendChild(el("div", "jsm-stats", [
-        buildStat(autoMatches.length, tc("自动匹配", "Auto Matched"), "#37b24d"),
-        buildStat(reviewMatches.length, tc("待审核", "Needs Review"), "#f59f00"),
-        buildStat(unmatched.length, tc("未匹配", "Unmatched"), "#f03e3e"),
-        buildStat(manualCount, tc("手动选择", "Manual Selected"), "#339af0"),
+        buildStat(autoCount, tc("自动匹配", "Auto Matched"), "#37b24d"),
+        buildStat(reviewCount, tc("待审核", "Needs Review"), "#f59f00"),
+        buildStat(conflictCount, tc("冲突", "Conflicts"), "#ffa94d"),
+        buildStat(dismissedCount, tc("已忽略", "Dismissed"), "#868e96"),
       ]));
     }
 
     // Tabs (always visible — manual search works without scanning)
     var tabs = [
-      { id: "auto", label: tc("自动匹配", "Auto Matched") + " (" + autoMatches.length + ")" },
-      { id: "review", label: tc("待审核", "Needs Review") + " (" + reviewMatches.length + ")" },
+      { id: "auto", label: tc("自动匹配", "Auto Matched") + " (" + (autoMatches.length + autoSearch.length) + ")" },
+      { id: "review", label: tc("待审核", "Needs Review") + " (" + (reviewMatches.length + reviewSearch.length) + ")" },
       { id: "unmatched", label: tc("未匹配", "Unmatched") + " (" + unmatched.length + ")" },
       { id: "manual", label: tc("手动搜索", "Manual Search") },
       { id: "log", label: tc("日志", "Log") },
@@ -1361,25 +1883,37 @@
         });
         content.appendChild(logBox);
       }
-    } else {
-      // Result tabs (auto / review / unmatched)
-      var items = _state.activeTab === "auto" ? autoMatches
-        : _state.activeTab === "review" ? reviewMatches
-        : unmatched;
+    } else if (_state.activeTab === "unmatched") {
       if (!hasResults) {
         content.appendChild(el("div", "jsm-empty",
           _state.scanning ? tc("扫描进行中...", "Scanning...")
             : tc("尚未扫描 — 点击上方「开始扫描」，或使用「手动搜索」", "Not scanned yet — click Start Scan above, or use Manual Search")));
-      } else if (_state.results.length === 0) {
-        content.appendChild(el("div", "jsm-empty",
-          _state.emptyReason || tc("没有结果", "No results")));
-      } else if (items.length === 0) {
-        var emptyText = _state.activeTab === "auto" ? tc("没有自动匹配", "No auto matches")
-          : _state.activeTab === "review" ? tc("没有待审核匹配", "No review matches")
-          : tc("没有未匹配演员", "No unmatched performers");
-        content.appendChild(el("div", "jsm-empty", emptyText));
+      } else if (unmatched.length === 0) {
+        content.appendChild(el("div", "jsm-empty", tc("没有未匹配演员", "No unmatched performers")));
       } else {
-        content.appendChild(buildChunkedList(items, _state.activeTab === "unmatched" ? buildUnmatchedCard : buildMatchCard));
+        content.appendChild(buildChunkedList(unmatched, buildUnmatchedCard));
+      }
+    } else {
+      // Auto / review tabs: engine A cards + "Search Matches" section for engine B
+      var isAuto = _state.activeTab === "auto";
+      var sceneItems = isAuto ? autoMatches : reviewMatches;
+      var searchItems = isAuto ? autoSearch : reviewSearch;
+      if (!hasResults) {
+        content.appendChild(el("div", "jsm-empty",
+          _state.scanning ? tc("扫描进行中...", "Scanning...")
+            : tc("尚未扫描 — 点击上方「开始扫描」，或使用「手动搜索」", "Not scanned yet — click Start Scan above, or use Manual Search")));
+      } else if (sceneItems.length === 0 && searchItems.length === 0) {
+        content.appendChild(el("div", "jsm-empty",
+          _state.emptyReason ||
+          (isAuto ? tc("没有自动匹配", "No auto matches") : tc("没有待审核匹配", "No review matches"))));
+      } else {
+        if (sceneItems.length > 0) {
+          content.appendChild(buildChunkedList(sceneItems, buildMatchCard));
+        }
+        if (searchItems.length > 0) {
+          content.appendChild(el("div", "jsm-section-label", tc("搜索匹配", "Search Matches")));
+          content.appendChild(buildChunkedList(searchItems, buildSearchMatchCard));
+        }
       }
     }
     frag.appendChild(content);
@@ -1403,6 +1937,56 @@
     ]);
   }
 
+  // JAVStash performer name link — opens the performer page on javstash.org in
+  // a new browser tab (used for match verification).
+  function buildJsPerfLink(jsPerf) {
+    var text = jsPerf.name + (jsPerf.disambiguation ? " (" + jsPerf.disambiguation + ")" : "");
+    return el("a", "jsm-link", text, {
+      href: JAVSTASH_WEB + "/performers/" + jsPerf.id,
+      target: "_blank",
+      rel: "noopener noreferrer",
+    });
+  }
+
+  // SPA 导航 — pushState + 合成 popstate 让 Stash 的 react-router 切换页面，
+  // 不触发整页刷新（回退/前进按钮仍可用）。
+  function navigateStash(href) {
+    try {
+      var state = { key: Math.random().toString(36).slice(2, 8), state: null };
+      window.history.pushState(state, "", href);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: state }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // 给 <a> 挂 SPA 导航：左键单击关面板并原地跳转；修饰键/中键走浏览器默认行为。
+  function attachSpaNav(node, href) {
+    node.onclick = function (e) {
+      if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      closePanel();
+      if (!navigateStash(href)) window.location.href = href;
+    };
+    return node;
+  }
+
+  // 本地演员名链接 — 当前标签页打开 Stash 演员详情页（SPA 路由，不整页刷新）。
+  function buildStashPerfLink(name, localId) {
+    var href = "/performers/" + localId;
+    return attachSpaNav(el("a", "jsm-link", name, { href: href }), href);
+  }
+
+  // "查看" button on match cards — solid orange; opens the local performer's
+  // Stash detail page in the current tab via SPA navigation.
+  function buildViewLink(localPerformer) {
+    var href = "/performers/" + localPerformer.id;
+    return attachSpaNav(
+      el("a", "jsm-btn jsm-btn-sm jsm-btn-view", tc("查看", "View"), { href: href }),
+      href);
+  }
+
   function buildMatchCard(m) {
     var confidenceClass = m.confidence === "high" ? "jsm-badge-high" : "jsm-badge-medium";
     var methodLabel = {
@@ -1414,12 +1998,16 @@
     var isApplied = _state.applied[m.key];
     var isDismissed = m.dismissed;
 
+    // 忽略后收窄为一行（纯文本主名 + 已忽略徽章 + 恢复按钮）。
+    if (isDismissed && !isApplied) {
+      return buildDismissedMatchCard(m.key, m.sceneTitle, m.javstashPerformer.name, m.localPerformer.name);
+    }
+
     var info = el("div", "jsm-card-info", [
       el("div", "jsm-scene-title", m.sceneTitle),
       el("div", "jsm-card-name", [
-        document.createTextNode(m.javstashPerformer.name +
-          (m.javstashPerformer.disambiguation ? " (" + m.javstashPerformer.disambiguation + ")" : "") +
-          " → "),
+        buildJsPerfLink(m.javstashPerformer),
+        document.createTextNode(" → "),
         (function () {
           var span = document.createElement("span");
           span.style.color = "#37b24d";
@@ -1469,7 +2057,35 @@
       rightSide.appendChild(dismissBtn);
     }
 
-    return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : "") + (isDismissed ? " jsm-card-dismissed" : ""), [info, badge, methodBadge, rightSide]);
+    var children = [info, badge, methodBadge, buildViewLink(m.localPerformer)];
+    if (computeConflicts()[m.key]) {
+      children.push(el("span", "jsm-badge jsm-badge-conflict", tc("冲突", "conflict"), {
+        title: tc("同一 JAVStash 演员被多个本地演员高可信命中，已退出「应用全部」",
+                 "This JAVStash performer is high-matched to multiple local performers — excluded from Apply All"),
+      }));
+    }
+    children.push(rightSide);
+
+    return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : "") + (isDismissed ? " jsm-card-dismissed" : ""), children);
+  }
+
+  // 已忽略的匹配 — 收窄为一行：主名纯文本（不可点击），尾部「已忽略」徽章 + 「恢复」按钮。
+  // 不显示证据描述/置信度徽章/查看/忽略按钮。
+  function buildDismissedMatchCard(key, sceneTitle, jsName, localName) {
+    return el("div", "jsm-card jsm-card-dismissed jsm-card-narrow", [
+      el("div", "jsm-card-info", [
+        sceneTitle ? el("div", "jsm-scene-title", sceneTitle) : null,
+        el("div", "jsm-card-name", jsName + " → " + localName),
+      ]),
+      el("span", "jsm-badge jsm-badge-dismissed", tc("已忽略", "Dismissed")),
+      el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("恢复", "Restore"), {
+        onclick: function () {
+          var d = Object.assign({}, _state.dismissed);
+          delete d[key];
+          setState({ dismissed: d });
+        },
+      }),
+    ]);
   }
 
   function applySingle(key, localPerformer, jsPerf) {
@@ -1546,6 +2162,78 @@
     var mt = _state.manualTab;
     var wrap = el("div", "jsm-manual");
 
+    // 单演员场景数据（补全按钮依据），首次进入异步加载并缓存。
+    if (mt.fpComplete.scenes === null && !mt.fpComplete.loading) ensureFpScenes();
+
+    // 列表筛选（状态行与列表渲染共用）。
+    var filter = (mt.listFilter || "").trim().toLowerCase();
+    var filtered = null;
+    if (mt.list !== null && !mt.listLoading) {
+      filtered = filter
+        ? mt.list.filter(function (p) {
+            if ((p.name || "").toLowerCase().indexOf(filter) !== -1) return true;
+            return parseAliasList(p.alias_list).some(function (a) {
+              return a.toLowerCase().indexOf(filter) !== -1;
+            });
+          })
+        : mt.list;
+    }
+
+    // 紧凑提示区（参照 performerMerge 别名修复页）：状态文案合并一行 + 左对齐补全按钮。
+    var fp = mt.fpComplete;
+    var parts = [];
+    if (filtered === null) {
+      parts.push(tc("演员列表加载中...", "Loading performers..."));
+    } else if (filter) {
+      parts.push(tc("匹配 " + filtered.length + " / " + mt.list.length + " 个",
+                    filtered.length + " / " + mt.list.length + " performers"));
+    } else {
+      parts.push(tc("未绑定演员 " + filtered.length + " 个", filtered.length + " unlinked performers"));
+    }
+    if (fp.running) {
+      parts = [tc("补全中 0/" + fp.scenes.length, "Completing 0/" + fp.scenes.length)];
+    } else if (fp.done) {
+      parts.push(fp.scenes.length > 0
+        ? tc("已完成补全，" + fp.scenes.length + "个未命中",
+             "Completed, " + fp.scenes.length + " not matched")
+        : tc("已完成补全", "Completed"));
+    } else if (fp.scenes !== null && fp.scenes.length > 0) {
+      parts.push(fp.scenes.length + tc("个单演员场景可补全",
+                                       fp.scenes.length + " single-performer scenes can be completed"));
+    }
+    var ignoredCount = filtered === null
+      ? 0
+      : mt.list.filter(function (p) { return mt.ignoredIds[p.id]; }).length;
+    var statusText = parts.join(" · ");
+    if (ignoredCount > 0) {
+      statusText += tc("（已忽略 " + ignoredCount + " 个）", " (" + ignoredCount + " ignored)");
+    }
+
+    // 补全按钮（一次性）：可补全 / 补全中 / 已补全（灰、不可点）；无可补全时不渲染。
+    var fpBtn = null;
+    if (fp.scenes !== null && (fp.scenes.length > 0 || fp.done)) {
+      if (fp.running) {
+        fpBtn = el("button", "jsm-btn jsm-btn-state", tc("补全中...", "Completing..."), {
+          disabled: true,
+        });
+      } else if (fp.done) {
+        fpBtn = el("button", "jsm-btn jsm-btn-state", tc("已补全", "Completed"), {
+          disabled: true,
+        });
+      } else {
+        fpBtn = el("button", "jsm-btn jsm-btn-primary", tc("补全单演员", "Complete Single-Performer"), {
+          title: tc("用单演员场景指纹搜索 JAVStash", "Fingerprint-search JAVStash with single-performer scenes"),
+          onclick: function () { handleCompletePerformers(); },
+        });
+      }
+    }
+
+    var statusEl = el("div", "jsm-config-status", statusText);
+    if (fp.running) statusEl.setAttribute("data-jsm-fpstatus", "");
+    var compactKids = [statusEl];
+    if (fpBtn) compactKids.push(el("div", "jsm-actions", [fpBtn]));
+    wrap.appendChild(el("div", "jsm-config jsm-config-compact", compactKids));
+
     var input = el("input", "jsm-input jsm-manual-query", null, {
       type: "text",
       value: mt.listFilter,
@@ -1571,72 +2259,71 @@
     }
     wrap.appendChild(el("div", "jsm-manual-searchrow", [inputWrap]));
 
-    if (mt.listLoading) {
+    if (mt.listLoading || mt.list === null) {
+      if (mt.list === null) ensureManualList();
       wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));
       return wrap;
     }
-    if (mt.list === null) {
-      ensureManualList();
-      wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));
-      return wrap;
-    }
-
-    var filter = (mt.listFilter || "").trim().toLowerCase();
-    var visible = mt.list.filter(function (p) { return !mt.ignoredIds[p.id]; });
-    var filtered = filter
-      ? visible.filter(function (p) {
-          if ((p.name || "").toLowerCase().indexOf(filter) !== -1) return true;
-          return parseAliasList(p.alias_list).some(function (a) {
-            return a.toLowerCase().indexOf(filter) !== -1;
-          });
-        })
-      : visible;
 
     if (filtered.length === 0) {
       wrap.appendChild(el("div", "jsm-empty",
-        visible.length === 0
+        mt.list.length === 0
           ? tc("没有未绑定 JAVStash 的演员", "No performers without JAVStash ID")
           : tc("无匹配演员", "No matching performers")));
       return wrap;
     }
 
-    var ignoredCount = mt.list.length - visible.length;
-    var countText = filtered.length === visible.length
-      ? tc("未绑定演员 " + filtered.length + " 个", filtered.length + " unlinked performers")
-      : tc("匹配 " + filtered.length + " / " + visible.length + " 个",
-           filtered.length + " / " + visible.length + " performers");
-    if (ignoredCount > 0) {
-      countText += tc("（已忽略 " + ignoredCount + " 个）", " (" + ignoredCount + " ignored)");
-    }
-    wrap.appendChild(el("div", "jsm-manual-status", countText));
     wrap.appendChild(buildChunkedList(filtered, buildManualRow));
     return wrap;
   }
 
+  // 已忽略的演员 — 收窄为一行主名高度，尾部「已忽略」徽章 + 「恢复」按钮；主名纯文本不可点击。
+  function buildManualIgnoredRow(p) {
+    return el("div", "jsm-mgroup jsm-mgroup-ignored", [
+      el("div", "jsm-mgroup-head", [
+        el("div", "jsm-card-info", [
+          el("div", "jsm-card-name", p.name),
+        ]),
+        el("div", "jsm-mgroup-actions", [
+          el("span", "jsm-badge jsm-badge-dismissed", tc("已忽略", "Dismissed")),
+          el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("恢复", "Restore"), {
+            onclick: function () { handleRestorePerformer(p); },
+          }),
+        ]),
+      ]),
+    ]);
+  }
+
   function buildManualRow(p) {
+    if (_state.manualTab.ignoredIds[p.id]) return buildManualIgnoredRow(p);
     var s = _state.manualTab.search[p.id];
     var group = el("div", "jsm-mgroup");
 
     var aliases = parseAliasList(p.alias_list);
     var head = el("div", "jsm-mgroup-head", [
       el("div", "jsm-card-info", [
-        el("div", "jsm-card-name", p.name),
+        el("div", "jsm-card-name", [buildStashPerfLink(p.name, p.id)]),
         aliases.length ? el("div", "jsm-card-sub", aliases.join(", ")) : null,
       ]),
+      (function () {
+        // 搜索/忽略按钮组 — 与主名/别名放不下时整组换行到下一行。
+        var actions = el("div", "jsm-mgroup-actions");
+        if (s && s.appliedJsId) {
+          actions.appendChild(el("span", "jsm-badge jsm-badge-applied", tc("已应用", "Applied")));
+        } else if (s && s.searching) {
+          actions.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-state", tc("搜索中...", "Searching..."), { disabled: true }));
+        } else {
+          actions.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("搜索", "Search"), {
+            onclick: function () { handleRowSearch(p); },
+          }));
+        }
+        actions.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Ignore"), {
+          title: tc("忽略该演员", "Ignore this performer"),
+          onclick: function () { handleIgnorePerformer(p); },
+        }));
+        return actions;
+      })(),
     ]);
-    if (s && s.appliedJsId) {
-      head.appendChild(el("span", "jsm-badge jsm-badge-applied", tc("已应用", "Applied")));
-    } else if (s && s.searching) {
-      head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-state", tc("搜索中...", "Searching..."), { disabled: true }));
-    } else {
-      head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("搜索", "Search"), {
-        onclick: function () { handleRowSearch(p); },
-      }));
-    }
-    head.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Ignore"), {
-      title: tc("忽略该演员", "Ignore this performer"),
-      onclick: function () { handleIgnorePerformer(p); },
-    }));
     group.appendChild(head);
 
     if (s && !s.appliedJsId && (s.searching || s.candMap)) {
@@ -1725,12 +2412,9 @@
     return frag;
   }
 
-  function buildManualCandidateCard(c, local, showMore) {
-    var jsPerf = c.jsPerf;
-    var ev = c.evidence;
-    var s = _state.manualTab.search[local.id];
-    var isApplied = !!(s && s.appliedJsId === jsPerf.id);
-
+  // Evidence detail line shared by manual candidate cards and search match
+  // cards: votes, birthday, height, URL intersection, StashDB, similarity.
+  function buildEvidenceSub(local, jsPerf, ev) {
     var voteNames = ev.votes.map(function (v) { return v.raw; }).join(", ");
 
     var bdayText, bdayClass;
@@ -1760,16 +2444,23 @@
       hClass = "jsm-ev-bad";
     }
 
-    var sub = el("div", "jsm-card-sub", [
+    return el("div", "jsm-card-sub", [
       el("span", null, tc("命中 ", "votes ") + ev.voteCount + "/" + ev.totalNames + (voteNames ? ": " + voteNames : "") + " · "),
       el("span", bdayClass, bdayText + " · "),
       el("span", hClass, hText + " · "),
       el("span", null, tc("URL交集 ", "URL ") + ev.urlIntersect + " · "),
       el("span", ev.stashdbMatch ? "jsm-ev-ok" : null, tc("StashDB ", "StashDB ") + (ev.stashdbMatch ? "✓" : "✗")),
+      el("span", null, " · " + tc("相似度 ", "sim ") + (ev.sim || 0)),
     ]);
+  }
 
-    var nameText = jsPerf.name + (jsPerf.disambiguation ? " (" + jsPerf.disambiguation + ")" : "");
-    if (jsPerf.deleted) nameText += "  [" + tc("已删除", "deleted") + "]";
+  function buildManualCandidateCard(c, local, showMore) {
+    var jsPerf = c.jsPerf;
+    var ev = c.evidence;
+    var s = _state.manualTab.search[local.id];
+    var isApplied = !!(s && s.appliedJsId === jsPerf.id);
+
+    var sub = buildEvidenceSub(local, jsPerf, ev);
 
     var badge = ev.confidence
       ? el("span", "jsm-badge " + (ev.confidence === "high" ? "jsm-badge-high" : "jsm-badge-medium"), ev.confidence)
@@ -1791,12 +2482,87 @@
 
     return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : ""), [
       el("div", "jsm-card-info", [
-        el("div", "jsm-card-name", nameText),
+        el("div", "jsm-card-name", [
+          buildJsPerfLink(jsPerf),
+          jsPerf.deleted ? document.createTextNode("  [" + tc("已删除", "deleted") + "]") : null,
+        ]),
         sub,
       ]),
       badge,
       right,
     ]);
+  }
+
+  // Engine B match card: JAVStash performer -> local performer, evidence detail
+  // line, and a conflict badge when the same JAVStash performer is
+  // high-matched to multiple local performers.
+  function buildSearchMatchCard(sm) {
+    var jsPerf = sm.jsPerf;
+    var isApplied = _state.applied[sm.key];
+    var isDismissed = sm.dismissed;
+    var isConflict = !!computeConflicts()[sm.key];
+
+    // 忽略后收窄为一行（纯文本主名 + 已忽略徽章 + 恢复按钮）。
+    if (isDismissed && !isApplied) {
+      return buildDismissedMatchCard(sm.key, null, jsPerf.name, sm.localPerformer.name);
+    }
+
+    var info = el("div", "jsm-card-info", [
+      el("div", "jsm-card-name", [
+        buildJsPerfLink(jsPerf),
+        jsPerf.deleted ? document.createTextNode("  [" + tc("已删除", "deleted") + "]") : null,
+        document.createTextNode(" → "),
+        (function () {
+          var span = document.createElement("span");
+          span.style.color = "#37b24d";
+          span.textContent = sm.localPerformer.name;
+          return span;
+        })(),
+      ]),
+      buildEvidenceSub(sm.localPerformer, jsPerf, sm.evidence),
+    ]);
+
+    var rightSide = el("div", "jsm-card-actions");
+    if (isApplied) {
+      rightSide.appendChild(el("span", "jsm-badge jsm-badge-applied", tc("已应用", "Applied")));
+    } else if (isDismissed) {
+      rightSide.appendChild(el("span", "jsm-badge jsm-badge-dismissed", tc("已忽略", "Dismissed")));
+      rightSide.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-primary", tc("恢复", "Restore"), {
+        onclick: function () {
+          var d = Object.assign({}, _state.dismissed);
+          delete d[sm.key];
+          setState({ dismissed: d });
+        },
+      }));
+    } else {
+      rightSide.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-success", tc("应用", "Apply"), {
+        onclick: function () { applySingle(sm.key, sm.localPerformer, sm.jsPerf); },
+      }));
+    }
+    if (!isApplied) {
+      rightSide.appendChild(el("button", "jsm-btn jsm-btn-sm jsm-btn-ignore", tc("忽略", "Dismiss"), {
+        onclick: function () {
+          var d = Object.assign({}, _state.dismissed);
+          d[sm.key] = true;
+          setState({ dismissed: d });
+        },
+      }));
+    }
+
+    var children = [
+      info,
+      el("span", "jsm-badge " + (sm.confidence === "high" ? "jsm-badge-high" : "jsm-badge-medium"), sm.confidence),
+      buildViewLink(sm.localPerformer),
+    ];
+    if (isConflict) {
+      children.push(el("span", "jsm-badge jsm-badge-conflict", tc("冲突", "conflict"), {
+        title: tc("同一 JAVStash 演员被多个本地演员高可信命中，已退出「应用全部」",
+                 "This JAVStash performer is high-matched to multiple local performers — excluded from Apply All"),
+      }));
+    }
+    children.push(rightSide);
+
+    return el("div", "jsm-card" + (isApplied ? " jsm-card-applied" : "") + (isDismissed ? " jsm-card-dismissed" : ""), children);
   }
 
   // ==================== Panel ====================

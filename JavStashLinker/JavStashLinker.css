@@ -163,6 +163,72 @@
 
 .jsm-actions {
   margin-top: 4px !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+/* 圆角长条滑块开关（小号） — 滑块在文字左侧，点击切换；
+   滑块靠右 = 开启，开启时滑轨显示主题色。窄屏时随 .jsm-actions 换行。 */
+.jsm-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: 12px !important;
+  color: #ccc !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  white-space: nowrap !important;
+}
+
+.jsm-toggle-track {
+  width: 28px !important;
+  height: 14px !important;
+  border-radius: 7px !important;
+  background: #555 !important;
+  position: relative !important;
+  display: inline-block !important;
+  flex-shrink: 0 !important;
+  transition: background 0.15s !important;
+}
+
+.jsm-toggle-knob {
+  position: absolute !important;
+  top: 2px !important;
+  left: 2px !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  background: #fff !important;
+  transition: left 0.15s !important;
+}
+
+.jsm-toggle.on .jsm-toggle-track {
+  background: #339af0 !important;
+}
+
+.jsm-toggle.on .jsm-toggle-knob {
+  left: 16px !important;
+}
+
+.jsm-toggle-disabled {
+  opacity: 0.5 !important;
+  pointer-events: none !important;
+}
+
+.jsm-section-label {
+  margin: 14px 0 8px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #999 !important;
+  letter-spacing: 0.5px !important;
+}
+
+.jsm-badge-conflict {
+  background: rgba(245, 159, 0, 0.15) !important;
+  border-color: rgba(245, 159, 0, 0.7) !important;
+  color: #ffa94d !important;
 }
 
 .jsm-btn {
@@ -329,6 +395,29 @@
   color: #e0e0e0 !important;
 }
 
+.jsm-link {
+  color: #339af0 !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+}
+
+.jsm-link:hover {
+  text-decoration: underline !important;
+}
+
+/* 查看 — 实心橘色按钮（当前标签页 SPA 跳转到本地演员详情） */
+.jsm-btn-view {
+  background: #e8590c !important;
+  color: #fff !important;
+  text-decoration: none !important;
+  flex-shrink: 0 !important;
+}
+
+.jsm-btn-view:hover {
+  background: #d9480f !important;
+  color: #fff !important;
+}
+
 .jsm-card-sub {
   font-size: 11px !important;
   color: #888 !important;
@@ -477,6 +566,32 @@
   opacity: 0.5 !important;
 }
 
+/* 已忽略的匹配 — 收窄为一行：隐藏主名超链接/证据行，保留已忽略徽章 + 恢复按钮 */
+.jsm-card-narrow {
+  padding: 5px 12px !important;
+}
+
+.jsm-card-narrow .jsm-card-name {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* 紧凑提示区（手动搜索页，参照 performerMerge 别名修复页）：
+   合并状态文案一行 + 左对齐补全按钮；水平留白与 .jsm-config 一致（按钮与「开始扫描」左对齐） */
+.jsm-config-compact {
+  padding: 8px 16px !important;
+  margin-bottom: 12px !important;
+}
+
+.jsm-config-compact .jsm-config-status {
+  margin-bottom: 6px !important;
+}
+
+.jsm-config-compact .jsm-actions {
+  margin-top: 0 !important;
+}
+
 .jsm-manual-searchrow {
   display: flex !important;
   gap: 8px !important;
@@ -530,20 +645,39 @@
   margin-bottom: 6px !important;
 }
 
+/* 已忽略演员行 — 收窄为一行主名高度，弱化显示 */
+.jsm-mgroup-ignored {
+  opacity: 0.55 !important;
+}
+
+.jsm-mgroup-ignored .jsm-mgroup-head {
+  padding: 5px 12px !important;
+}
+
 .jsm-mgroup-head {
   display: flex !important;
   align-items: center !important;
+  flex-wrap: wrap !important;
   gap: 8px !important;
   padding: 8px 12px !important;
   min-width: 0 !important;
 }
 
 .jsm-mgroup-head .jsm-card-info {
-  flex: 1 !important;
+  flex: 1 1 240px !important;
   min-width: 0 !important;
 }
 
-.jsm-mgroup-head .jsm-btn {
+.jsm-mgroup-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  margin-left: auto !important;
+}
+
+.jsm-mgroup-actions .jsm-btn,
+.jsm-mgroup-actions .jsm-badge {
   flex-shrink: 0 !important;
 }
 
@@ -639,11 +773,17 @@
 }
 
 .jsm-mgroup-head .jsm-card-name,
-.jsm-mgroup-head .jsm-card-sub,
 .jsm-mgroup-body .jsm-card-name {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
+}
+
+/* 别名整行完整显示，不截断；自然换行（拉丁名按词、CJK 任意断） */
+.jsm-mgroup-head .jsm-card-sub {
+  white-space: normal !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
 }
 
 .jsm-ev-ok {
@@ -664,7 +804,7 @@
   .jsm-card-info { flex: 1 1 100% !important; min-width: 0 !important; margin-bottom: 4px !important; }
   .jsm-card-actions { flex-wrap: wrap !important; gap: 4px !important; }
   .jsm-select { max-width: 100% !important; width: 100% !important; }
-  .jsm-mgroup-head { flex-wrap: nowrap !important; }
+  .jsm-mgroup-head { flex-wrap: wrap !important; }
   .jsm-mgroup-head .jsm-card-info { flex: 1 1 auto !important; margin-bottom: 0 !important; }
 }
 

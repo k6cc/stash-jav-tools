@@ -27,7 +27,7 @@
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
 6. 验证发版完成：`gh run list --limit 1` 找到 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
-7. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 5.1 不支持 heredoc 与 `&&`/`||` 语句分隔符，commit 用 `-m "..."`、命令链用 `;`
+7. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 5.1 不支持 heredoc 与 `&&`/`||` 语句分隔符，commit 用 `-m "..."`、命令链用 `;`；**沙箱内 `git push` 会因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行（`dangerouslyDisableSandbox`），commit/add 等本地操作不受影响
 
 ## 文件编辑（agent 工作约定）
 

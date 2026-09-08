@@ -433,6 +433,11 @@
   min-width: 0 !important;
 }
 
+/* 折叠卡（忽略/已处理，仅剩头部）：去掉头部下边距，上下留白对称 */
+.pdm-group-header:last-child {
+  margin-bottom: 0 !important;
+}
+
 .pdm-shared-name {
   font-weight: 600 !important;
   font-size: 14px !important;

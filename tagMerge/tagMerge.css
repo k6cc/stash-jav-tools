@@ -472,10 +472,12 @@
   color: #aaa !important;
 }
 
+/* 新建徽章：左右留空隙，不紧贴目标名与源计数 */
 .tgm-badge-new {
   background: rgba(255, 169, 77, 0.12) !important;
   border-color: rgba(255, 169, 77, 0.5) !important;
   color: #ffa94d !important;
+  margin: 0 6px !important;
 }
 
 .tgm-badge-done {

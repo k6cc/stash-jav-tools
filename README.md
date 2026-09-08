@@ -9,7 +9,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 场景/图片/图库编辑页一键翻译，支持 Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置 |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.2 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash（无需 Python） |
-| [JavStashLinker](./JavStashLinker/) | 1.5.1 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则，无图演员自动补图、空白信息补全不覆盖、StashDB 交叉链接转 stash_id） |
+| [JavStashLinker](./JavStashLinker/) | 1.5.2 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则，无图演员自动补图、空白信息补全不覆盖、StashDB 交叉链接转 stash_id） |
 | [performerMerge](./performerMerge/) | 1.6.2 | 纯 UI | 重名演员检测与合并：证据分级连组（stash_id/共享 URL/主名全名/短名）+ 树级 ID/URL 冲突检查，冲突/低可信度组挂徽章并退出「合并全部」，被阻断对在「强制合并」页人工核实后手动合并；附带共享短名别名一键清理与别名单行合并错误拆分修复（无需 Python） |
 | [tagMerge](./tagMerge/) | 2.4.2 | 纯 UI | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，面板预览后一键合并，源名保留为别名；映射表可在面板内编辑并导出文件（单行紧凑格式），冲突检测一键清理，条目可忽略/恢复（无需 Python） |
 

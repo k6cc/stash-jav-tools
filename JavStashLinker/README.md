@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.5.2：开关与文案细节 — ①「模糊匹配」滑块开启时滑轨显示**警告黄**（与冲突徽章同色系，区别于「别名搜索」的主题蓝）；②「别名搜索」悬浮提示精简；③修正面板标题版本号显示（v1.5.1 发版时 `PLUGIN_VERSION` 漏更，此前一直显示 v1.5.0）
+> v1.5.3：任务执行修复 — ①mode 改从任务 defaultArgs（payload["args"]）读取，Apply 高置信度任务不再被误当扫描执行；②stdin/stdout 显式 UTF-8，Windows 下中文演员名不再解码报错；③认证改走 SessionCookie（server_connection 无 ApiKey 字段），启用认证的实例不再 401；④server_connection Host 为 0.0.0.0 时归一化到 localhost
 
 Stash 插件：通过场景反推 + 名称搜索批量获取演员的 JAVStash ID。双引擎串行（场景反推 → 名称搜索），匹配按证据评级分 high/medium，冲突护栏防止一个 JAVStash ID 写入多个本地演员；应用时写入 stash_id、别名、URL，并补全空白信息字段与缺失图片（不覆盖已有值）。
 

@@ -1,0 +1,32 @@
+name: Studio Tools Backend
+description: Auto-scrape, merge and update studios from Stash-box instances. Hook on studio create, plus a manual task scanning studios without Stash IDs. No UI injection.
+version: 1.0.0
+url: https://discourse.stashapp.cc/t/studio-tools-backend/16129
+errLog: info
+exec:
+  - python
+  - "{pluginDir}/studioToolsBackend.py"
+interface: raw
+hooks:
+  - name: studio_create_backend
+    description: Scrape, merge or update a newly created studio from configured Stash-box instances
+    triggeredBy:
+      - Studio.Create.Post
+tasks:
+  - name: "Scan Studios Without Stash IDs"
+    description: "Scrape and update/merge all studios that have no Stash IDs, by configured source priority"
+    defaultArgs:
+      mode: scan_all
+settings:
+  sourcePriority:
+    displayName: Source priority
+    description: "Comma-separated order of Stash-box instances to query. Built-in keys: javstash, stashdb, theporndb; custom instances by endpoint URL. Empty (default) = all configured instances: javstash, stashdb, theporndb, then custom ones in provider order. Instances not listed are skipped."
+    type: STRING
+  silentFallback:
+    displayName: Silent fallback
+    description: When ON, a source that fails or has no exact match silently falls back to the next source. When OFF, the first responding source decides the result; no exact match means the studio is skipped.
+    type: BOOLEAN
+  timeoutPerSource:
+    displayName: Timeout per source (s)
+    description: Per-source scrape timeout in seconds. Default 8.
+    type: NUMBER

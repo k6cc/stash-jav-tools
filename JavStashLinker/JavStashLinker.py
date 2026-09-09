@@ -10,6 +10,11 @@ import unicodedata
 
 import requests
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 STASHDB_ENDPOINT = "https://stashdb.org/graphql"
 TPDB_ENDPOINT = "https://theporndb.net/graphql"
 JAVSTASH_ENDPOINT = "https://javstash.org/graphql"
@@ -32,11 +37,13 @@ def log_progress(p):
 # ==================== GraphQL Client ====================
 
 class GraphQLClient:
-    def __init__(self, url, api_key=None):
+    def __init__(self, url, api_key=None, cookie=None):
         self.url = url
         self.headers = {"Content-Type": "application/json"}
         if api_key:
             self.headers["ApiKey"] = api_key
+        if cookie:
+            self.headers["Cookie"] = cookie
 
     def query(self, query_str, variables=None, retries=3):
         payload = {"query": query_str}
@@ -80,10 +87,22 @@ class StashInterface:
         server = fragment.get("server_connection", {})
         self.scheme = server.get("Scheme", server.get("scheme", "http"))
         self.host = server.get("Host", server.get("host", "localhost"))
+        # Stash 监听地址可能是 0.0.0.0，直接连接无效地址会 WinError 10049（与 backend 一致归一化）
+        if self.host in ("0.0.0.0", ""):
+            self.host = "localhost"
         self.port = server.get("Port", server.get("port", 9999))
         self.api_key = server.get("ApiKey", server.get("api_key", ""))
+        # Stash 的 server_connection 无 ApiKey 字段（源码 pkg/plugin/common），
+        # 认证走 SessionCookie（与 studioToolsBackend/tagMergeBackend 一致）；
+        # 保留 api_key 读取以兼容旧版/直传场景
+        session_cookie = server.get("SessionCookie") or {}
+        cookie = ""
+        if isinstance(session_cookie, dict):
+            ck = session_cookie.get("Value")
+            if ck:
+                cookie = "%s=%s" % (session_cookie.get("Name", "session"), ck)
         self.url = f"{self.scheme}://{self.host}:{self.port}/graphql"
-        self.client = GraphQLClient(self.url, self.api_key if self.api_key else None)
+        self.client = GraphQLClient(self.url, self.api_key if self.api_key else None, cookie or None)
 
     def get_stash_box_config(self):
         query = """
@@ -676,9 +695,14 @@ def apply_match(stash, local_perf_id, js_perf):
 # ==================== Main ====================
 
 def main():
-    input_str = sys.stdin.read()
-    input_json = json.loads(input_str)
-    mode = input_json.get("mode", "batch_scan")
+    # Stash 经管道传 UTF-8 JSON；Windows 下 sys.stdin 默认按 cp936 解码，
+    # 直接 read() 遇中文会 UnicodeDecodeError，必须显式从 buffer 按 UTF-8 读
+    raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    input_json = json.loads(raw)
+    # 任务 defaultArgs 由 Stash 合并进 payload["args"]（源码 buildPluginInput），
+    # 顶层 mode 仅为防御兼容
+    args = input_json.get("args") or {}
+    mode = args.get("mode") or input_json.get("mode") or "batch_scan"
 
     server = input_json.get("server_connection", {})
     stash = StashInterface({"server_connection": server})

@@ -2,162 +2,89 @@
 
 > v1.5.2：开关与文案细节 — ①「模糊匹配」滑块开启时滑轨显示**警告黄**（与冲突徽章同色系，区别于「别名搜索」的主题蓝）；②「别名搜索」悬浮提示精简；③修正面板标题版本号显示（v1.5.1 发版时 `PLUGIN_VERSION` 漏更，此前一直显示 v1.5.0）
 
-Stash 插件：通过场景反推批量获取演员的 JAVStash ID。
+Stash 插件：通过场景反推 + 名称搜索批量获取演员的 JAVStash ID。双引擎串行（场景反推 → 名称搜索），匹配按证据评级分 high/medium，冲突护栏防止一个 JAVStash ID 写入多个本地演员；应用时写入 stash_id、别名、URL，并补全空白信息字段与缺失图片（不覆盖已有值）。
 
-## 匹配逻辑
+## 依赖
 
-扫描采用**双引擎串行**：引擎 A（场景反推）→ 引擎 B（名称搜索）。
-
-**引擎 A — 场景反推**：从已有 JAVStash 场景 ID 的本地场景出发，查询 JAVStash 获取场景演员列表，再按以下优先级匹配到本地演员：
-
-| 优先级 | 方法 | 置信度 | 说明 |
-|--------|------|--------|------|
-| 1 | stashdb_id 精确匹配 | high | JAVStash 演员有 stashdb stash_id，与本地演员的 stashdb stash_id 精确匹配 |
-| 2 | 单演员场景自动关联 | high | 本地和 JAVStash 场景各只有 1 个未匹配演员，直接对应 |
-| 3 | 名字/别名交叉匹配 | medium | JAVStash 演员名/别名 与 本地演员名/别名 交叉匹配（NFC 归一化） |
-| 4 | 手动选择 | — | 多演员场景未命中，在 UI 中手动下拉选择 |
-
-**引擎 B — 名称搜索**（借鉴 Javstash Autofill 的搜索思路，结合本插件证据评级）：对引擎 A 未覆盖且未绑定 JAVStash ID 的本地演员，取主名+全部别名（去重后最多 15 个词）逐词调 JAVStash `searchPerformer`（4 req/s 限流），候选按证据评级（规则同「手动搜索置信度规则」）：
-
-| 模式 | 搜索词 | 候选范围 | 提前停止 |
-|------|--------|----------|----------|
-| 别名搜索（默认开） | 主名+全部别名 | 全部候选 | 命中 high 即停止当前演员 |
-| 取消别名搜索 | 仅主名 | 只核对排名第一的候选 | — |
-
-**冲突护栏**：同一 JAVStash 演员被 ≥2 个本地演员以 high 置信度命中时，整组标记「冲突」徽章，「应用全部」跳过冲突项（防止一个 JAVStash ID 写入多个本地演员），可逐条手动应用解冲突。
-
-**已跳过**：本地演员已有 JAVStash stash_id 的不会重复处理（引擎 A、B 均如此）。
+- Python 3.6+ + `requests`
+- JAVStash stash-box 端点（**设置 → 元数据提供者** 中配置，插件自动复用；未配置时扫描/搜索会弹窗提示）
 
 ## 安装
 
 1. 将整个 `JavStashLinker` 文件夹复制到 Stash 插件目录（通常为 `~/.stash/plugins/` 或 Stash 数据目录下的 `plugins/`）
 2. 重启 Stash
-3. 在 **设置 → 元数据提供者 → Stash-box 端点** 中添加 JAVStash 实例（端点 `https://javstash.org/graphql` + API Key，从 javstash.org 账号设置页获取）— 插件自动复用该配置，自身无任何设置项；未配置时扫描/搜索会弹窗提示
 
-## 使用方法
+## 触发方式
 
-### 方式一：交互式 UI（推荐）
+| 入口 | 行为 |
+|---|---|
+| 导航栏 **JAVStash Matcher** 按钮 | 面板：扫描、按置信度审核应用、手动搜索单演员 |
+| 任务 **Batch Scan** | 场景引擎（A）+ 名称搜索（B，固定最低风险配置：别名搜索√ / 模糊匹配✗），结果写 `match_results.json` |
+| 任务 **Apply High-Confidence Matches** | 应用 high 匹配（与 UI 同规则），需先运行 Batch Scan 缓存演员详情 |
 
-1. 在 Stash 导航栏点击 **JAVStash Matcher** 按钮打开面板
-2. 确认 JAVStash API Key 已填入
-3. 按需切换「开始扫描」右侧的两个**滑块开关**（滑块在文字左侧，点击滑块或文字均可切换；选项在点击开始扫描时快照生效；窄屏时开关自动换行到按钮下方）：
-   - **别名搜索**（默认开启）：搜索引擎使用主名+全部别名搜索并评估全部候选，命中 high 即停止；关闭后仅搜索主名且只核对排名第一的候选（更快，但主名搜不到、仅别名可搜的演员会漏）
-   - **模糊匹配**（默认关闭）：开启后仅按名称相似度评级（≥0.9 high / 0.7-0.9 medium），不再参考 URL/StashDB/生日证据 — 供 stash_id 匹配不够精准时手动兜底
-4. 点击 **开始扫描** — 先跑场景引擎（引擎 A），再跑搜索引擎（引擎 B，搜索演员级进度，可中止）
-5. 查看扫描结果：
-   - **自动匹配**：高置信度匹配（stashdb_id、单演员或搜索证据评级 high），可直接应用；同一 JAVStash 演员被多人命中时标记「冲突」，应用全部会跳过
-   - **待审核**：中置信度匹配（名字/别名或搜索评级 medium），确认后应用
-   - **未匹配**：未匹配的 JAVStash 演员，手动选择对应的本地演员
-   - 匹配卡片上的 **JAVStash 演员名**为超链接（新标签页打开 javstash.org 演员页）；**查看**（置信度徽章旁，实心橘色按钮）经 SPA 路由在当前标签页打开本地演员的 Stash 详情页（不整页刷新）— 均用于核对匹配
-   - **忽略**（自动匹配/待审核卡片）：该卡片**收窄为一行**（主名转纯文本不可点击，隐藏证据描述/置信度徽章/「查看」与「忽略」按钮），尾部「已忽略」徽章 + 「恢复」按钮；「应用全部」跳过已忽略项
-6. 在未匹配标签页中，为每个演员下拉选择本地演员
-7. 点击 **应用匹配** 应用所有匹配
-8. 应用后，本地演员将获得 JAVStash stash_id，JAVStash 演员名和别名会写入别名列表
+**补全单演员**（手动搜索页）：对「本地仅 1 个演员、该演员未绑定 JAVStash ID、场景已生成指纹（phash/oshash）」的场景调 JAVStash `findScenesBySceneFingerprints` 指纹搜索，命中且该 JAVStash 场景恰好单演员时按标准应用路径写入（stash_id + 别名 + URL + 信息补全 + 后台补图）；指纹无结果或多演员命中（无法唯一对应）跳过。仅 UI 手动搜索页提供，Python 批量任务不含。
 
-### 方式二：批量任务（无 UI）
+## 匹配逻辑
 
-在 **设置 → 任务** 中运行：
+**引擎 A — 场景反推**：从含 JAVStash 场景 ID 的本地场景出发，查询 JAVStash 获取场景演员列表，再按优先级匹配到本地演员：
 
-- **Batch Scan**：扫描所有有 JAVStash ID 的场景（引擎 A），随后对未绑定的本地演员跑名称搜索（引擎 B，固定**别名搜索√+模糊匹配✗**最低风险配置，不受 UI 复选框影响），输出匹配结果到 `match_results.json`（含演员详情/链接，供 Apply 使用）
-- **Apply High-Confidence Matches**：应用高置信度匹配（仅 stashdb_id、单演员和搜索证据评级 high 的匹配），与 UI 应用同规则 — 补全空白信息字段、跨站链接转 stash_id；需先（重新）运行 Batch Scan 以缓存演员详情，旧版扫描结果无详情数据则跳过补全
+| 优先级 | 方法 | 置信度 |
+|---|---|---|
+| 1 | stashdb_id 精确匹配 | high |
+| 2 | 单演员场景自动关联 | high |
+| 3 | 名字/别名交叉匹配（NFC 归一化） | medium |
+| 4 | 手动选择 | — |
 
-### 方式三：手动搜索（单个演员）
+**引擎 B — 名称搜索**：对引擎 A 未覆盖且未绑定 JAVStash ID 的本地演员，取主名+全部别名（去重后最多 15 词）逐词调 JAVStash `searchPerformer`（4 req/s 限流），候选按置信度规则评级，命中 high 即停止当前演员。别名搜索（默认开）用主名+全部别名评估全部候选；关闭后仅搜主名、只核对排名第一候选。
 
-适合场景扫描覆盖不到的演员（无 JAVStash 场景 ID、或库中尚无对应场景）：
+**置信度规则**（手动搜索与引擎 B 共用）：
 
-0. **补全单演员**（顶部紧凑提示区，有可补全内容时才显示按钮）：一键用**场景指纹**批量补全 — 取本地只有 1 个演员、且该演员未绑定 JAVStash ID、且文件已生成指纹（phash/oshash）的场景，逐场景调 JAVStash `findScenesBySceneFingerprints` 指纹搜索（走 4 req/s 限流）；命中的 JAVStash 场景若恰好只有 1 个演员，即按标准应用路径写入 stash_id + 别名 + URL + 信息补全 + 后台补图，状态行实时显示「补全中 i/N（已补全 X）」；**指纹无结果或多演员命中（无法唯一对应）的场景跳过**；日志逐条记录命中（本地名 → JAVStash 名）、未命中（原因 + 目标主名）与失败原因（含目标名），完成汇总行含成功/失败演员名单；**按钮一次性**：执行完成（无论成功、失败或异常终止）后置灰不可再点，状态行更新为剩余未命中数，已补全的演员行显示「已应用」。顶部状态行合并显示全局概况：**「未绑定演员 N 个 · M个单演员场景可补全（已忽略 K 个）」**（筛选时首段变为「匹配 X / Y 个」；按钮与「开始扫描」左对齐）
-
-1. 打开面板，切到 **手动搜索** 标签页 — 自动列出所有未绑定 JAVStash ID 的本地演员（顶部可按名称/别名实时筛选）；**演员名**可点击（SPA 路由在当前标签页打开该演员的 Stash 详情页，不整页刷新）；演员行**别名完整显示**（自然换行，不截断）；搜索/忽略按钮与主名/别名放不下时自动换行到下一行
-2. 点击演员行右侧 **搜索** — 用该演员的主名+全部别名（去重后最多 15 个词）逐词调 JAVStash `searchPerformer`（4 req/s 限流）
-3. **命中高可信度即停止搜索**：组框向下展开，只显示 high 候选，卡片显示证据明细（命中票数、生日/身高对比 ✓/△/✗、URL 交集、StashDB 交叉）；候选卡片的 **JAVStash 演员名**为超链接（新标签页打开 javstash.org 演员页，用于核对）
-4. 点击 **应用** → 写入 stash_id + 别名 + URL 合并（与场景扫描应用同一条路径，只追加不覆盖）；**本地演员无自定义图片时后台自动补入图片，空白信息字段（性别/生日/国家/人种等）按「已有不覆盖」补齐**（见下方「应用效果」第 6、7 条）；应用后按钮显示 **已应用**，组框收缩
-5. 点击 **更多**（应用按钮右侧，或「未找到高可信度候选」提示行右侧）：继续搜索剩余词 — **高可信度结果保持置顶可见、可随时应用**，进度行追加在下方；搜完后追加全部 medium / 手动确认候选（靠 high/medium 徽章颜色区分）
-6. 状态行右侧 **▲** 可收起该组搜索结果，恢复搜索前状态；未找到高可信度时显示简短提示（JAVStash 未返回任何候选时仅显示状态行）
-7. **忽略**（搜索按钮右侧）：该演员行**收窄为一行主名高度**（主名转纯文本不可点击），尾部显示「已忽略」徽章 + 「恢复」按钮（点击即还原，含展开的搜索结果清除），关闭面板后重置
-
-#### 置信度规则（手动搜索与引擎 B 共用）
-
-| 条件 | 置信度 | 说明 |
-|------|--------|------|
-| StashDB UUID 相等 | high | 本地 stashdb stash_id = JAVStash 演员 URLs 中的 stashdb.org/performers/<uuid>（硬证据） |
-| URL 交集 ≥2 | high | 本地与 JAVStash 有 ≥2 条相同链接；单条可能是工作室网站，不作证据 |
-| 名称精确命中 ≥3 票 | high | 本地主名/别名与 JAVStash 名称/别名 NFC 归一化后精确相等 |
-| 仅 2 个名称且全命中 | high | 需至少 1 个名称归一化后 ≥3 字符（防 'Ai'/'An' 类共享短名撞车，否则 medium） |
-| 名称命中 + 生日完整相等 | high | 1993-08-16 完整日期相等 |
-| 相似度 ≥0.9 + 生日完整相等 | high | 名称相近且生日硬证据 |
-| 名称命中 + 仅生日年份相等 | medium | AV 数据源生日常有 ±1 年误差 |
-| 相似度 ≥0.9（无其他证据） | medium | 精确同名零证据 — 需人工确认 |
-| 相似度 0.7-0.9 | medium | 拉丁名变体/词序差异（Levenshtein + 词序无关比对） |
-| ≥3 个名称中命中 2 票 | medium | |
-| JAVStash 演员已删除 | 上限 medium | 已删除的 stash-box 演员通常已被合并 |
+| 条件 | 置信度 |
+|---|---|
+| StashDB UUID 相等（本地 stashdb stash_id = JAVStash URLs 中 `stashdb.org/performers/<uuid>`，硬证据） | high |
+| URL 交集 ≥2（单条可能是工作室网站，不作证据） | high |
+| 名称精确命中 ≥3 票（本地与 JAVStash 名称/别名 NFC 归一化后精确相等） | high |
+| 仅 2 个名称且全命中（需 ≥1 个名称归一化后 ≥3 字符，防 'Ai'/'An' 类短名撞车） | high |
+| 名称命中 + 生日完整相等 | high |
+| 相似度 ≥0.9 + 生日完整相等 | high |
+| 名称命中 + 仅生日年份相等（AV 数据源生日常有 ±1 年误差） | medium |
+| 相似度 ≥0.9（无其他证据，精确同名零证据） | medium |
+| 相似度 0.7-0.9（拉丁名变体/词序差异，Levenshtein + 词序无关比对） | medium |
+| ≥3 个名称中命中 2 票 | medium |
+| JAVStash 演员已删除（通常已被合并） | 上限 medium |
 
 说明：JAVStash `searchPerformer` 为模糊搜索（每词最多 10 条），"出现在搜索结果中"不算匹配，必须名称归一化后精确相等才计票。
 
-**模糊匹配模式**（引擎 B 勾选「模糊匹配」后替代上表）：仅按名称相似度评级 — ≥0.9 → high（参与应用全部）、0.7-0.9 → medium（进待审），完全忽略 URL/StashDB/生日证据。
+**模糊匹配模式**（扫描开关，默认关）：仅按名称相似度评级（≥0.9 → high / 0.7-0.9 → medium），完全忽略 URL/StashDB/生日证据，供 stash_id 匹配不够精准时手动兜底。
+
+**冲突护栏**：同一 JAVStash 演员被 ≥2 个本地演员以 high 置信度命中 → 整组标记「冲突」，批量应用跳过冲突项（防一个 JAVStash ID 写入多个本地演员），可逐条手动应用解冲突。已有 JAVStash ID 的演员不重复处理。
 
 ## 应用效果
 
-每个成功应用的匹配会：
+每个成功应用的匹配：
 
-1. 在本地演员的 `stash_ids` 中添加 `{endpoint: "https://javstash.org/graphql", stash_id: "javstash演员ID"}`（已有 JAVStash ID 则跳过）
-2. 将 JAVStash 演员名添加到本地演员的 `aliases`（如不存在）
-3. 将 JAVStash 演员的所有别名添加到本地演员的 `aliases`（如不存在）
-4. 将 JAVStash 演员的链接（URLs）追加到本地演员的 `urls`（去重合并，已有链接保留，无新增时不提交该字段；`stashdb.org` / `theporndb.net` 演员链接除外 — 见第 8 条）
-5. **不修改**本地演员的现有名字
-6. **后台补图**（所有应用路径：单条应用、「应用全部」、手动搜索）：本地演员无自定义图片（`image_path` 含 `default=true`）时，取 JAVStash 演员的第一张图片 URL 交给 `performerUpdate` 的 `image` 字段 — Stash 服务端自行下载（60s 超时，经 Referer/UA 头），不占浏览器 CSP、无需前端 base64，UI 不等待下载完成；补图经独立限流队列（2 并发/300ms 间隔）执行，失败仅记日志，不影响匹配结果。已有图片则跳过
-7. **演员信息补全**（所有应用路径，与主更新同一 mutation）：性别、生日、卒日、国家（ISO 码）、人种、发色、瞳色、身高、三围（拼为 `34C-26-36` 式）、生涯（`2009` / `2009 - 2015`）、纹身/穿孔（`位置: 描述` 多条以 `; ` 连接）— 逐字段「本地已有值则跳过」，从不覆盖；枚举转显示字符串（如 `CAUCASIAN`→`Caucasian`、`MIDDLE_EASTERN`→`Middle Eastern`）；补了哪些字段记入日志
-8. **跨站链接转 stash_id**（所有应用路径）：JAVStash 演员链接中的 `stashdb.org/performers/<uuid>` 和 `theporndb.net/performers/<uuid>`（UUID 格式）不写入 urls，本地演员无对应端点 stash_id 时直接转为该端点的 stash_id；`theporndb.net/performers/<slug>`（slug 格式，如 `arata-arina`）因 ThePornDB 的 stash_id 是 UUID、slug 无法经其 API 解析，忽略不写入 urls；已有对应端点 stash_id 的不重复添加。仅匹配主机名恰为这两站（含 `www.` 变体）的链接 — 嵌在查询参数、路径中或仿冒域名里的子串不会误命中，照常并入 urls
+1. 在本地演员 `stash_ids` 中添加 `{endpoint: "https://javstash.org/graphql", stash_id: "javstash演员ID"}`（已有 JAVStash ID 则跳过）
+2. JAVStash 演员名 + 全部别名并入本地 `aliases`（不存在才加）
+3. URLs 去重追加（已有链接保留，无新增时不提交该字段）；`stashdb.org` / `theporndb.net` 演员链接除外（见 7）
+4. **不修改**本地演员的现有名字
+5. **后台补图**（所有应用路径）：本地无自定义图片（`image_path` 含 `default=true`）时取 JAVStash 第一张图片 URL 交 `performerUpdate` 的 `image` 字段 — Stash 服务端自行下载，不占浏览器 CSP、UI 不等待；独立限流队列（2 并发/300ms 间隔），失败仅记日志
+6. **信息补全**（所有应用路径）：性别、生日、卒日、国家（ISO 码）、人种、发色、瞳色、身高、三围、生涯、纹身/穿孔 — 逐字段「本地已有值则跳过」，从不覆盖；枚举转显示字符串（如 `CAUCASIAN`→`Caucasian`）
+7. **跨站链接转 stash_id**：JAVStash 链接中的 `stashdb.org/performers/<uuid>` / `theporndb.net/performers/<uuid>`（UUID 格式）不写 urls，本地无对应端点 stash_id 时直接转为该端点 stash_id；`theporndb.net/performers/<slug>`（slug 格式）因无法经 API 解析为 UUID，忽略不写；仅匹配主机名恰为这两站（含 `www.` 变体）的链接，嵌在查询参数/路径中或仿冒域名的子串照常并入 urls
 
 ## 文件说明
 
 | 文件 | 说明 |
-|------|------|
+|---|---|
 | `JavStashLinker.yml` | 插件定义文件（`interface: raw`，`{pluginDir}` 路径） |
 | `JavStashLinker.py` | Python 批量任务脚本（StashInterface + Stash 日志协议） |
 | `JavStashLinker.js` | 交互式 UI（DOM 注入 + MutationObserver + i18n bridge） |
 | `JavStashLinker.css` | 独立样式表（`jsm-` 前缀，`!important` 覆盖） |
 | `match_results.json` | 批量扫描结果（运行后生成） |
 
-## 技术细节
-
-### JS 架构
-
-- **幂等保护**：`window.__jsmLoaded` 防止重复加载
-- **i18n bridge**：通过 `PluginApi.patch.before("App")` 注入 IntlProvider，支持中英文
-- **DOM 注入**：导航栏按钮 + 全屏面板，不依赖 React 组件注册
-- **MutationObserver**：监听 `.main-content` DOM 变化，确保 SPA 导航后按钮存在
-- **History 劫持**：`pushState` / `replaceState` 包装，响应路由切换
-- **SPA 跳转**：演员名/「查看」链接经 `pushState` + 合成 `popstate` 驱动 react-router 切页（不整页刷新），修饰键/中键点击回退浏览器默认行为
-- **PluginApi.patch.after**：Hook `SettingsToolsPanel` 等组件，辅助注入时机
-
-### Python 架构
-
-- **StashInterface 类**：封装 GraphQL 通信，提取 server_connection 参数
-- **GraphQLClient**：`requests` 库 + 指数退避重试，401 致命退出
-- **Stash 日志协议**：`\x01<level>\x02` 前缀（t/d/i/w/e/p），支持 Progress 条
-- **匹配引擎**：纯函数 `match_scene()`，四级优先级匹配
-
-### CSS 约定
-
-- **前缀**：所有类名使用 `jsm-` 前缀
-- **`!important`**：全面覆盖 Stash 内置样式
-- **暗色主题**：`#1a1a1a` / `#2b2b2b` 背景，`#e0e0e0` 文字
-- **色彩语义**：蓝色=操作，绿色=成功，红色=错误，黄色=警告
-- **响应式**：640px 断点，移动端竖排卡片
-
-## 依赖
-
-- Python 3.6+ + `requests` 库
-- Stash 最新版
-- JAVStash stash-box 端点（含 API Key，在 **设置 → 元数据提供者** 中配置）
-
 ## 注意事项
 
-- 扫描时以 0.3 秒间隔请求 JAVStash API，搜索走 4 req/s 限流，避免触发限流
+- 扫描以 0.3 秒间隔请求 JAVStash API，搜索走 4 req/s 限流，避免触发限流
 - 已有 JAVStash stash_id 的演员会被跳过
-- 名字匹配使用 NFC 归一化 + 去空格 + 小写；证据评级默认不依赖模糊相似度（仅作为 medium 兜底与「模糊匹配」模式），名称计票必须精确相等
-- 引擎 B 搜索选项（别名搜索/模糊匹配）在点击「开始扫描」时快照，扫描中修改不影响当次
-- Python 批量任务的搜索引擎固定为 别名搜索√+模糊匹配✗，不受 UI 复选框影响
-- 「补全演员」仅 UI 手动搜索页提供，Python 批量任务不含指纹补全；指纹补全依赖场景文件已生成 phash/oshash（未生成指纹的场景不参与计数与搜索）
-- `Apply` 操作会弹出确认对话框，显示待应用的匹配数量
-- 建议先扫描查看结果，确认无误后再应用
+- 名称匹配使用 NFC 归一化 + 去空格 + 小写，计票必须精确相等
+- 引擎 B 搜索选项（别名搜索/模糊匹配）在点击「开始扫描」时快照生效；批量任务固定为最低风险配置
+- Apply 会弹确认框显示待应用数量；建议先扫描查看结果再应用

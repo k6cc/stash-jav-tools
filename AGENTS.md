@@ -1,39 +1,37 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsBackend` / `tagMergeBackend` 八个插件 + 根 `README.md` 版本表。插件版本由各 `<name>.yml` 的 `version:` 声明，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsBackend` / `tagMergeBackend` 八个插件 + 根 `README.md` 版本表。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
 
-## 发版清单（插件通用）
+## 发版
 
 **权威版本号 = 各插件 `<name>.yml` 的 `version:`**，其余位置必须与之一致。通用同步项：
 
-- 根 `README.md` 版本表（含全部八插件，发版必须同步）
-- 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**
+- 根 `README.md` 版本表（含全部八插件，发版必同步）
+- 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**；sceneGallerySync 例外：头部无 note，在文末「## 变更历史」新增 `### X.Y.Z` 条目
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
 - **tagMergeBackend 的 `tag_merge_map.json` 与 tagMerge 保持同源同步**（复制自 tagMerge 目录，任一侧更新后必须同步另一份）
 
-插件差异：
+代码内版本位置：
 
-| 插件 | 代码内版本位置 | README 约定差异 |
-|---|---|---|
-| sceneTranslate | `translateProxy.py` 头部 banner（`Scene Translate Proxy vX.Y.Z`） | — |
-| sceneGallerySync | — | 头部无 note；文末「## 变更历史」新增 `### X.Y.Z` 条目 |
-| studioTools | — | — |
-| JavStashLinker / performerMerge / tagMerge | 对应 `.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示） | — |
-| studioToolsBackend / tagMergeBackend | `studioToolsBackend.py` / `tagMergeBackend.py` 头部 docstring banner（`... Backend vX.Y.Z`） | 头部有 note；tagMergeBackend 另需同步 `tag_merge_map.json`（见上） |
+| 插件 | 代码内版本位置 |
+|---|---|
+| sceneTranslate | `translateProxy.py` 头部 banner（`Scene Translate Proxy vX.Y.Z`） |
+| JavStashLinker / performerMerge / tagMerge | 对应 `.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示） |
+| studioToolsBackend / tagMergeBackend | 对应 `.py` 头部 docstring banner（`... Backend vX.Y.Z`） |
 
-## 发版流程（git）
+### 流程
 
 1. 更新上表所有位置（含根 `README.md` 版本表）
 2. 校验：`git grep -nE "[0-9]\.[0-9]+\.[0-9]+"` 逐项核对
 3. commit 风格：`fix(插件名): 描述, vX.Y.Z` / `feat(插件名): ...` / `docs(插件名): ...` / `chore: ...`
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
-6. 验证发版完成：`gh run list --limit 1` 找到 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
+6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
 7. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 5.1 不支持 heredoc 与 `&&`/`||` 语句分隔符，commit 用 `-m "..."`、命令链用 `;`；**沙箱内 `git push` 会因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行（`dangerouslyDisableSandbox`），commit/add 等本地操作不受影响
 
-## 新插件首发流程（仅首次发布，已踩坑）
+### 新插件首发（仅首次发布，顺序不可颠倒）
 
-新插件 = 仓库中尚不存在其发布条目的插件（如首次上线的 backend）。除走完「发版流程」外，首发必须多做三步，且**顺序不可颠倒**（依据 tagMergeBackend / studioToolsBackend 首发实况）：
+新插件 = 仓库中尚不存在其发布条目的插件（如首次上线的 backend）。除走完上述流程外，首发必须多做三步（依据 tagMergeBackend / studioToolsBackend 首发实况）：
 
 1. **release.yml 白名单**：`.github/workflows/release.yml` 的 `on.push.tags` 必须新增 `"<插件>-v*.*.*"` 模式——缺失时打 tag 不会触发任何构建，`gh run list` 永远为空，且已推送的 tag 不会补触发（需删远程 tag 重打重推：`git push origin :refs/tags/<tag>` + `git tag -d <tag>` + 重打 + `git push origin main --tags`）
 2. **stash-plugins 占位符（必须先推送到远程）**：本地 clone `E:\Temp\stash-plugins`（远程 `k6cc/stash-plugins`）常落后，先 `git fetch; git reset --hard origin/main`；在 `plugins/main/index.yml` 末尾追加占位条目（`version: 0.0.0`、`sha256:` 全 0、`path:` 按 release URL 约定 `https://github.com/k6cc/stash-jav-tools/releases/download/<插件>-v0.0.0/<插件>-v0.0.0.zip`、`date:` 当前时间）；`README.md` 插件表与依赖清单**手动加行**（`scripts/sync_readme.py` 只更新已有行、不插入新行）；commit 后**必须 push**——release workflow 是 clone 远程版再 awk 更新，占位符不在远程则 awk 找不到 `- id:` 静默跳过、链接推不上（tagMerge 曾长期停留在全 0 sha256 占位）
@@ -48,7 +46,7 @@
 
 ## UI 交互设计规范（全部带 UI 的插件通用）
 
-**色彩与尺寸不绑定具体值**：各插件有自己的主题色（JavStashLinker 蓝、performerMerge 紫等），按钮取色跟随插件主题——主操作用主题色、忽略/中性灰、警告黄、删除/关闭红。本规范约束**交互语义和层级关系**，不是具体色号和像素。
+**语义不绑定色值**：各插件有自己的主题色（JavStashLinker 蓝、performerMerge 紫等），按钮取色跟随插件主题——主操作用主题色、忽略/中性灰、警告黄、删除/关闭红。本规范约束**交互语义和层级关系**，不是具体色号和像素。
 
 ### 按钮语义（与主题无关，必须遵守）
 
@@ -63,53 +61,41 @@
 | 状态展示 | 透明框 + 同色边框 + 半透明底（badge / `*-btn-state`），`cursor: default` | 已应用、high/medium、已忽略、搜索中... |
 | 暗淡提示 | 小字号灰系 | 状态行、计数、证据明细 |
 
-### 按钮尺寸层级（三级，像素可按主题调整）
+尺寸三级（像素可按主题调整；层级差异只在尺寸，不在语义）：
 
 | 层级 | 用途 | 参考尺寸（jsm/pdm 现行值） |
 |---|---|---|
 | 大（主按钮） | 面板级唯一/主导操作：开始扫描、应用全部 | padding 6×16，字号 13 |
-| 中（动作按钮） | 常规整行操作：打开面板、单卡片主操作 | 介于两者之间 |
+| 中（动作按钮） | 常规整行操作 | 介于两者之间 |
 | 小（行内/组按钮） | 卡片行内密集操作：应用、忽略、更多、▲ | padding 3×10，字号 11，定高 22px |
-
-层级差异只体现在尺寸，不体现在语义。
 
 硬性规则：
 
-- 同级按钮（含 badge、图标按钮）**必须等高**，混排不齐即为 bug
-- **可点击元素必须实心**；透明框元素**禁止**绑定点击事件、hover 变色和指针光标
-- 同一行混排的小按钮/badge/图标按钮用 `inline-flex` + `align-items: center` + `line-height: 1` + `border-box` + 固定高度（小号 22px）保持等高；**等高基座声明在小号类上**（如 `.tgm-btn-sm` + `.tgm-badge`），大按钮（面板级主操作：合并全部/开始扫描/添加/导出文件等）保持自然高度、不强制盒模型 — 等高盒模型混排只发生在小号元素之间，禁止把 `line-height: 1`/定高上移到大按钮基类（会压缩大按钮高度，已复现）
-- **禁止用垂直 margin 微调徽章/按钮的垂直位置**（`margin-top: 2px` 式"视觉补偿"会造成整组元素相对徽章下沉，已两次复现）；垂直对齐只靠容器 `align-items: center` 与等高盒模型解决
+- 同级按钮（含 badge、图标按钮）**必须等高**，混排不齐即为 bug；**可点击元素必须实心**，透明框元素**禁止**绑定点击事件、hover 变色和指针光标
+- 同一行混排的小按钮/badge/图标按钮用 `inline-flex` + `align-items: center` + `line-height: 1` + `border-box` + 定高 22px；**等高基座声明在小号类上**（如 `.tgm-btn-sm` + `.tgm-badge`），大按钮（面板级主操作：合并全部/开始扫描/添加/导出文件等）保持自然高度、不强制盒模型 — 禁止把 `line-height: 1`/定高上移到大按钮基类（会压缩大按钮高度，已复现）
+- **禁止用垂直 margin 微调徽章/按钮的垂直位置**（`margin-top: 2px` 式"视觉补偿"会造成整组元素相对徽章下沉，已两次复现）；垂直对齐只靠容器 `align-items: center` 与等高盒模型
 - badge/按钮加 `flex-shrink: 0`，文本区加 `min-width: 0` + 省略号，防窄屏压缩变形
 - 状态展示用透明框状态样式，不用 disabled 实心按钮充当状态提示；disabled 仅用于短暂禁用（如搜索中按钮可例外显示为透明框状态样式）
 
 ### 状态切换按钮（筛选/开关类，如「冲突项」）
 
-点击进入/退出某个筛选或模式，按钮承载开关两态，反馈必须是**切换态的持续显示**，不是按压瞬时反馈。
+反馈必须是**切换态的持续显示**，不是按压瞬时反馈：
 
 - **文案两态相同**：不用前缀符号（● 等）区分状态，状态信息全部由视觉承载
-- **关闭态**：普通警告语义实心按钮（主题警告色，黄系），与同排按钮一致
-- **激活态**（持续显示至退出）：背景比关闭态暗一档、文字降为浅灰；内圈底部一条纯白指示条——贴底边、左右内缩避开圆角与文字、加粗（约 3px）、两端圆角（可按主题微调）；hover 保持激活暗色不变，禁止弹回亮色 hover（会被误读为已退出）
+- **激活态**（持续显示至退出）：背景比关闭态暗一档、文字降为浅灰；内圈底部一条纯白指示条——贴底边、左右内缩避开圆角与文字、约 3px、两端圆角（可按主题微调）；hover 保持激活暗色不变，禁止弹回亮色 hover（会被误读为已退出）
 - **禁止用 `:active` 按压反馈代替切换反馈**：按压松手即消失，表达不了持续状态
-- **显隐跟随数据（仅意外触发的模式）**：模式由数据状态意外产生、用户未主动进入（如冲突检测、低可信度）→ 无可筛内容时整个按钮不渲染，而非 disabled 置灰；模式由用户手动操作触发（如忽略条目后的「已忽略」筛选）→ 按钮常驻显示，入口始终可发现、可退出
+- **显隐跟随数据**：意外触发的模式（冲突检测、低可信度）无可筛内容时整个按钮不渲染，而非 disabled 置灰；用户手动触发的模式（「已忽略」筛选）按钮常驻显示，入口始终可发现、可退出
 
 ### 列表筛选搜索框（长列表分页/面板应有）
 
-**适用**：只能手动浏览编辑的分页（列表项 > 20 或需滚动才能看完）应提供搜索/筛选框；短列表、按序浏览有意义的场景可豁免。JavStashLinker 手动搜索页、performerMerge 分组列表均属此类。
-
-**交互行为：**
+适用：只能手动浏览编辑的分页（列表项 > 20 或需滚动才能看完）应提供搜索/筛选框；短列表、按序浏览有意义的场景可豁免。JavStashLinker 手动搜索页、performerMerge 分组列表均属此类。
 
 - **即时过滤**：`oninput` 立即筛选，**不防抖、不等回车**；在名称和别名上做大小写不敏感的包含匹配
 - **IME 兜底**：`oninput` 中 `e.isComposing` 为 true 时跳过（组字期间不重渲染，防打断候选框），并监听 `compositionend` 做最终提交——部分输入法选字完成后不触发带最终值的 input 事件，只靠 oninput 会漏
 - **焦点与光标保持**：渲染前记录 `selectionStart`，渲染后 `focus()` + `setSelectionRange`，否则每敲一个字符光标跳回末尾/丢焦
 - **重渲染最小化**：列表分块渲染（IntersectionObserver 按块追加），避免每次输入全量重建 DOM
-
-**清除按钮（输入框内嵌）：**
-
-- 显隐实现**跟随渲染架构**：全量重渲染插件（如 JavStashLinker）用**条件渲染**——有内容才 append 进 DOM，随重渲染自然出现/消失；局部渲染插件（如 tagMerge 工具栏刻意不重建以保焦点）用 **`hidden` 属性切换**——按钮常驻 DOM，`clearBtn.hidden = !value` 控制显隐。两种方式观感相同，选错架构才会出问题
-- 绝对定位在输入框右侧内部（`position: absolute; right` + 父容器 `position: relative`），输入框 `padding-right` 预留按钮空间
-- 样式：实心灰（中性可点击语义）、hover 变红（清除=危险暗示）、22px 定高（与图标按钮统一）；点击后清空筛选并把焦点还给输入框
-
-**计数反馈**：筛选时显示「匹配 N / 总数 M」暗淡文字，无筛选时显示「全部 N 个」；有关联排除项（已忽略等）时追加「（已忽略 X 个）」
+- **清除按钮**（输入框内嵌）：显隐跟随渲染架构——全量重渲染插件（JavStashLinker）用**条件渲染**（有内容才 append 进 DOM）；局部渲染插件（tagMerge 工具栏刻意不重建以保焦点）用 **`hidden` 属性切换**（`clearBtn.hidden = !value`）。绝对定位在输入框右侧内部（`position: absolute; right` + 父容器 `position: relative`），输入框 `padding-right` 预留按钮空间；实心灰（中性可点击语义）、hover 变红（清除=危险暗示）、22px 定高；点击后清空筛选并把焦点还给输入框
+- **计数反馈**：筛选时显示「匹配 N / 总数 M」暗淡文字，无筛选时显示「全部 N 个」；有关联排除项（已忽略等）时追加「（已忽略 X 个）」
 
 ### 幂等守卫（所有 UI 插件入口必须）
 
@@ -126,15 +112,12 @@ window.__<插件缩写>Loaded = true;
 
 目标：**≤480px 完全可用**（元素不溢出、关键操作不隐藏），640px 为优化断点，触屏设备同样可用。
 
-- flex/grid 子项容器必须加 `min-width: 0`，防长文本撑破布局
-- 长名称/长列表用 `overflow: hidden` + `text-overflow: ellipsis` + `white-space: nowrap` 截断，完整内容放 `title` 提示
+- flex/grid 子项容器必须加 `min-width: 0`，防长文本撑破布局；长名称/长列表用 `overflow: hidden` + `text-overflow: ellipsis` + `white-space: nowrap` 截断，完整内容放 `title` 提示
 - 关键操作按钮（应用/删除/关闭等）加 `flex-shrink: 0`，任何情况下不被压缩或挤出屏幕
 - ≤640px：卡片容器 `flex-wrap: wrap`，信息占满首行；badge 与操作按钮组换行到信息下方**右侧**（`justify-content: flex-end`）；提示文字/状态行保持靠左
 - 面板/滚动容器加 `scrollbar-gutter: stable` 防滚动条出现/消失引起布局抖动；弹窗类 UI 把滚动放在**面板内部**（`max-height` + `overflow-y: auto`），外层容器不滚动，避免外层滚动条/gutter 占位导致面板右侧留空
-- 弹窗/面板 ≤480px 两侧铺满：外层容器 padding 清零、面板圆角取消、`max-height: 100vh`（与 640px 断点分开：640 换行、480 铺满）
-- 弹窗内容低于屏幕高度时上下居中：面板用 `margin: auto 0`（而非 `align-items: center`，后者内容超高时顶部溢出无法滚回）；超出时自动退化为顶对齐
-- 触屏设备或 ≤640px：仅装饰性交互（拖拽把手、标签清除 ×）可隐藏，功能按钮一律保留
-- 表格类数据（如合并对照表）窄屏改用横向滚动或堆叠布局，不用缩字号硬塞
+- 弹窗/面板 ≤480px 两侧铺满：外层容器 padding 清零、面板圆角取消、`max-height: 100vh`（与 640px 断点分开：640 换行、480 铺满）；弹窗内容低于屏幕高度时上下居中：面板用 `margin: auto 0`（而非 `align-items: center`，后者内容超高时顶部溢出无法滚回）；超出时自动退化为顶对齐
+- 触屏设备或 ≤640px：仅装饰性交互（拖拽把手、标签清除 ×）可隐藏，功能按钮一律保留；表格类数据（如合并对照表）窄屏改用横向滚动或堆叠布局，不用缩字号硬塞
 
 ### 多语言（i18n，所有带 UI 的插件通用）
 
@@ -145,8 +128,8 @@ window.__<插件缩写>Loaded = true;
 - **动态文案**：拼接变量写法 `tc("已合并 " + n + " 个", "Merged " + n)`，两种语言各自完整组句，不抽词根
 - **不翻译**：数据值（tag/演员/工作室名）、GraphQL 语句、`console.log`（前缀用 `[jsm]`/`[pdm]`/`[tgm]` 等插件缩写）、CSS 类名、localStorage 键
 - **弹窗与确认框**：`confirm()` 用于破坏性/批量操作前置确认，文案双语且含关键数字（组数/源数/将发生什么）；`alert()` 仅用于错误与不可继续的提示；操作结果优先走面板内状态行（分色），不用弹窗
-- **确认框文案只写操作对象与简洁警告，不写机制描述**：操作按钮的确认信息仅保留「对什么对象做什么 + 破坏性后果/冲突警示」（如 `将 2 个演员合并到「X」？源演员将被删除。`、`拆分「Y」的 3 条单行合并别名？`）；拆分/删除/合并的具体规则（按什么分隔符、丢弃什么、去重方式、字段如何合并）属于机制描述，放按钮 `title` 悬浮提示与 README；完成后界面如何变化、是否自动重扫等交互过程描述只放 README（见下条）
-- **按钮 `title` 不写交互过程描述**：操作完成后界面如何变化（`完成后卡片收缩变灰`、`卡片收缩成一行`、`折叠该组`、`不自动重新扫描` 等）不属于按钮悬浮提示的内容——用户执行前不需要知道界面反馈细节，执行后自然看到；`title` 只写「操作影响什么数据」（如 `仅删除别名条目`、`忽略该短名`），能从按钮文案看懂的就不加 title
+- **确认框文案只写操作对象与简洁警告，不写机制描述**：仅保留「对什么对象做什么 + 破坏性后果/冲突警示」（如 `将 2 个演员合并到「X」？源演员将被删除。`）；拆分/删除/合并的具体规则（按什么分隔符、丢弃什么、去重方式、字段如何合并）属机制描述，放按钮 `title` 悬浮提示与 README
+- **按钮 `title` 不写交互过程描述**：操作完成后界面如何变化（`完成后卡片收缩变灰`、`卡片收缩成一行`、`折叠该组`、`不自动重新扫描` 等）不属于悬浮提示的内容；`title` 只写「操作影响什么数据」（如 `仅删除别名条目`、`忽略该短名`），能从按钮文案看懂的就不加 title
 
 ## 论坛介绍文章（forum-post-*.md）
 

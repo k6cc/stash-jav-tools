@@ -1,14 +1,15 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` 六个插件 + 根 `README.md` 版本表。插件版本由各 `<name>.yml` 的 `version:` 声明，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsBackend` / `tagMergeBackend` 八个插件 + 根 `README.md` 版本表。插件版本由各 `<name>.yml` 的 `version:` 声明，Stash 实际读取该字段。
 
 ## 发版清单（六插件通用）
 
 **权威版本号 = 各插件 `<name>.yml` 的 `version:`**，其余位置必须与之一致。通用同步项：
 
-- 根 `README.md` 版本表（含全部六插件，发版必须同步）
+- 根 `README.md` 版本表（含全部八插件，发版必须同步）
 - 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
+- **tagMergeBackend 的 `tag_merge_map.json` 与 tagMerge 保持同源同步**（复制自 tagMerge 目录，任一侧更新后必须同步另一份）
 
 插件差异：
 
@@ -18,6 +19,7 @@
 | sceneGallerySync | — | 头部无 note；文末「## 变更历史」新增 `### X.Y.Z` 条目 |
 | studioTools | — | — |
 | JavStashLinker / performerMerge / tagMerge | 对应 `.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示） | — |
+| studioToolsBackend / tagMergeBackend | `studioToolsBackend.py` / `tagMergeBackend.py` 头部 docstring banner（`... Backend vX.Y.Z`） | 头部有 note；tagMergeBackend 另需同步 `tag_merge_map.json`（见上） |
 
 ## 发版流程（git）
 

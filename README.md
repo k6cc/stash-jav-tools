@@ -12,6 +12,8 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [JavStashLinker](./JavStashLinker/) | 1.5.2 | Python + UI | 批量匹配 JAVStash 演员 ID，场景反推 + 番号确认 + 名称/别名匹配 + 手动搜索（多信号证据规则，无图演员自动补图、空白信息补全不覆盖、StashDB 交叉链接转 stash_id） |
 | [performerMerge](./performerMerge/) | 1.6.2 | 纯 UI | 重名演员检测与合并：证据分级连组（stash_id/共享 URL/主名全名/短名）+ 树级 ID/URL 冲突检查，冲突/低可信度组挂徽章并退出「合并全部」，被阻断对在「强制合并」页人工核实后手动合并；附带共享短名别名一键清理与别名单行合并错误拆分修复（无需 Python） |
 | [tagMerge](./tagMerge/) | 2.4.2 | 纯 UI | 按可编辑映射库把相似名称的 tags（英文/日文/中文变体）合并为规范中文 tag，面板预览后一键合并，源名保留为别名；映射表可在面板内编辑并导出文件（单行紧凑格式），冲突检测一键清理，条目可忽略/恢复（无需 Python） |
+| [studioToolsBackend](./studioToolsBackend/) | 1.0.0 | 纯后台 | 工作室创建时自动从 Stash-box 实例（JAVStash/StashDB/ThePornDB/自定义）拉取资料，归一化精确匹配后合并进已有或补全新建（保留原名、canonical 名作别名、只填空）；任务页手动扫描无 Stash ID 的工作室（零 UI 注入） |
+| [tagMergeBackend](./tagMergeBackend/) | 1.0.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描合并（本地映射表、零网络、零设置、零 UI 注入） |
 
 ## 安装
 
@@ -44,6 +46,8 @@ plugins/
   JavStashLinker/      # 解压 JavStashLinker-vX.Y.Z.zip
   performerMerge/      # 解压 performerMerge-vX.Y.Z.zip
   tagMerge/            # 解压 tagMerge-vX.Y.Z.zip
+  studioToolsBackend/  # 解压 studioToolsBackend-vX.Y.Z.zip
+  tagMergeBackend/     # 解压 tagMergeBackend-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -56,10 +60,12 @@ plugins/
 | JavStashLinker | 需要 | 需要 | JAVStash（经「设置 → 元数据提供者」stash-box 端点配置，插件自动复用） |
 | performerMerge | 不需要 | 不需要 | 不需要（需 Stash v0.31.0+） |
 | tagMerge | 不需要 | 不需要 | 不需要（需 Stash v0.30+） |
+| studioToolsBackend | 需要 | 不需要 | 需要（经「设置 → 元数据提供者」配置 Stash-box 实例，插件自动复用） |
+| tagMergeBackend | 需要 | 不需要 | 不需要 |
 
 ### Docker 部署
 
-Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，Docker 和裸机均可直接使用。
+Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，studioToolsBackend / tagMergeBackend 是纯后台插件（标准库 only，无需 requests），Docker 和裸机均可直接使用。
 
 ### Windows / macOS 裸机部署（仅 Python 插件）
 
@@ -151,6 +157,23 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 
 详细说明见 [tagMerge/README.md](./tagMerge/README.md)。
 
+### studioToolsBackend
+
+1. 在「设置 → 元数据提供者」中配置 Stash-box 实例（内置三源由插件设置开关控制，自定义实例写 endpoint URL）
+2. 插件设置中按需调整拉取优先级 / 各源开关 / 静默回退 / 每源超时（默认已可用，无需改动）
+3. 无需手动操作：新建工作室自动触发「拉取 → 归一化精确匹配 → 撞库合并或补全」（只填空、canonical 名作别名、图片异步）
+4. 存量兜底：任务列表页手动运行「Scan Studios Without Stash IDs」— 全库无 Stash ID 的工作室按同一管线扫描更新
+
+详细说明见 [studioToolsBackend/README.md](./studioToolsBackend/README.md)。
+
+### tagMergeBackend
+
+1. 无需配置（零设置、零网络）：新 tag 创建自动查本地映射库并合并进目标
+2. 首次安装后建议在任务列表页手动运行一次「Full Scan & Merge」— 清理映射发布前已存在的存量源 tag，之后日常靠钩子闭环
+3. 映射表与 [tagMerge](./tagMerge/README.md) 共用同一数据源（两份副本，编辑任一份后需同步另一份）
+
+详细说明见 [tagMergeBackend/README.md](./tagMergeBackend/README.md)。
+
 ## 插件列表
 
 | 插件 | 类型 | 触发方式 |
@@ -161,6 +184,8 @@ sceneTranslate 在 **Stash → 设置 → 插件 → Scene Translate** 中配置
 | JavStashLinker | Python + UI | 导航栏按钮 + 手动任务 |
 | performerMerge | 纯 UI | 导航栏按钮 |
 | tagMerge | 纯 UI | 导航栏按钮 |
+| studioToolsBackend | 纯后台 | Studio.Create.Post 钩子 + 手动任务 |
+| tagMergeBackend | 纯后台 | Tag.Create.Post 钩子 + 手动任务 |
 
 ## License
 

@@ -1,0 +1,19 @@
+name: Tag Merge Backend
+description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus a manual full-scan task. No network, no settings.
+version: 1.0.0
+url: https://discourse.stashapp.cc/t/tag-merge-backend/16130
+errLog: info
+exec:
+  - python
+  - "{pluginDir}/tagMergeBackend.py"
+interface: raw
+hooks:
+  - name: tag_create_backend
+    description: Merge a newly created tag immediately if it matches the mapping
+    triggeredBy:
+      - Tag.Create.Post
+tasks:
+  - name: "Full Scan & Merge"
+    description: "Scan all tags against tag_merge_map.json and merge matches (for pre-existing tags)"
+    defaultArgs:
+      mode: scan_all

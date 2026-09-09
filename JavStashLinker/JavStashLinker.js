@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.3";
+  var PLUGIN_VERSION = "1.5.4";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -1679,9 +1679,17 @@
 
   // ==================== Render ====================
 
+  var _rendering = false;
+  var _rerenderRequested = false;
+
   function render() {
+    // 渲染期间禁止重入：buildPanel 内的副作用（如手动 tab 触发 ensureManualList /
+    // ensureFpScenes）若同步 setState → render，内层已重建 root，外层仍会把旧 frag
+    // 追加进来，造成同一 root 内多份面板堆叠（真实大库加载慢时可见数秒）。
+    if (_rendering) { _rerenderRequested = true; return; }
+    _rendering = true;
     var root = document.getElementById("jsm-panel-root");
-    if (!root) return;
+    if (!root) { _rendering = false; return; }
     var active = document.activeElement;
     var restoreInput = null;
     if (active && active.classList && active.classList.contains("jsm-manual-query")) {
@@ -1695,6 +1703,11 @@
         input.focus();
         try { input.setSelectionRange(restoreInput.pos, restoreInput.pos); } catch (e) {}
       }
+    }
+    _rendering = false;
+    if (_rerenderRequested) {
+      _rerenderRequested = false;
+      requestRender();
     }
   }
 
@@ -2164,7 +2177,8 @@
     var wrap = el("div", "jsm-manual");
 
     // 单演员场景数据（补全按钮依据），首次进入异步加载并缓存。
-    if (mt.fpComplete.scenes === null && !mt.fpComplete.loading) ensureFpScenes();
+    // setTimeout 延迟到本次渲染完成后触发，避免渲染期间同步 setState → render 重入。
+    if (mt.fpComplete.scenes === null && !mt.fpComplete.loading) setTimeout(ensureFpScenes, 0);
 
     // 列表筛选（状态行与列表渲染共用）。
     var filter = (mt.listFilter || "").trim().toLowerCase();
@@ -2261,7 +2275,7 @@
     wrap.appendChild(el("div", "jsm-manual-searchrow", [inputWrap]));
 
     if (mt.listLoading || mt.list === null) {
-      if (mt.list === null) ensureManualList();
+      if (mt.list === null) setTimeout(ensureManualList, 0);
       wrap.appendChild(el("div", "jsm-empty", tc("加载演员列表中...", "Loading performers...")));
       return wrap;
     }

@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.5.3：任务执行修复 — ①mode 改从任务 defaultArgs（payload["args"]）读取，Apply 高置信度任务不再被误当扫描执行；②stdin/stdout 显式 UTF-8，Windows 下中文演员名不再解码报错；③认证改走 SessionCookie（server_connection 无 ApiKey 字段），启用认证的实例不再 401；④server_connection Host 为 0.0.0.0 时归一化到 localhost
+> v1.5.4：手动搜索页修复 — 修复打开手动搜索页时面板多份堆叠（渲染期间同步触发列表加载导致 render 重入、旧面板残留，真实大库加载慢时可见约 2 秒）；render 加重入守卫，列表/补全加载延迟到渲染后触发
 
 Stash 插件：通过场景反推 + 名称搜索批量获取演员的 JAVStash ID。双引擎串行（场景反推 → 名称搜索），匹配按证据评级分 high/medium，冲突护栏防止一个 JAVStash ID 写入多个本地演员；应用时写入 stash_id、别名、URL，并补全空白信息字段与缺失图片（不覆盖已有值）。
 

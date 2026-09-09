@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.4";
+  var PLUGIN_VERSION = "1.5.5";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -894,12 +894,17 @@
 
     _state.log.forEach(function (line) { appendLogDOM(line); });
 
-    var high = matches.filter(function (m) { return m.confidence === "high"; }).length;
-    var med = matches.filter(function (m) { return m.confidence === "medium"; }).length;
-    addLog(tc("=== 搜索引擎完成: ", "=== Search engine done: ") + targets.length +
-      tc(" 名演员 — 高可信 ", " performers — high ") + high +
-      tc("，待审核 ", ", review ") + med +
-      tc("，未命中 ", ", no hit ") + (targets.length - high - med) + " ===");
+    if (_state.abortFlag) {
+      addLog(tc("用户中止扫描：已处理 " + processed + "/" + targets.length + "，保留 " + matches.length + " 条匹配",
+                "Scan aborted: processed " + processed + "/" + targets.length + ", kept " + matches.length + " matches"));
+    } else {
+      var high = matches.filter(function (m) { return m.confidence === "high"; }).length;
+      var med = matches.filter(function (m) { return m.confidence === "medium"; }).length;
+      addLog(tc("=== 搜索引擎完成: ", "=== Search engine done: ") + targets.length +
+        tc(" 名演员 — 高可信 ", " performers — high ") + high +
+        tc("，待审核 ", ", review ") + med +
+        tc("，未命中 ", ", no hit ") + (targets.length - high - med) + " ===");
+    }
 
     setState({ searchMatches: matches });
   }
@@ -1027,7 +1032,11 @@
       }
 
       setState({ scanProgress: null, scanning: false });
-      addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
+      if (_state.abortFlag) {
+        addLog(tc("=== 扫描中止（已完成结果已保留）===", "=== Scan aborted (results kept) ==="));
+      } else {
+        addLog(tc("=== 扫描完成 ===", "=== Scan complete ==="));
+      }
     } catch (e) {
       addLog(tc("扫描错误", "Scan error") + ": " + e.message);
       setState({

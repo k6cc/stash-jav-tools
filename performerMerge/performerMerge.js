@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.6.2";
+  var PLUGIN_VERSION = "1.6.3";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================

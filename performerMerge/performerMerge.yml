@@ -1,6 +1,6 @@
 name: Performer Merge
 description: Find performers with duplicate names/aliases and merge them into one performer.
-version: 1.6.2
+version: 1.6.3
 url: https://discourse.stashapp.cc/t/performer-merge/15887
 errLog: info
 ui:

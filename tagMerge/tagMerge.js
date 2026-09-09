@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.4.2";
+  var PLUGIN_VERSION = "2.4.3";
   var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 

@@ -1,14 +1,14 @@
-name: Studio Tools Backend
+name: Studio Tools Auto
 description: Auto-scrape, merge and update studios from Stash-box instances. Hook on studio create, plus a manual task scanning studios without Stash IDs. No UI injection.
 version: 1.0.0
 url: https://discourse.stashapp.cc/t/studio-tools-backend/16129
 errLog: info
 exec:
   - python
-  - "{pluginDir}/studioToolsBackend.py"
+  - "{pluginDir}/studioToolsAuto.py"
 interface: raw
 hooks:
-  - name: studio_create_backend
+  - name: studio_create_auto
     description: Scrape, merge or update a newly created studio from configured Stash-box instances
     triggeredBy:
       - Studio.Create.Post

@@ -1,6 +1,6 @@
-# studioToolsBackend
+# studioToolsAuto
 
-> v1.0.0：后台模式首版 — 钩子自动处理新建工作室 + 任务页手动扫描缺少首个优先级源 Stash ID 的工作室；日志同步写入 Stash 日志，零 UI 注入
+> v1.0.0：由 studioToolsBackend 更名（功能不变），更名以贴合自动化定位 — 钩子自动处理新建工作室 + 任务页手动扫描缺少首个优先级源 Stash ID 的工作室；日志同步写入 Stash 日志，零 UI 注入
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：工作室创建时自动从已配置的 Stash-box 实例（JAVStash / StashDB / ThePornDB / 自定义）拉取资料，归一化精确匹配后**合并进已有工作室**或**补全新建工作室**；任务页手动触发可对缺少首个优先级源 Stash ID 的工作室批量执行同一管线。
 
@@ -13,8 +13,8 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 ## 安装
 
-1. 将整个 `studioToolsBackend` 文件夹复制到 Stash 插件目录（通常为 Stash 数据目录下的 `plugins/`）
-2. 重启 Stash，在「设置 → 插件」中确认 Studio Tools Backend 已启用
+1. 将整个 `studioToolsAuto` 文件夹复制到 Stash 插件目录（通常为 Stash 数据目录下的 `plugins/`）
+2. 重启 Stash，在「设置 → 插件」中确认 Studio Tools Auto 已启用
 3. 任务列表页出现「Scan Studios Without Stash IDs」任务即安装成功
 
 ## 设置
@@ -43,7 +43,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 ## 日志
 
-每次处理结果写入插件目录的 `studio_tools_backend.log`（来源、命中/回退、合并或更新明细、被跳过的冲突别名），**同时经 stderr 写入 Stash 日志**（`[Plugin / Studio Tools Backend]` 前缀，级别由 yml `errLog` 控制，默认 info）。
+每次处理结果写入插件目录的 `studio_tools_auto.log`（来源、命中/回退、合并或更新明细、被跳过的冲突别名），**同时经 stderr 写入 Stash 日志**（`[Plugin / Studio Tools Auto]` 前缀，级别由 yml `errLog` 控制，默认 info）。
 
 ## 免责
 

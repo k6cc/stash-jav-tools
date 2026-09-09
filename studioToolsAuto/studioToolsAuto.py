@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Studio Tools Backend v1.0.0: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本）。
+Studio Tools Auto v1.0.0: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
 
 - 钩子 Studio.Create.Post：新建工作室自动按优先级拉取 Stash-box 实例 →
   归一化精确匹配（无相似度阈值）→ canonical 名撞库（主名/别名交叉唯一）→
@@ -34,7 +34,7 @@ BUILTIN_SOURCES = [
 DEFAULT_TIMEOUT = 8
 INDEX_TTL = 30  # 工作室名称索引缓存秒数（仅钩子路径使用）
 
-LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "studio_tools_backend.log")
+LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "studio_tools_auto.log")
 
 # 归一化规则与 tagMerge 一致：NFKC（全角→半角）、小写、去空白与分隔符
 SEP_RE = re.compile(r"[\s\u3000·、，,。/\-—_・]+")
@@ -109,7 +109,7 @@ def get_settings(gql):
     try:
         plugins = ((gql("{ configuration { plugins } }").get("configuration") or {})
                    .get("plugins") or {})
-        return plugins.get("studioToolsBackend") or {}
+        return plugins.get("studioToolsAuto") or {}
     except Exception as e:
         log("get_settings error: %s" % e)
         return {}

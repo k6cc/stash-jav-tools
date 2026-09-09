@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Backend v1.0.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置）。
+Tag Merge Auto v1.0.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -21,7 +21,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag_merge_map.json")
-LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag_merge_backend.log")
+LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag_merge_auto.log")
 
 # 归一化规则与 tagMerge.js 一致：NFKC（全角→半角）、小写、去空白与分隔符
 SEP_RE = re.compile(r"[\s\u3000·、，,。/\-—_・]+")

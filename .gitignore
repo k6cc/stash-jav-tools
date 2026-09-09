@@ -4,6 +4,7 @@ __pycache__/
 
 # 插件运行时日志（写入插件目录，不随仓库发布）
 *_backend.log
+*_auto.log
 
 # 备份/临时文件
 *_original.js

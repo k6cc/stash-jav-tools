@@ -93,7 +93,7 @@ class StashInterface:
         self.port = server.get("Port", server.get("port", 9999))
         self.api_key = server.get("ApiKey", server.get("api_key", ""))
         # Stash 的 server_connection 无 ApiKey 字段（源码 pkg/plugin/common），
-        # 认证走 SessionCookie（与 studioToolsBackend/tagMergeBackend 一致）；
+        # 认证走 SessionCookie（与 studioToolsAuto/tagMergeAuto 一致）；
         # 保留 api_key 读取以兼容旧版/直传场景
         session_cookie = server.get("SessionCookie") or {}
         cookie = ""

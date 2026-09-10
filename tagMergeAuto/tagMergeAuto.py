@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.0.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.0.1: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -60,22 +60,32 @@ def nfc(s): return unicodedata.normalize("NFKC", (s or "").strip())
 def norm(s): return re.sub(SEP_RE, "", nfc(s).lower())
 
 def load_map():
-    """解析 tag_merge_map.json：返回 [{target, sources}]；_ 开头键跳过（说明键 / 被忽略的映射）。"""
+    """解析 tag_merge_map.json，返回 (items, error)。
+
+    error 取值：None=正常；"load_failed"=文件不存在或 JSON 解析失败；
+    "bad_root"=根不是 JSON 对象；"empty"=无有效映射组（空表或全为 _ 键）。
+    空 sources 组（如 {"t": []}）不构成有效映射，过滤掉并计入空表判定。
+    """
     try:
         with open(MAP_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         log("load_map error: %s" % e)
-        return []
-    if not isinstance(data, dict): return []
+        return [], "load_failed"
+    if not isinstance(data, dict):
+        log("load_map error: root is not a JSON object")
+        return [], "bad_root"
     items = []
     for target, sources in data.items():
         if not isinstance(target, str) or not target or target.startswith("_"):
             continue
         if isinstance(sources, list):
-            items.append({"target": target,
-                          "sources": [s for s in sources if isinstance(s, str) and s.strip()]})
-    return items
+            cleaned = [s for s in sources if isinstance(s, str) and s.strip()]
+            if cleaned:
+                items.append({"target": target, "sources": cleaned})
+    if not items:
+        return [], "empty"
+    return items, None
 
 # ---------- 分组（与 tagMerge.js buildGroups 解析阶段一致） ----------
 def build_groups(tags, mapping):
@@ -175,8 +185,11 @@ def handle_hook(gql):
     if not t or not t.get("name"): return
     name = t["name"]
 
-    mapping = load_map()
-    if not mapping: return
+    mapping, map_err = load_map()
+    if map_err:
+        log("hook skip: mapping %s (new tag '%s' not merged)" % (map_err, name))
+        print(json.dumps({"output": "skip (mapping %s)" % map_err}))
+        return
     target_names = set(m["target"] for m in mapping)
     target_norms = set(norm(m["target"]) for m in mapping)
     n = norm(name)
@@ -224,9 +237,9 @@ def handle_hook(gql):
 def scan_all(gql):
     data = gql(Q_TAGS, {})
     tags = ((data or {}).get("findTags") or {}).get("tags") or []
-    mapping = load_map()
-    if not mapping:
-        return {"groups": 0, "merged": 0, "skipped": 0, "note": "empty mapping"}
+    mapping, map_err = load_map()
+    if map_err:
+        return {"groups": 0, "merged": 0, "skipped": len(tags), "note": "mapping %s" % map_err}
     groups = build_groups(tags, mapping)
     consumed = {}
     merged = 0

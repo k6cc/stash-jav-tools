@@ -1,6 +1,6 @@
 # tagMergeAuto
 
-> v1.0.0：由 tagMergeBackend 更名（功能不变），更名以贴合自动化定位 — 钩子自动合并新建 tag + 任务页手动全量扫描合并，零 UI 注入、零网络、零设置
+> v1.0.1：映射表异常状态补强 — 不存在/解析失败/空表在钩子路径不再静默（写日志并输出 skip），任务输出 note 区分故障类型（load_failed / bad_root / empty）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：读取插件目录的映射库 `tag_merge_map.json`，把名称相似的 tags（英文/日文/中文变体）自动合并为规范中文 tag。
 

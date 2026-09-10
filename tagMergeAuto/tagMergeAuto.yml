@@ -1,6 +1,6 @@
 name: Tag Merge Auto
 description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus a manual full-scan task. No network, no settings.
-version: 1.0.0
+version: 1.0.1
 url: https://discourse.stashapp.cc/t/tag-merge-auto/16130
 errLog: info
 exec:

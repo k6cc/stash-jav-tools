@@ -13,7 +13,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [performerMerge](./performerMerge/) | 1.6.3 | 纯 UI | 重名演员检测与合并（证据分级连组 + 树级冲突检查），附带短名清理与别名修复 |
 | [tagMerge](./tagMerge/) | 2.4.3 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出） |
 | [studioToolsAuto](./studioToolsAuto/) | 1.0.0 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入） |
-| [tagMergeAuto](./tagMergeAuto/) | 1.0.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
+| [tagMergeAuto](./tagMergeAuto/) | 1.0.1 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
 
 ## 安装
 

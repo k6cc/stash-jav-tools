@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.5";
+  var PLUGIN_VERSION = "1.5.6";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -42,6 +42,17 @@
         stashdbEndpoint: stashdbBox ? stashdbBox.endpoint : STASHDB_ENDPOINT,
       };
       return _stashBoxConfig;
+    });
+  }
+
+  // Plugin setting (Settings → Plugins → JavStashLinker): detail_field_conflict
+  // keep_existing (default) | overwrite — applies to unique detail fields only.
+  function getDetailFieldConflict() {
+    return callGQL(
+      'query { getConfiguration(plugin_id: "JavStashLinker") { configuration } }'
+    ).then(function (data) {
+      var cfg = (data.getConfiguration && data.getConfiguration.configuration) || {};
+      return cfg.detail_field_conflict === "overwrite";
     });
   }
 
@@ -585,20 +596,22 @@
     }).join("; ");
   }
 
-  // Build performer detail fields to fill: only fields the local performer lacks.
-  // Existing values are never overwritten; aliases/urls stay incremental elsewhere.
-  function buildPerfDetails(localPerf, jsPerf) {
+  // Build performer detail fields to fill. overwrite=false (default): only fields
+  // the local performer lacks (existing values win). overwrite=true: any field where
+  // JAVStash has a value replaces the local value (plugin setting detail_field_conflict).
+  // Existing values are never overwritten for aliases/urls — those stay incremental.
+  function buildPerfDetails(localPerf, jsPerf, overwrite) {
     function empty(v) { return v === undefined || v === null || v === ""; }
     var d = {};
-    if (empty(localPerf.gender) && !empty(jsPerf.gender)) d.gender = jsPerf.gender;
-    if (empty(localPerf.birthdate) && !empty(jsPerf.birth_date)) d.birthdate = jsPerf.birth_date;
-    if (empty(localPerf.death_date) && !empty(jsPerf.death_date)) d.death_date = jsPerf.death_date;
-    if (empty(localPerf.country) && !empty(jsPerf.country)) d.country = jsPerf.country;
-    if (empty(localPerf.ethnicity) && !empty(jsPerf.ethnicity)) d.ethnicity = enumToDisplay(jsPerf.ethnicity);
-    if (empty(localPerf.hair_color) && !empty(jsPerf.hair_color)) d.hair_color = enumToDisplay(jsPerf.hair_color);
-    if (empty(localPerf.eye_color) && !empty(jsPerf.eye_color)) d.eye_color = enumToDisplay(jsPerf.eye_color);
-    if (empty(localPerf.height_cm) && !empty(jsPerf.height)) d.height_cm = jsPerf.height;
-    if (empty(localPerf.measurements) && (!empty(jsPerf.band_size) || !empty(jsPerf.cup_size) || !empty(jsPerf.waist_size) || !empty(jsPerf.hip_size))) {
+    if ((overwrite || empty(localPerf.gender)) && !empty(jsPerf.gender)) d.gender = jsPerf.gender;
+    if ((overwrite || empty(localPerf.birthdate)) && !empty(jsPerf.birth_date)) d.birthdate = jsPerf.birth_date;
+    if ((overwrite || empty(localPerf.death_date)) && !empty(jsPerf.death_date)) d.death_date = jsPerf.death_date;
+    if ((overwrite || empty(localPerf.country)) && !empty(jsPerf.country)) d.country = jsPerf.country;
+    if ((overwrite || empty(localPerf.ethnicity)) && !empty(jsPerf.ethnicity)) d.ethnicity = enumToDisplay(jsPerf.ethnicity);
+    if ((overwrite || empty(localPerf.hair_color)) && !empty(jsPerf.hair_color)) d.hair_color = enumToDisplay(jsPerf.hair_color);
+    if ((overwrite || empty(localPerf.eye_color)) && !empty(jsPerf.eye_color)) d.eye_color = enumToDisplay(jsPerf.eye_color);
+    if ((overwrite || empty(localPerf.height_cm)) && !empty(jsPerf.height)) d.height_cm = jsPerf.height;
+    if ((overwrite || empty(localPerf.measurements)) && (!empty(jsPerf.band_size) || !empty(jsPerf.cup_size) || !empty(jsPerf.waist_size) || !empty(jsPerf.hip_size))) {
       var parts = [];
       var bust = (jsPerf.band_size || "") + (jsPerf.cup_size || "");
       if (bust) parts.push(bust);
@@ -606,15 +619,15 @@
       if (!empty(jsPerf.hip_size)) parts.push(jsPerf.hip_size);
       if (parts.length) d.measurements = parts.join("-");
     }
-    if (empty(localPerf.career_length) && (!empty(jsPerf.career_start_year) || !empty(jsPerf.career_end_year))) {
+    if ((overwrite || empty(localPerf.career_length)) && (!empty(jsPerf.career_start_year) || !empty(jsPerf.career_end_year))) {
       if (!empty(jsPerf.career_start_year) && !empty(jsPerf.career_end_year)) {
         d.career_length = jsPerf.career_start_year + " - " + jsPerf.career_end_year;
       } else {
         d.career_length = String(jsPerf.career_start_year || jsPerf.career_end_year);
       }
     }
-    if (empty(localPerf.tattoos) && jsPerf.tattoos && jsPerf.tattoos.length) d.tattoos = modsToString(jsPerf.tattoos);
-    if (empty(localPerf.piercings) && jsPerf.piercings && jsPerf.piercings.length) d.piercings = modsToString(jsPerf.piercings);
+    if ((overwrite || empty(localPerf.tattoos)) && jsPerf.tattoos && jsPerf.tattoos.length) d.tattoos = modsToString(jsPerf.tattoos);
+    if ((overwrite || empty(localPerf.piercings)) && jsPerf.piercings && jsPerf.piercings.length) d.piercings = modsToString(jsPerf.piercings);
     return d;
   }
 
@@ -673,7 +686,7 @@
   }
 
   // Use cached performer data from scan (stash_ids, alias_list, urls)
-  function applyMatchCached(localPerformer, jsPerf) {
+  function applyMatchCached(localPerformer, jsPerf, overwrite) {
     var localPerformerId = localPerformer.id;
     if (_appliedPerformers[localPerformerId]) {
       return Promise.resolve();
@@ -717,7 +730,7 @@
 
     _appliedPerformers[localPerformerId] = true;
 
-    var details = buildPerfDetails(localPerformer, jsPerf);
+    var details = buildPerfDetails(localPerformer, jsPerf, overwrite);
 
     return _localRateLimiter.submit(function () {
       return updatePerformer(localPerformerId, newStashIds, existingAliases, urlsChanged ? newUrls : null, details);
@@ -1049,7 +1062,7 @@
     }
   }
 
-  function handleApply() {
+  async function handleApply() {
     var rawItems = [];
     var conflict = computeConflicts();
 
@@ -1099,6 +1112,10 @@
       }
     }
 
+    // Read plugin setting: unique detail fields — keep existing or overwrite with JAVStash.
+    var overwrite = false;
+    try { overwrite = await getDetailFieldConflict(); } catch (e) {}
+
     if (!confirm(tc("确认应用 " + toApply.length + " 个演员？将更新演员 stash_id 和别名。",
                     "Apply " + toApply.length + " performers? This will update performer stash_ids and aliases."))) return;
 
@@ -1144,7 +1161,7 @@
       var end = Math.min(batchIdx + APPLY_BATCH, toApply.length);
       for (var i = batchIdx; i < end; i++) {
         (function (m) {
-          applyMatchCached(m.localPerformer, m.jsPerf).then(function () {
+          applyMatchCached(m.localPerformer, m.jsPerf, overwrite).then(function () {
             applied++;
             // Mark all match keys for this performer as applied
             var keys = keyMap[m.localPerformer.id] || [m.key];
@@ -1333,7 +1350,7 @@
     var fp = _state.manualTab.fpComplete;
     if (fp.running || !fp.scenes || fp.scenes.length === 0) return;
 
-    getStashBoxConfig().then(function (config) {
+    getStashBoxConfig().then(async function (config) {
       if (!config.javstashApiKey) {
         alert(tc("未找到 JAVStash 配置，请在 设置 → 元数据提供者 中添加 JAVStash stash-box 实例",
                  "JAVStash not configured. Add it in Settings → Metadata Providers first."));
@@ -1344,6 +1361,9 @@
       setManualTab({ fpComplete: { scenes: scenes, loading: false, running: true, done: false } });
       addLog(tc("=== 指纹补全开始: ", "=== Fingerprint completion start: ") + scenes.length +
         tc(" 个单演员场景 ===", " single-performer scenes ==="));
+
+      var overwrite = false;
+      try { overwrite = await getDetailFieldConflict(); } catch (e) {}
 
       var applied = 0, noResult = 0, skipped = 0, already = 0, failed = 0;
       var okNames = [], failNames = [];
@@ -1381,7 +1401,7 @@
             }
             addLog(tc("指纹命中: ", "Fingerprint hit: ") + item.local.name + " → " + res.jsPerf.name +
               (res.scene.title ? " [" + res.scene.title + "]" : ""));
-            return applyMatchCached(item.local, res.jsPerf).then(function () {
+            return applyMatchCached(item.local, res.jsPerf, overwrite).then(function () {
               applied++;
               okNames.push(item.local.name);
               item.local.stash_ids = (item.local.stash_ids || [])
@@ -1541,9 +1561,11 @@
     setManualTab({ ignoredIds: ignored });
   }
 
-  function handleApplyManual(local, jsPerf) {
+  async function handleApplyManual(local, jsPerf) {
     addLog(tc("手动应用: ", "Manual apply: ") + jsPerf.name + " → " + local.name);
-    applyMatchCached(local, jsPerf).then(function () {
+    var overwrite = false;
+    try { overwrite = await getDetailFieldConflict(); } catch (e) {}
+    applyMatchCached(local, jsPerf, overwrite).then(function () {
       addLog("  OK");
       local.stash_ids = (local.stash_ids || []).concat([{ endpoint: JAVSTASH_ENDPOINT, stash_id: jsPerf.id }]);
       setSearchState(local.id, { appliedJsId: jsPerf.id, searching: false });
@@ -2111,9 +2133,11 @@
     ]);
   }
 
-  function applySingle(key, localPerformer, jsPerf) {
+  async function applySingle(key, localPerformer, jsPerf) {
     addLog(tc("应用: ", "Applying: ") + jsPerf.name + "...");
-    applyMatchCached(localPerformer, jsPerf).then(function () {
+    var overwrite = false;
+    try { overwrite = await getDetailFieldConflict(); } catch (e) {}
+    applyMatchCached(localPerformer, jsPerf, overwrite).then(function () {
       addLog("  OK");
       var a = Object.assign({}, _state.applied);
       a[key] = true;

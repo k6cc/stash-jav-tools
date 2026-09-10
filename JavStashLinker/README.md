@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.5.6：新增插件设置「详情字段冲突策略」（设置 → 插件 → JavStashLinker）— 本地与 JAVStash 对唯一字段（生日/身高等 12 项）都有值时，默认保留本地值，可切换为 JAVStash 值覆盖；主名永不变更，别名/链接始终去重合并，图片仅在本地无图时补充
+> v1.5.7：修正插件设置 schema — 上一版的 SELECT 写法（values/defaultValue）Stash 不支持会导致插件加载失败，改为 Stash 原生支持的 BOOLEAN 开关「Overwrite detail fields」；关闭（默认）= 唯一字段仅空值填充（本地优先），开启 = JAVStash 有值即覆盖
 
 Stash 插件：通过场景反推 + 名称搜索批量获取演员的 JAVStash ID。双引擎串行（场景反推 → 名称搜索），匹配按证据评级分 high/medium，冲突护栏防止一个 JAVStash ID 写入多个本地演员；应用时写入 stash_id、别名、URL，并补全空白信息字段与缺失图片（不覆盖已有值）。
 

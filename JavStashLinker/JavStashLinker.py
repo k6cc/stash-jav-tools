@@ -139,7 +139,8 @@ class StashInterface:
         """
         data = self.client.query(query)
         cfg = (data.get("getConfiguration") or {}).get("configuration") or {}
-        return str(cfg.get("detail_field_conflict", "keep_existing")) == "overwrite"
+        # plugin setting overwriteDetailFields (BOOLEAN); absent = default OFF
+        return bool(cfg.get("overwriteDetailFields", False))
 
     def get_scenes_with_javstash_id(self):
         PAGE_SIZE = 1000

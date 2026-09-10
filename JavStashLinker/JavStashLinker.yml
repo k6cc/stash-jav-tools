@@ -1,18 +1,14 @@
 name: JavStashLinker
 description: Batch match JAVStash performer IDs via scene-based reverse lookup, stash_id matching, and alias matching
-version: 1.5.6
+version: 1.5.7
 url: https://discourse.stashapp.cc/t/javstashlinker/15884
 errLog: info
 
 settings:
-  detail_field_conflict:
-    displayName: Detail field conflict
-    description: "When both local and JAVStash have a value for unique fields (birthdate/height/measurements/...), keep the existing local value or overwrite with the JAVStash value"
-    type: SELECT
-    values:
-      - keep_existing
-      - overwrite
-    defaultValue: keep_existing
+  overwriteDetailFields:
+    displayName: "Overwrite detail fields"
+    description: "When ON, unique fields (birthdate/height/measurements/...) with a JAVStash value replace the existing local value. OFF (default) = fill only when empty."
+    type: BOOLEAN
 
 exec:
   - python

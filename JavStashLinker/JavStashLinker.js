@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.6";
+  var PLUGIN_VERSION = "1.5.7";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -45,14 +45,15 @@
     });
   }
 
-  // Plugin setting (Settings → Plugins → JavStashLinker): detail_field_conflict
-  // keep_existing (default) | overwrite — applies to unique detail fields only.
+  // Plugin setting (Settings → Plugins → JavStashLinker): overwriteDetailFields
+  // BOOLEAN — ON = JAVStash value replaces existing unique detail fields;
+  // OFF (default) = fill only when the local value is empty.
   function getDetailFieldConflict() {
     return callGQL(
       'query { getConfiguration(plugin_id: "JavStashLinker") { configuration } }'
     ).then(function (data) {
       var cfg = (data.getConfiguration && data.getConfiguration.configuration) || {};
-      return cfg.detail_field_conflict === "overwrite";
+      return cfg.overwriteDetailFields === true;
     });
   }
 

@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.2
+ * Studio Tools v1.5.3
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -67,20 +67,6 @@ try {
         console.error("[StudioTools] GraphQL errors:", data.errors);
         throw new Error(data.errors[0].message);
       }
-      return data;
-    });
-  }
-
-  function stashdbGraphql(query, variables, endpoint, apiKey) {
-    return fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ApiKey": apiKey },
-      body: JSON.stringify({ query: query, variables: variables || {} })
-    }).then(function (resp) {
-      if (!resp.ok) throw new Error("Stash-Box HTTP " + resp.status);
-      return resp.json();
-    }).then(function (data) {
-      if (data.errors && data.errors.length > 0) throw new Error(data.errors[0].message);
       return data;
     });
   }
@@ -1489,8 +1475,6 @@ try {
 
     var Q_FIND_STUDIOS = "query FindStudios($filter: FindFilterType) { findStudios(filter: $filter) { studios { id name } } }";
 
-    var Q_STASHDB_SEARCH_STUDIO = "query SearchStudio($term: String!) { searchStudio(term: $term) { id name parent { id name } } }";
-
     var M_UPDATE = "mutation StudioUpdate($input: StudioUpdateInput!) { studioUpdate(input: $input) { id name } }";
 
     function getStashBoxes() {
@@ -1885,9 +1869,13 @@ try {
       });
     }
 
+    function studioHasCustomImage(studio) {
+      // Stash 对未设置自定义图的工作室，image_path 带 "default=true"
+      return !!(studio.image_path && studio.image_path.indexOf("default=true") === -1);
+    }
+
     function applyResultWithBox(result, studio, box) {
       var sourceEndpoint = box.endpoint || STASHDB_ENDPOINT;
-      var name = result.name || "";
       var aliases = result.aliases ? result.aliases.split(",").map(function (a) { return a.trim(); }).filter(Boolean) : [];
       var urls = result.urls || [];
       var image = result.image || "";
@@ -1895,8 +1883,34 @@ try {
 
       showProgress(tc("正在更新工作室...", "Updating studio..."));
 
-      var input = { id: studio.id, name: name, aliases: aliases, urls: urls };
+      // 只补不覆盖：主名不动；别名/链接仅去重并入缺失
+      var input = { id: studio.id };
 
+      var curName = (studio.name || "").toLowerCase();
+      var curAliases = (studio.aliases || []).filter(Boolean);
+      var mergedAliases = curAliases.slice();
+      for (var i = 0; i < aliases.length; i++) {
+        var a = aliases[i];
+        if (!a) continue;
+        var la = a.toLowerCase();
+        if (la === curName) continue;
+        var exists = false;
+        for (var j = 0; j < mergedAliases.length; j++) {
+          if (mergedAliases[j].toLowerCase() === la) { exists = true; break; }
+        }
+        if (!exists) mergedAliases.push(a);
+      }
+      if (mergedAliases.join(",") !== curAliases.join(",")) input.aliases = mergedAliases;
+
+      var curUrls = (studio.urls || []).filter(Boolean);
+      var mergedUrls = curUrls.slice();
+      for (var k = 0; k < urls.length; k++) {
+        var u = urls[k];
+        if (u && mergedUrls.indexOf(u) === -1) mergedUrls.push(u);
+      }
+      if (mergedUrls.join(",") !== curUrls.join(",")) input.urls = mergedUrls;
+
+      // Stash IDs 补入不覆盖：同源已有 ID 则跳过
       if (stashId) {
         var existingStashIds = (studio.stash_ids || []).map(function (s) {
           return { endpoint: s.endpoint, stash_id: s.stash_id };
@@ -1908,20 +1922,18 @@ try {
         input.stash_ids = existingStashIds;
       }
 
-      if (image) {
+      // 图片补入不覆盖：当前工作室已有自定义图则跳过
+      if (image && !studioHasCustomImage(studio)) {
         if (image.indexOf("http") === 0 || image.indexOf("data:") === 0) input.image = image;
         else input.image = "data:image/jpeg;base64," + image;
       }
 
       var promises = [];
 
+      // 上级工作室：结果缺值/本地无同名均不创建关联，仅已有值且本地存在同名工作室时设置
       var parentName = result.parent && result.parent.name ? result.parent.name : "";
       if (parentName) {
         promises.push(findLocalStudioId(parentName).then(function (parentId) {
-          if (parentId !== undefined) input.parent_id = parentId;
-        }));
-      } else if (name) {
-        promises.push(findParentStudioId(name, box).then(function (parentId) {
           if (parentId !== undefined) input.parent_id = parentId;
         }));
       }
@@ -1936,26 +1948,6 @@ try {
         showProgress(tc("更新失败: ", "Update failed: ") + err.message, true);
         setTimeout(hideProgress, 3000);
       });
-    }
-
-    function findParentStudioId(studioName, box) {
-      if (!box || !box.endpoint || !box.api_key) return Promise.resolve(undefined);
-      return stashdbGraphql(Q_STASHDB_SEARCH_STUDIO, { term: studioName }, box.endpoint, box.api_key).then(function (data) {
-        if (!data) return undefined;
-        var studios = (data.data || {}).searchStudio || [];
-        if (studios.length === 0) return undefined;
-
-        var matched = null;
-        for (var i = 0; i < studios.length; i++) {
-          if (studios[i].name && studios[i].name.toLowerCase() === studioName.toLowerCase()) {
-            matched = studios[i]; break;
-          }
-        }
-        if (!matched) matched = studios[0];
-        if (!matched || !matched.parent || !matched.parent.name) return undefined;
-
-        return findLocalStudioId(matched.parent.name);
-      }).catch(function () { return undefined; });
     }
 
     function findLocalStudioId(name) {

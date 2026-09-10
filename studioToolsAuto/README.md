@@ -1,6 +1,6 @@
 # studioToolsAuto
 
-> v1.1.0：新增「多源补齐」（multiSourceFill，默认 OFF）——并发查询所有列表源、每个精确命中的源都贡献 stash_ids/urls/aliases；恢复上级工作室自动补齐（仅当本地已存在同名工作室，不自动创建）；sourcePriority 文案澄清「列表即开关 + 优先级」
+> v1.1.1：简化 Source priority / Multi-source fill 设置文案；timeoutPerSource 支持留空（留空 = 默认 8s）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：工作室创建时自动从已配置的 Stash-box 实例（JAVStash / StashDB / ThePornDB / 自定义）拉取资料，归一化精确匹配后**合并进已有工作室**或**补全新建工作室**；任务页手动触发可对缺少首个优先级源 Stash ID 的工作室批量执行同一管线。
 
@@ -21,9 +21,9 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 设置 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| Source priority | STRING | 空（全部实例） | 逗号分隔的实例列表，**列表即开关 + 优先级**：未列出的实例跳过、设置了但本地未配置的 key 跳过；内置 key `javstash` / `stashdb` / `theporndb`，自定义实例写 endpoint URL（需已在元数据提供者中配置）。留空 = 全部已配置实例：javstash → stashdb → theporndb → 其余自定义（按配置顺序） |
-| Multi-source fill | BOOLEAN | OFF | **多源补齐**：ON = 并发查询所有列表源，每个精确命中的源都贡献（stash_ids/urls/aliases 并集）；OFF = 按序查询、首个精确命中即停（失败/未命中回退下一源） |
-| Timeout per source (s) | NUMBER | 8 | 每源拉取超时 |
+| Source priority | STRING | 空（全部实例） | 逗号分隔的实例列表，**列表即开关 + 优先级**：未列出的实例跳过；内置 key `javstash` / `stashdb` / `theporndb`，自定义实例写 endpoint URL。留空 = 全部已配置实例（javstash → stashdb → theporndb → 其余自定义） |
+| Multi-source fill | BOOLEAN | OFF | **多源补齐**：ON = 并发查询所有列表源，每个精确命中的源都贡献（stash_ids/urls/aliases 并集）；OFF = 按序查询、首个精确命中即停 |
+| Timeout per source (s) | STRING | 8 | 每源拉取超时 |
 
 ## 触发方式与行为
 

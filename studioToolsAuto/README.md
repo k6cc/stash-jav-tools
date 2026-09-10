@@ -1,6 +1,6 @@
 # studioToolsAuto
 
-> v1.0.0：由 studioToolsBackend 更名（功能不变），更名以贴合自动化定位 — 钩子自动处理新建工作室 + 任务页手动扫描缺少首个优先级源 Stash ID 的工作室；日志同步写入 Stash 日志，零 UI 注入
+> v1.1.0：新增「多源补齐」（multiSourceFill，默认 OFF）——并发查询所有列表源、每个精确命中的源都贡献 stash_ids/urls/aliases；恢复上级工作室自动补齐（仅当本地已存在同名工作室，不自动创建）；sourcePriority 文案澄清「列表即开关 + 优先级」
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：工作室创建时自动从已配置的 Stash-box 实例（JAVStash / StashDB / ThePornDB / 自定义）拉取资料，归一化精确匹配后**合并进已有工作室**或**补全新建工作室**；任务页手动触发可对缺少首个优先级源 Stash ID 的工作室批量执行同一管线。
 
@@ -21,8 +21,8 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 设置 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| Source priority | STRING | 空（全部实例） | 逗号分隔的拉取顺序，**列表即开关**：内置 key `javstash` / `stashdb` / `theporndb`，自定义实例写 endpoint URL（需已在元数据提供者中配置）。留空 = 全部已配置实例：javstash → stashdb → theporndb → 其余自定义（按配置顺序）；**未列出的实例跳过，设置了但本地未配置的 key 跳过** |
-| Silent fallback | BOOLEAN | ON | ON：某源请求失败或**无精确命中**时静默回退下一源；OFF：第一个有响应的源决定结果，无精确命中则跳过该工作室 |
+| Source priority | STRING | 空（全部实例） | 逗号分隔的实例列表，**列表即开关 + 优先级**：未列出的实例跳过、设置了但本地未配置的 key 跳过；内置 key `javstash` / `stashdb` / `theporndb`，自定义实例写 endpoint URL（需已在元数据提供者中配置）。留空 = 全部已配置实例：javstash → stashdb → theporndb → 其余自定义（按配置顺序） |
+| Multi-source fill | BOOLEAN | OFF | **多源补齐**：ON = 并发查询所有列表源，每个精确命中的源都贡献（stash_ids/urls/aliases 并集）；OFF = 按序查询、首个精确命中即停（失败/未命中回退下一源） |
 | Timeout per source (s) | NUMBER | 8 | 每源拉取超时 |
 
 ## 触发方式与行为
@@ -34,12 +34,12 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 管线细节：
 
-- **源解析**：优先级列表的第一个源（primary）决定任务扫描范围；拉取时按优先级顺序**首个精确命中即停**，未命中/请求失败按 Silent fallback 回退到下一源（未列出的实例与本地未配置的实例均跳过）
+- **源解析**：优先级列表的第一个源（primary）决定任务扫描范围；拉取时默认按优先级顺序**首个精确命中即停**、失败/未命中回退下一源；开启多源补齐（ON）则并发查询所有列表源、每个精确命中的源都贡献（未列出的实例与本地未配置的实例均跳过）
 - **匹配 = 归一化精确相等**（全角→半角、忽略大小写与分隔符），无相似度阈值；Stash 名称/别名**交叉唯一**，精确相等即确定命中
 - **合并**：canonical 名撞库中已有工作室（主名或别名）→ 新建的合并进已有（Stash 无原生 studioMerge，自研流程与 UI 版一致：转移 scenes/images/galleries/groups/子工作室关联 → 更新目标字段 → 删除新建）
 - **补全**：无撞 → 只填空字段；`urls` / `stash_ids` / `aliases` 追加缺失；**保留原名，canonical 名追加为别名**；别名写入前全库查重，撞其他工作室的名称/别名则跳过该别名（记日志）
 - **图片**：子进程异步下载（钩子不阻塞，失败只影响图片不影响字段），仅在工作室无图时设置
-- 不自动设置上级工作室（parent）、不改 rating/收藏等人工字段
+- **上级工作室**：目标 parent 为空时按最高优先级命中的 parent 补齐，仅当本地已存在同名工作室才设置（不自动创建上级，与 studioTools UI 版一致）；不改 rating/收藏等人工字段
 
 ## 日志
 

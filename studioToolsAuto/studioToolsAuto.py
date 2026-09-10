@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Studio Tools Auto v1.0.0: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
+Studio Tools Auto v1.1.0: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
 
 - 钩子 Studio.Create.Post：新建工作室自动按优先级拉取 Stash-box 实例 →
   归一化精确匹配（无相似度阈值）→ canonical 名撞库（主名/别名交叉唯一）→
@@ -11,14 +11,18 @@ Studio Tools Auto v1.0.0: 后台自动拉取/合并/更新工作室（studioTool
 
 设计要点：
 - 匹配 = 归一化精确相等；Stash 名称/别名交叉唯一 → 精确相等即确定命中，无 0.9 类阈值。
-- 源按设置优先级顺序查询，首个精确命中即停；某源失败/无命中时按 silentFallback 决定回退或停止。
+- 源按设置优先级顺序查询；多源补齐（multiSourceFill，默认 OFF）：OFF = 首个精确命中即停、
+  失败/未命中回退下一源，ON = 并发查询所有列表源、每个精确命中的源都贡献
+  （stash_ids/urls/aliases 并集，源失败只影响该源）。
 - 字段只填空（overwrite 全关）；别名/urls/stash_ids 追加缺失；别名写入前全库查重防撞。
+- 上级工作室：目标 parent 为空时按最高优先级命中的 parent 补齐，仅当本地已存在同名工作室
+  （不自动创建上级）——与 studioTools UI 版原设计一致。
 - Stash 无原生 studioMerge mutation，合并流程自研（与 studioTools UI 版一致）：
   转移 scenes/images/galleries/groups/子工作室关联 → 更新目标字段 → 删除源。
 - 图片子进程异步下载（钩子不阻塞）；失败只影响图片不影响字段。
 标准库 only。骨架照抄 javstashAutofill。
 """
-import sys, json, re, unicodedata, os, datetime, time, base64, subprocess, ssl, urllib.request
+import sys, json, re, unicodedata, os, datetime, time, base64, subprocess, ssl, threading, urllib.request, concurrent.futures
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -35,6 +39,7 @@ DEFAULT_TIMEOUT = 8
 INDEX_TTL = 30  # 工作室名称索引缓存秒数（仅钩子路径使用）
 
 LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "studio_tools_auto.log")
+_LOG_LOCK = threading.Lock()  # 多源补齐并发拉取时日志写入需互斥
 
 # 归一化规则与 tagMerge 一致：NFKC（全角→半角）、小写、去空白与分隔符
 SEP_RE = re.compile(r"[\s\u3000·、，,。/\-—_・]+")
@@ -92,19 +97,29 @@ def has_image(image_path):
 
 def log(msg):
     line = "%s [st-backend] %s" % (datetime.datetime.now().isoformat(), msg)
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
-    # stderr 是 Stash 官方插件日志通道（[Plugin / 插件名] 前缀，errLog 控制级别）
-    try:
-        sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
+    with _LOG_LOCK:
+        # stderr 是 Stash 官方插件日志通道（[Plugin / 插件名] 前缀，errLog 控制级别）
+        try:
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        try:
+            with open(LOG, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
 
 # ---------- 设置 ----------
+def setting_bool(v, default=False):
+    """BOOLEAN 设置解析：兼容 Stash 返回的真布尔与字符串形式。"""
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_settings(gql):
     try:
         plugins = ((gql("{ configuration { plugins } }").get("configuration") or {})
@@ -115,16 +130,16 @@ def get_settings(gql):
         return {}
 
 def resolve_sources(gql, settings):
-    """解析拉取源列表，返回 (sources, silent, timeout)。
+    """解析拉取源列表，返回 (sources, multi, timeout)。
 
     - sourcePriority 为空（默认）→ 全部已配置实例：javstash → stashdb → theporndb
       → 其余自定义实例（按 Stash 元数据提供者配置顺序）。
     - 用户设置 → 逗号分隔列表即优先级即开关：内置 key（javstash/stashdb/theporndb）
       或自定义实例 endpoint；未列出的实例跳过，本地未配置对应 stash-box 的 key 跳过。
+    - multi（多源补齐，默认 OFF）：ON = 并发查询所有列表源、每个精确命中的源都贡献
+      （stash_ids/urls/aliases 并集）；OFF = 按序查询、首个精确命中即停。
     """
-    silent = settings.get("silentFallback")
-    if silent is None: silent = True
-    silent = bool(silent)
+    multi = setting_bool(settings.get("multiSourceFill"))
     try:
         timeout = int(settings.get("timeoutPerSource") or DEFAULT_TIMEOUT)
         if timeout <= 0: timeout = DEFAULT_TIMEOUT
@@ -136,7 +151,7 @@ def resolve_sources(gql, settings):
     except Exception as e:
         log("get_stash_boxes error: %s" % e)
     if not boxes:
-        return [], silent, timeout
+        return [], multi, timeout
 
     priority_raw = (settings.get("sourcePriority") or "").strip()
     if priority_raw:
@@ -178,7 +193,7 @@ def resolve_sources(gql, settings):
             continue
         used_eps.add(ep)
         sources.append({"key": key, "box": box})
-    return sources, silent, timeout
+    return sources, multi, timeout
 
 # ---------- 拉取与匹配 ----------
 def scrape(gql, term, box, timeout):
@@ -192,6 +207,15 @@ def scrape(gql, term, box, timeout):
     except Exception as e:
         log("scrape %s error: %s" % (box.get("endpoint"), e))
         return None
+
+def scrape_all(gql, term, sources, timeout):
+    """并发拉取所有源，保持源顺序返回 [(source, cands)]；请求失败 cands 为 None。
+
+    网络 I/O 等待时线程并发是真实并行；耗时 = 最慢源（≤ timeout），而非源数 × timeout。
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(sources) or 1, 8)) as ex:
+        futs = [ex.submit(scrape, gql, term, s["box"], timeout) for s in sources]
+        return [(s, f.result()) for s, f in zip(sources, futs)]
 
 def find_exact(cands, name):
     """归一化精确相等匹配（无相似度阈值）；多个同名候选取第一个。"""
@@ -233,36 +257,48 @@ def find_dup(index, name, exclude_id):
     return None
 
 # ---------- 字段更新（只填空 + 并集 + 别名查重） ----------
-def build_update(studio, cand, box_endpoint, index):
-    """构造对 studio 的补全更新：空字段才填；urls/stash_ids 追加缺失；aliases 追加缺失
-    且写入前全库查重（撞其他工作室的名称/别名则跳过）。保留原名，canonical 名作别名。"""
+def build_update(studio, hits, index):
+    """构造对 studio 的补全更新：多候选（多源补齐）或单候选（首命中）合并。
+
+    - 只填空：urls 各候选缺失追加；stash_ids 各命中源各自追加缺失（每源 endpoint 唯一）；
+      aliases 追加缺失且写入前全库查重（撞其他工作室的名称/别名则跳过）。
+      保留原名，canonical 名作别名。
+    - parent：目标为空时按最高优先级命中的 parent 补齐，仅当本地已存在同名工作室
+      （不自动创建上级，与 studioTools UI 版一致）；多命中只取最高优先级候选。
+    """
     upd = {}
     sid = str(studio["id"])
-    cand_name = (cand.get("name") or "").strip()
-    cand_aliases = split_aliases(cand.get("aliases"))
+    cands = [c for c, _ in hits]
 
-    # urls：现有 + 缺失追加
+    # urls：现有 + 各候选缺失追加
     existing_urls = list(studio.get("urls") or [])
-    url_pool = [u for u in (cand.get("urls") or []) if u and isinstance(u, str)]
-    adds = [u for u in url_pool if u not in existing_urls]
+    adds = []
+    for cand in cands:
+        for u in (cand.get("urls") or []):
+            if u and isinstance(u, str) and u not in existing_urls and u not in adds:
+                adds.append(u)
     if adds: upd["urls"] = existing_urls + adds
 
-    # details：空则填
-    if not (studio.get("details") or "").strip() and (cand.get("details") or "").strip():
-        upd["details"] = cand["details"]
+    # stash_ids：各命中源各自追加缺失（每源 endpoint 唯一）
+    existing_ids = list(studio.get("stash_ids") or [])
+    eps = {s.get("endpoint") for s in existing_ids}
+    id_adds = []
+    for cand, src in hits:
+        if cand.get("remote_site_id") and src["box"]["endpoint"] not in eps:
+            eps.add(src["box"]["endpoint"])
+            id_adds.append({"endpoint": src["box"]["endpoint"], "stash_id": cand["remote_site_id"]})
+    if id_adds: upd["stash_ids"] = existing_ids + id_adds
 
-    # stash_ids：追加缺失（canonical 候选的 remote_site_id + 当前源 endpoint）
-    if cand.get("remote_site_id"):
-        eps = {s.get("endpoint") for s in (studio.get("stash_ids") or [])}
-        if box_endpoint not in eps:
-            upd["stash_ids"] = list(studio.get("stash_ids") or []) + [
-                {"endpoint": box_endpoint, "stash_id": cand["remote_site_id"]}]
-
-    # aliases：现有 + (canonical 名 + 候选别名) 缺失追加；全库查重防撞
+    # aliases：现有 + 各候选 (canonical 变体 + 候选别名) 缺失追加；全库查重防撞
     base = list(studio.get("aliases") or [])
-    pool = [a for a in cand_aliases if a]
-    if cand_name and norm(cand_name) != norm(studio.get("name") or ""):
-        pool.append(cand_name)
+    pool = []
+    for cand in cands:
+        cand_name = (cand.get("name") or "").strip()
+        for a in split_aliases(cand.get("aliases")):
+            if a and a not in pool:
+                pool.append(a)
+        if cand_name and norm(cand_name) != norm(studio.get("name") or "") and cand_name not in pool:
+            pool.append(cand_name)
     used = {norm(x) for x in base} | {norm(studio.get("name") or "")}
     additions = []
     for a in pool:
@@ -274,6 +310,19 @@ def build_update(studio, cand, box_endpoint, index):
         used.add(na)
         additions.append(a)
     if additions: upd["aliases"] = base + additions
+
+    # parent：目标为空 → 最高优先级命中源的 parent.name → 本地已有同名工作室才设
+    if not (studio.get("parent_studio") or {}).get("id"):
+        for cand, _ in hits:
+            pname = ((cand.get("parent") or {}).get("name") or "").strip()
+            if not pname:
+                continue
+            pid = find_dup(index, pname, sid)
+            if pid:
+                upd["parent_id"] = pid
+            else:
+                log("%s: parent '%s' not found locally, skipped" % (sid, pname))
+            break
 
     return upd
 
@@ -343,7 +392,7 @@ def set_image_mode(target_id, image_url):
     log("%s: image async gave up" % target_id)
 
 # ---------- 管线：单个工作室 拉取→匹配→合并/更新 ----------
-def process_studio(gql, conn, studio, index, sources, silent, timeout):
+def process_studio(gql, conn, studio, index, sources, multi, timeout):
     sid = str(studio["id"])
     name = studio.get("name") or ""
     if not name:
@@ -351,39 +400,45 @@ def process_studio(gql, conn, studio, index, sources, silent, timeout):
     if not sources:
         return {"status": "skip", "reason": "no enabled sources"}
 
-    hit = None
-    hit_box = None
-    for s in sources:
-        cands = scrape(gql, name, s["box"], timeout)
-        if cands is None:  # 请求失败
-            if not silent:
-                return {"status": "error", "reason": "source %s failed (silent off)" % s["key"]}
-            log("%s: source %s failed, fallback" % (sid, s["key"]))
-            continue
-        exact = find_exact(cands, name)
-        if exact:
-            hit = exact
-            hit_box = s
-            break
-        if not silent:
-            # 静默回退关闭：第一个有响应的源决定结果；无精确命中 → 放弃本工作室
-            return {"status": "skip", "reason": "no exact match in %s (silent off)" % s["key"]}
-        log("%s: source %s no exact match, fallback" % (sid, s["key"]))
+    hits = []
+    if multi:
+        # 多源补齐：并发查询所有源，每个精确命中的源都贡献
+        for s, cands in scrape_all(gql, name, sources, timeout):
+            if cands is None:
+                log("%s: source %s failed, no contribution" % (sid, s["key"]))
+                continue
+            exact = find_exact(cands, name)
+            if exact:
+                hits.append((exact, s))
+                log("%s: source %s exact match" % (sid, s["key"]))
+            else:
+                log("%s: source %s no exact match, no contribution" % (sid, s["key"]))
+    else:
+        # 默认：按序查询，失败/未命中回退下一源，首个精确命中即停
+        for s in sources:
+            cands = scrape(gql, name, s["box"], timeout)
+            if cands is None:
+                log("%s: source %s failed, fallback" % (sid, s["key"]))
+                continue
+            exact = find_exact(cands, name)
+            if exact:
+                hits.append((exact, s))
+                break
+            log("%s: source %s no exact match, fallback" % (sid, s["key"]))
 
-    if not hit:
+    if not hits:
         return {"status": "skip", "reason": "no exact match in any source"}
 
+    hit, hit_box = hits[0]
     cand_name = (hit.get("name") or "").strip()
-    box_endpoint = hit_box["box"]["endpoint"]
-
-    # canonical 名撞库（主名/别名交叉唯一 → 精确查重）→ 合并进已有
+    # canonical 名撞库（主名/别名交叉唯一 → 精确查重）；多命中归一化等价 → 判定与命中数无关
     dup = find_dup(index, cand_name, sid)
     if dup:
         try:
             dst = (gql(Q_STUDIO, {"id": dup}) or {}).get("findStudio") or {}
             if not dst or not dst.get("name"):
                 return {"status": "error", "reason": "dup studio %s not found" % dup}
-            values = build_update(dst, hit, box_endpoint, index)
+            values = build_update(dst, hits, index)
             # 新建源的 stash_ids 并入目标（缺失才加）
             src_ids = studio.get("stash_ids") or []
             dst_eps = {s.get("endpoint") for s in (dst.get("stash_ids") or [])}
@@ -400,17 +455,18 @@ def process_studio(gql, conn, studio, index, sources, silent, timeout):
             log("%s '%s': merge error %s" % (sid, name, e))
             return {"status": "error", "reason": str(e)}
 
-    # 无撞 → 补全自身（只填空 + 并集；canonical 名作别名）
+    # 无撞 → 补全自身（只填空 + 多候选并集；canonical 名作别名）
     try:
-        values = build_update(studio, hit, box_endpoint, index)
+        values = build_update(studio, hits, index)
         if values:
             gql(M_UPDATE, {"i": dict(values, id=sid)})
         apply_image_async(conn, sid, studio, hit, overwrite=False)
+        srcs = ",".join(s["key"] for _, s in hits)
         if values:
-            log("%s '%s': updated (fields=%s, source=%s)" % (sid, name, sorted(values.keys()), hit_box["key"]))
-            return {"status": "updated", "fields": sorted(values.keys()), "source": hit_box["key"]}
-        log("%s '%s': hit in %s, no new fields" % (sid, name, hit_box["key"]))
-        return {"status": "hit", "source": hit_box["key"]}
+            log("%s '%s': updated (fields=%s, sources=%s)" % (sid, name, sorted(values.keys()), srcs))
+            return {"status": "updated", "fields": sorted(values.keys()), "source": srcs}
+        log("%s '%s': hit in %s, no new fields" % (sid, name, srcs))
+        return {"status": "hit", "source": srcs}
     except Exception as e:
         log("%s '%s': update error %s" % (sid, name, e))
         return {"status": "error", "reason": str(e)}
@@ -427,15 +483,16 @@ def handle_hook(gql, conn, payload):
         return {"status": "skip", "reason": "no name"}
     index = get_studio_index(gql)
     settings = get_settings(gql)
-    sources, silent, timeout = resolve_sources(gql, settings)
-    return process_studio(gql, conn, studio, index, sources, silent, timeout)
+    sources, multi, timeout = resolve_sources(gql, settings)
+    return process_studio(gql, conn, studio, index, sources, multi, timeout)
 
 # ---------- 任务：扫描缺少首个源 Stash ID 的工作室 ----------
 def scan_all(gql, conn):
     settings = get_settings(gql)
-    sources, silent, timeout = resolve_sources(gql, settings)
+    sources, multi, timeout = resolve_sources(gql, settings)
     data = gql("query { findStudios(filter:{per_page:-1}){ studios{"
-               " id name aliases urls details image_path stash_ids{ endpoint stash_id } } } }")
+               " id name aliases urls details image_path stash_ids{ endpoint stash_id }"
+               " parent_studio{ id name } } } }")
     studios = ((data or {}).get("findStudios") or {}).get("studios") or []
     index = get_studio_index(gql, studios)
     if not sources:
@@ -453,7 +510,7 @@ def scan_all(gql, conn):
             todo.append(s)
     results = []
     for s in todo:
-        r = process_studio(gql, conn, s, index, sources, silent, timeout)
+        r = process_studio(gql, conn, s, index, sources, multi, timeout)
         results.append({"id": s["id"], "name": s.get("name") or "", **r})
     summary = {"total": len(studios), "primary": sources[0]["key"],
                "skipped_has_primary_sid": has_primary, "scanned": len(todo)}

@@ -1,6 +1,6 @@
 # JavStashLinker
 
-> v1.5.7：修正插件设置 schema — 上一版的 SELECT 写法（values/defaultValue）Stash 不支持会导致插件加载失败，改为 Stash 原生支持的 BOOLEAN 开关「Overwrite detail fields」；关闭（默认）= 唯一字段仅空值填充（本地优先），开启 = JAVStash 有值即覆盖
+> v1.5.8：详情字段写入优化 — 本地与 JAVStash 值相同时跳过写入（不再发无意义的 performerUpdate、不再误记「已补充」日志）；「Overwrite detail fields」开启时也仅值不同才覆盖
 
 Stash 插件：通过场景反推 + 名称搜索批量获取演员的 JAVStash ID。双引擎串行（场景反推 → 名称搜索），匹配按证据评级分 high/medium，冲突护栏防止一个 JAVStash ID 写入多个本地演员；应用时写入 stash_id、别名、URL，并补全空白信息字段与缺失图片（不覆盖已有值）。
 

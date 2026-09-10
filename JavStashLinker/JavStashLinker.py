@@ -583,28 +583,35 @@ def mods_to_string(mods):
 
 # Build performer detail fields to fill. overwrite=False (default): only fill fields
 # the local performer lacks (existing values win). overwrite=True: any field where
-# JAVStash has a value replaces the local value (config detail_field_conflict=overwrite).
+# JAVStash has a value replaces the local value (config overwriteDetailFields).
+# Identical values never trigger a write in either mode (no-op updates skipped).
 def build_perf_details(local_perf, js_perf, overwrite=False):
     def empty(v):
         return v is None or v == ""
+    def need(local_val, js_val):
+        # js has a value, and (overwrite or local empty), and values differ
+        return not empty(js_val) and (overwrite or empty(local_val)) and js_val != local_val
     d = {}
-    if (overwrite or empty(local_perf.get("gender"))) and not empty(js_perf.get("gender")):
+    if need(local_perf.get("gender"), js_perf.get("gender")):
         d["gender"] = js_perf["gender"]
-    if (overwrite or empty(local_perf.get("birthdate"))) and not empty(js_perf.get("birth_date")):
+    if need(local_perf.get("birthdate"), js_perf.get("birth_date")):
         d["birthdate"] = js_perf["birth_date"]
-    if (overwrite or empty(local_perf.get("death_date"))) and not empty(js_perf.get("death_date")):
+    if need(local_perf.get("death_date"), js_perf.get("death_date")):
         d["death_date"] = js_perf["death_date"]
-    if (overwrite or empty(local_perf.get("country"))) and not empty(js_perf.get("country")):
+    if need(local_perf.get("country"), js_perf.get("country")):
         d["country"] = js_perf["country"]
-    if (overwrite or empty(local_perf.get("ethnicity"))) and not empty(js_perf.get("ethnicity")):
-        d["ethnicity"] = enum_to_display(js_perf["ethnicity"])
-    if (overwrite or empty(local_perf.get("hair_color"))) and not empty(js_perf.get("hair_color")):
-        d["hair_color"] = enum_to_display(js_perf["hair_color"])
-    if (overwrite or empty(local_perf.get("eye_color"))) and not empty(js_perf.get("eye_color")):
-        d["eye_color"] = enum_to_display(js_perf["eye_color"])
-    if (overwrite or empty(local_perf.get("height_cm"))) and not empty(js_perf.get("height")):
+    _eth = enum_to_display(js_perf["ethnicity"]) if not empty(js_perf.get("ethnicity")) else None
+    if need(local_perf.get("ethnicity"), _eth):
+        d["ethnicity"] = _eth
+    _hair = enum_to_display(js_perf["hair_color"]) if not empty(js_perf.get("hair_color")) else None
+    if need(local_perf.get("hair_color"), _hair):
+        d["hair_color"] = _hair
+    _eye = enum_to_display(js_perf["eye_color"]) if not empty(js_perf.get("eye_color")) else None
+    if need(local_perf.get("eye_color"), _eye):
+        d["eye_color"] = _eye
+    if need(local_perf.get("height_cm"), js_perf.get("height")):
         d["height_cm"] = js_perf["height"]
-    if (overwrite or empty(local_perf.get("measurements"))) and not (empty(js_perf.get("band_size")) and empty(js_perf.get("cup_size")) and empty(js_perf.get("waist_size")) and empty(js_perf.get("hip_size"))):
+    if not (empty(js_perf.get("band_size")) and empty(js_perf.get("cup_size")) and empty(js_perf.get("waist_size")) and empty(js_perf.get("hip_size"))):
         parts = []
         bust = f"{js_perf.get('band_size') or ''}{js_perf.get('cup_size') or ''}"
         if bust:
@@ -614,16 +621,24 @@ def build_perf_details(local_perf, js_perf, overwrite=False):
         if not empty(js_perf.get("hip_size")):
             parts.append(str(js_perf["hip_size"]))
         if parts:
-            d["measurements"] = "-".join(parts)
-    if (overwrite or empty(local_perf.get("career_length"))) and not (empty(js_perf.get("career_start_year")) and empty(js_perf.get("career_end_year"))):
+            ms = "-".join(parts)
+            if (overwrite or empty(local_perf.get("measurements"))) and ms != local_perf.get("measurements"):
+                d["measurements"] = ms
+    if not (empty(js_perf.get("career_start_year")) and empty(js_perf.get("career_end_year"))):
         if not empty(js_perf.get("career_start_year")) and not empty(js_perf.get("career_end_year")):
-            d["career_length"] = f"{js_perf['career_start_year']} - {js_perf['career_end_year']}"
+            cl = f"{js_perf['career_start_year']} - {js_perf['career_end_year']}"
         else:
-            d["career_length"] = str(js_perf.get("career_start_year") or js_perf.get("career_end_year"))
-    if (overwrite or empty(local_perf.get("tattoos"))) and js_perf.get("tattoos"):
-        d["tattoos"] = mods_to_string(js_perf["tattoos"])
-    if (overwrite or empty(local_perf.get("piercings"))) and js_perf.get("piercings"):
-        d["piercings"] = mods_to_string(js_perf["piercings"])
+            cl = str(js_perf.get("career_start_year") or js_perf.get("career_end_year"))
+        if (overwrite or empty(local_perf.get("career_length"))) and cl != local_perf.get("career_length"):
+            d["career_length"] = cl
+    if js_perf.get("tattoos"):
+        tv = mods_to_string(js_perf["tattoos"])
+        if (overwrite or empty(local_perf.get("tattoos"))) and tv != local_perf.get("tattoos"):
+            d["tattoos"] = tv
+    if js_perf.get("piercings"):
+        pv = mods_to_string(js_perf["piercings"])
+        if (overwrite or empty(local_perf.get("piercings"))) and pv != local_perf.get("piercings"):
+            d["piercings"] = pv
     return d
 
 # Stash-box cross links (stashdb.org / theporndb.net performer URLs) never merge into

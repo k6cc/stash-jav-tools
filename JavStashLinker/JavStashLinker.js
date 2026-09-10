@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.7";
+  var PLUGIN_VERSION = "1.5.8";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -599,36 +599,55 @@
 
   // Build performer detail fields to fill. overwrite=false (default): only fields
   // the local performer lacks (existing values win). overwrite=true: any field where
-  // JAVStash has a value replaces the local value (plugin setting detail_field_conflict).
+  // JAVStash has a value replaces the local value (plugin setting overwriteDetailFields).
+  // Identical values never trigger a write in either mode (no-op updates skipped).
   // Existing values are never overwritten for aliases/urls — those stay incremental.
   function buildPerfDetails(localPerf, jsPerf, overwrite) {
     function empty(v) { return v === undefined || v === null || v === ""; }
+    function need(localVal, jsVal) {
+      // js has a value, and (overwrite or local empty), and values differ
+      return !empty(jsVal) && (overwrite || empty(localVal)) && jsVal !== localVal;
+    }
     var d = {};
-    if ((overwrite || empty(localPerf.gender)) && !empty(jsPerf.gender)) d.gender = jsPerf.gender;
-    if ((overwrite || empty(localPerf.birthdate)) && !empty(jsPerf.birth_date)) d.birthdate = jsPerf.birth_date;
-    if ((overwrite || empty(localPerf.death_date)) && !empty(jsPerf.death_date)) d.death_date = jsPerf.death_date;
-    if ((overwrite || empty(localPerf.country)) && !empty(jsPerf.country)) d.country = jsPerf.country;
-    if ((overwrite || empty(localPerf.ethnicity)) && !empty(jsPerf.ethnicity)) d.ethnicity = enumToDisplay(jsPerf.ethnicity);
-    if ((overwrite || empty(localPerf.hair_color)) && !empty(jsPerf.hair_color)) d.hair_color = enumToDisplay(jsPerf.hair_color);
-    if ((overwrite || empty(localPerf.eye_color)) && !empty(jsPerf.eye_color)) d.eye_color = enumToDisplay(jsPerf.eye_color);
-    if ((overwrite || empty(localPerf.height_cm)) && !empty(jsPerf.height)) d.height_cm = jsPerf.height;
-    if ((overwrite || empty(localPerf.measurements)) && (!empty(jsPerf.band_size) || !empty(jsPerf.cup_size) || !empty(jsPerf.waist_size) || !empty(jsPerf.hip_size))) {
+    if (need(localPerf.gender, jsPerf.gender)) d.gender = jsPerf.gender;
+    if (need(localPerf.birthdate, jsPerf.birth_date)) d.birthdate = jsPerf.birth_date;
+    if (need(localPerf.death_date, jsPerf.death_date)) d.death_date = jsPerf.death_date;
+    if (need(localPerf.country, jsPerf.country)) d.country = jsPerf.country;
+    var eth = !empty(jsPerf.ethnicity) ? enumToDisplay(jsPerf.ethnicity) : undefined;
+    if (need(localPerf.ethnicity, eth)) d.ethnicity = eth;
+    var hair = !empty(jsPerf.hair_color) ? enumToDisplay(jsPerf.hair_color) : undefined;
+    if (need(localPerf.hair_color, hair)) d.hair_color = hair;
+    var eye = !empty(jsPerf.eye_color) ? enumToDisplay(jsPerf.eye_color) : undefined;
+    if (need(localPerf.eye_color, eye)) d.eye_color = eye;
+    if (need(localPerf.height_cm, jsPerf.height)) d.height_cm = jsPerf.height;
+    if (!empty(jsPerf.band_size) || !empty(jsPerf.cup_size) || !empty(jsPerf.waist_size) || !empty(jsPerf.hip_size)) {
       var parts = [];
       var bust = (jsPerf.band_size || "") + (jsPerf.cup_size || "");
       if (bust) parts.push(bust);
       if (!empty(jsPerf.waist_size)) parts.push(jsPerf.waist_size);
       if (!empty(jsPerf.hip_size)) parts.push(jsPerf.hip_size);
-      if (parts.length) d.measurements = parts.join("-");
-    }
-    if ((overwrite || empty(localPerf.career_length)) && (!empty(jsPerf.career_start_year) || !empty(jsPerf.career_end_year))) {
-      if (!empty(jsPerf.career_start_year) && !empty(jsPerf.career_end_year)) {
-        d.career_length = jsPerf.career_start_year + " - " + jsPerf.career_end_year;
-      } else {
-        d.career_length = String(jsPerf.career_start_year || jsPerf.career_end_year);
+      if (parts.length) {
+        var ms = parts.join("-");
+        if ((overwrite || empty(localPerf.measurements)) && ms !== localPerf.measurements) d.measurements = ms;
       }
     }
-    if ((overwrite || empty(localPerf.tattoos)) && jsPerf.tattoos && jsPerf.tattoos.length) d.tattoos = modsToString(jsPerf.tattoos);
-    if ((overwrite || empty(localPerf.piercings)) && jsPerf.piercings && jsPerf.piercings.length) d.piercings = modsToString(jsPerf.piercings);
+    if (!empty(jsPerf.career_start_year) || !empty(jsPerf.career_end_year)) {
+      var cl;
+      if (!empty(jsPerf.career_start_year) && !empty(jsPerf.career_end_year)) {
+        cl = jsPerf.career_start_year + " - " + jsPerf.career_end_year;
+      } else {
+        cl = String(jsPerf.career_start_year || jsPerf.career_end_year);
+      }
+      if ((overwrite || empty(localPerf.career_length)) && cl !== localPerf.career_length) d.career_length = cl;
+    }
+    if (jsPerf.tattoos && jsPerf.tattoos.length) {
+      var tv = modsToString(jsPerf.tattoos);
+      if ((overwrite || empty(localPerf.tattoos)) && tv !== localPerf.tattoos) d.tattoos = tv;
+    }
+    if (jsPerf.piercings && jsPerf.piercings.length) {
+      var pv = modsToString(jsPerf.piercings);
+      if ((overwrite || empty(localPerf.piercings)) && pv !== localPerf.piercings) d.piercings = pv;
+    }
     return d;
   }
 

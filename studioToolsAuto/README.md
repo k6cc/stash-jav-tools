@@ -1,6 +1,6 @@
 # studioToolsAuto
 
-> v1.1.1：简化 Source priority / Multi-source fill 设置文案；timeoutPerSource 支持留空（留空 = 默认 8s）
+> v1.1.2：更新论坛讨论帖链接（Discourse 帖重建）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：工作室创建时自动从已配置的 Stash-box 实例（JAVStash / StashDB / ThePornDB / 自定义）拉取资料，归一化精确匹配后**合并进已有工作室**或**补全新建工作室**；任务页手动触发可对缺少首个优先级源 Stash ID 的工作室批量执行同一管线。
 

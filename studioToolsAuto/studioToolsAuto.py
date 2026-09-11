@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Studio Tools Auto v1.1.1: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
+Studio Tools Auto v1.1.2: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
 
 - 钩子 Studio.Create.Post：新建工作室自动按优先级拉取 Stash-box 实例 →
   归一化精确匹配（无相似度阈值）→ canonical 名撞库（主名/别名交叉唯一）→

@@ -1,6 +1,6 @@
 name: Studio Tools Auto
 description: Auto-scrape, merge and update studios from Stash-box instances. Hook on studio create, plus a manual task scanning studios without Stash IDs. No UI injection.
-version: 1.1.1
+version: 1.1.2
 url: https://discourse.stashapp.cc/t/studio-tools-auto/16203
 errLog: info
 exec:

@@ -2,7 +2,7 @@
 
 > v1.0.0：首发 — Scene Translate 的纯后台自动化版本，hook 自动翻译场景标题/简介 + 全量扫描任务
 
-Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，任务页可对存量场景全量执行同一管线。
+Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
 与 UI 版 [sceneTranslate](../sceneTranslate/README.md) 的关系：复用同一套翻译引擎（google_free / google_api / microsoft / baidu / deepl / openai）与 `config.json` 密钥格式，但**无页面按钮、无翻译代理、无端口**——Python 后台直接调用翻译 API，写回走 GraphQL `sceneUpdate`。
 
@@ -45,8 +45,8 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 入口 | 触发 | 行为 |
 |---|---|---|
-| 钩子 `Scene.Create.Post` / `Scene.Update.Post` | 场景创建/更新 | 语言预检（毫秒级，无网络）→ 需翻译则写入 pending 队列并 spawn 单例后台 worker → worker 翻译并写回（hook 立即返回，不阻塞 Stash） |
-| 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 攒批合并翻译 → 并发 + 限速 → 批量写回（缓存跳过已翻译，可中断重跑） |
+| 钩子 `Scene.Create.Post` / `Scene.Update.Post` | 场景创建/更新 | 语言预检（毫秒级，无网络）→ 需翻译则写入 pending 队列并 spawn 单例后台 worker → worker 翻译场景并写回，**顺带翻译关联图库**（hook 立即返回，不阻塞 Stash） |
+| 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 攒批合并翻译 → 并发 + 限速 → 批量写回（含关联图库；缓存跳过已翻译，可中断重跑） |
 
 ## 核心机制
 
@@ -65,6 +65,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 - 只写 `title` / `details`，**`code`（番号）字段绝不写**；标题内番号 token 翻译前提取、翻译后原样还原（占位符丢失时自动补回标题开头）
 - 翻译结果**已是目标语言**且**与原文不同**才写回（引擎原样返回/半吊子翻译不写）
+- **图库同步**：worker 按**图库自身语言**判断，只补翻译未到目标语言的图库——已翻译/手动编辑过的图库不动（不强制与场景标题一致）；写回走 `galleryUpdate`，不订阅 Gallery 事件，无循环
 - 防循环：写回后再次触发 `Scene.Update.Post` → 语言复检（`is_target_language`）拦截，闭环终止
 - 后台 worker 单例（pid 锁），同时只跑一个消费进程，低功耗设备友好
 
@@ -83,5 +84,6 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 - 插件会**改写场景的标题与简介**；运行全量扫描前建议先做一次库备份（Stash「设置 → 任务 → 备份」）
 - 禁用插件（设置 → 插件 → 关闭）即关闭自动翻译，无需其他开关
 - 与 sceneGallerySync 同挂 `Scene.Update.Post`：两者 hook 均只做轻量预检/入队（毫秒级），互相不阻塞；本插件不订阅 Gallery/Image 事件
+- **图库翻译范围**：仅翻译场景**关联的**图库；由 sceneGallerySync 等创建的图库若在场景翻译前创建（快照了源语言元数据），会在下次场景更新或全量任务时被补齐翻译
 - 全量任务耗时长（受引擎 QPS 限制，1 万条 × baidu 1 QPS ≈ 数小时），可在任务运行中或中断后重跑，缓存自动跳过已处理场景
 - 付费引擎（baidu / microsoft / deepl / openai）按字符/请求计费，批量任务前请确认配额

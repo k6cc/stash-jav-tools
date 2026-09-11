@@ -8,8 +8,10 @@ Scene Translate Auto v1.0.0: 自动翻译场景标题/简介为目标语言（sc
 - 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，攒批合并翻译 + 并发 + 限速 + 断点续扫（缓存跳过）。
 - 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；纯 ASCII 按目标语言决定。
   翻译后复检：结果已是目标语言且与原文不同才写回（防循环主防线）。
-- 写回仅 sceneUpdate 的 title/details 字段，code（番号）字段绝不写。
-- 标准库 only。引擎密钥与限速等参数在插件目录 config.json；引擎/语言/Hook 开关/并发在 Stash 插件页。
+- 写回仅 title/details 字段（sceneUpdate / galleryUpdate），code（番号）字段绝不写。
+- 图库同步：worker 处理场景时顺带翻译其关联 galleries 的 title/details（按图库自身语言判断，
+  已译/手动编辑过的图库不碰；galleryUpdate 写回不触发本插件 hook，无循环）。
+- 标准库 only。引擎密钥与限速等参数在插件目录 config.json；引擎/语言/并发在 Stash 插件页。
 """
 
 import sys
@@ -196,10 +198,13 @@ def make_gql(conn):
 
 
 Q_PLUGINS = "query { configuration { plugins } }"
-Q_SCENE = "query($id: ID!){ findScene(id:$id){ id title details } }"
+Q_SCENE = ("query($id: ID!){ findScene(id:$id){ id title details "
+           "galleries { id title details } } }")
 Q_SCENES_PAGE = ("query($filter: FindFilterType!, $scene_filter: SceneFilterType){ "
-                 "findScenes(filter: $filter, scene_filter: $scene_filter){ count scenes{ id title details } } }")
+                 "findScenes(filter: $filter, scene_filter: $scene_filter){ count scenes{ "
+                 "id title details galleries { id title details } } } }")
 M_SCENE_UPDATE = "mutation($i: SceneUpdateInput!){ sceneUpdate(input:$i){ id title details } }"
+M_GALLERY_UPDATE = "mutation($i: GalleryUpdateInput!){ galleryUpdate(input:$i){ id title details } }"
 
 
 def read_stash_plugin_config(gql):
@@ -555,10 +560,12 @@ def log_dead(sid, reason):
         pass
 
 
-# ─── 单场景翻译 + 写回 ───────────────────────────────────────────────────────
+# ─── 单实体翻译 + 写回 ───────────────────────────────────────────────────────
 
-def translate_scene(gql, sid, title, details, settings, cache, limiter):
-    """翻译单场景 title/details。成功写回返回 {field: new_value}；无需处理返回 None。"""
+def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
+    """翻译单实体 title/details（kind: scene|gallery，eid 为该实体 id）。
+    成功写回返回 {field: new_value}；无需处理返回 None。
+    缓存键区分实体：scene 用裸 id，gallery 用 'g:'+id（互不冲突）。"""
     title = (title or "").strip()
     details = (details or "").strip()
     target = settings.get("targetLanguage") or "zh-CN"
@@ -572,8 +579,9 @@ def translate_scene(gql, sid, title, details, settings, cache, limiter):
     details_need = needs_translation(details, target, code_pat, min_len)
     if not title_need and not details_need:
         return None
+    ckey = ("g:" if kind == "gallery" else "") + str(eid)
     with _cache_lock:
-        if cache_hit(cache, str(sid), title, details, settings.get("cacheHours") or 24):
+        if cache_hit(cache, ckey, title, details, settings.get("cacheHours") or 24):
             return None
     texts, fields = [], []
     if title_need:
@@ -603,9 +611,12 @@ def translate_scene(gql, sid, title, details, settings, cache, limiter):
             updates[f] = new
     if not updates:
         return None
-    update_scene(gql, str(sid), updates)
+    if kind == "gallery":
+        gql(M_GALLERY_UPDATE, {"i": {"id": str(eid), **updates}})
+    else:
+        update_scene(gql, str(eid), updates)
     with _cache_lock:
-        cache[str(sid)] = {"at": time.time(), "title": title, "details": details}
+        cache[ckey] = {"at": time.time(), "title": title, "details": details}
     return updates
 
 
@@ -690,11 +701,27 @@ def process_task(conn, sid, settings, limiter):
         log("scene %s not found, dropped" % sid)
         return
     cache = load_cache()
-    updates = translate_scene(gql, sid, scene.get("title"), scene.get("details"), settings, cache, limiter)
+    updates = translate_entity(gql, "scene", sid, scene.get("title"), scene.get("details"),
+                               settings, cache, limiter)
     if updates:
-        save_cache(cache)
         log("scene %s translated: %s" % (sid, ",".join(updates.keys())))
-    else:
+    g_ok = 0
+    for g in scene.get("galleries") or []:
+        gid = g.get("id")
+        if not gid:
+            continue
+        try:
+            gu = translate_entity(gql, "gallery", gid, g.get("title"), g.get("details"),
+                                  settings, cache, limiter)
+            if gu:
+                g_ok += 1
+                log("gallery %s translated: %s" % (gid, ",".join(gu.keys())))
+        except Exception as e:
+            log("gallery %s error: %s" % (gid, e))
+            log_dead("g:%s" % gid, e)
+    if updates or g_ok:
+        save_cache(cache)
+    if not updates and not g_ok:
         log("scene %s nothing to translate" % sid)
 
 
@@ -779,8 +806,16 @@ def handle_hook(payload):
         min_len = int(settings.get("minLength") or 0)
     except Exception:
         pass
-    if not needs_translation(title, target, code_pat, min_len) and \
-       not needs_translation(details, target, code_pat, min_len):
+    need = needs_translation(title, target, code_pat, min_len) or \
+        needs_translation(details, target, code_pat, min_len)
+    if not need:
+        # 场景无需翻译时仍检查关联图库（场景已译但图库日文 → 入队补齐）
+        for g in scene.get("galleries") or []:
+            if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or \
+               needs_translation((g.get("details") or "").strip(), target, code_pat, min_len):
+                need = True
+                break
+    if not need:
         print(json.dumps({"output": "skip (already in target language or nothing to translate)"}))
         return
     enqueue_task(conn, sid)
@@ -837,13 +872,21 @@ def scan_all(payload):
             sid = str(sc.get("id"))
             title = (sc.get("title") or "").strip()
             details = (sc.get("details") or "").strip()
+            galleries = [g for g in (sc.get("galleries") or []) if g and g.get("id")]
+            gal_need = [g for g in galleries
+                        if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or
+                           needs_translation((g.get("details") or "").strip(), target, code_pat, min_len)]
             if not needs_translation(title, target, code_pat, min_len) and \
-               not needs_translation(details, target, code_pat, min_len):
+               not needs_translation(details, target, code_pat, min_len) and not gal_need:
                 continue
             with _cache_lock:
                 if cache_hit(cache, sid, title, details, settings.get("cacheHours") or 24):
+                    # 场景已缓存（此前已译/跳过）：仅当有图库需翻译才继续处理
+                    if not gal_need:
+                        continue
+                    needed.append((sid, title, details, gal_need))
                     continue
-            needed.append((sid, title, details))
+            needed.append((sid, title, details, galleries))
         page += 1
         if total is not None and (page - 1) * per_page >= total:
             break
@@ -860,10 +903,23 @@ def scan_all(payload):
         nonlocal ok, failed
         try:
             updates_list = []
-            for sid, title, details in items:
-                u = translate_scene(gql, sid, title, details, settings, cache, limiter)
+            for sid, title, details, galleries in items:
+                u = translate_entity(gql, "scene", sid, title, details, settings, cache, limiter)
                 if u:
                     updates_list.append((sid, u))
+                for g in galleries or []:
+                    gid = g.get("id")
+                    if not gid:
+                        continue
+                    try:
+                        gu = translate_entity(gql, "gallery", gid, g.get("title"), g.get("details"),
+                                              settings, cache, limiter)
+                        if gu:
+                            updates_list.append(("g:%s" % gid, gu))
+                            log("scan_all gallery %s translated: %s" % (gid, ",".join(gu.keys())))
+                    except Exception as e:
+                        log("scan_all gallery %s error: %s" % (gid, e))
+                        log_dead("g:%s" % gid, e)
             with _prog_lock:
                 ok += len(updates_list)
                 done_count[0] += len(items)
@@ -871,8 +927,11 @@ def scan_all(payload):
             with _prog_lock:
                 failed += len(items)
                 done_count[0] += len(items)
-            for sid, _, _ in items:
+            for sid, _, _, galleries in items:
                 log_dead(sid, e)
+                for g in galleries or []:
+                    if g and g.get("id"):
+                        log_dead("g:%s" % g.get("id"), e)
             log("batch error: %s" % e)
         finally:
             with _prog_lock:

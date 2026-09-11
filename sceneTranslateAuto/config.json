@@ -1,17 +1,30 @@
 {
-  // ── 各引擎 API 密钥（按需填写，选用对应引擎时必填；支持 // 注释）──
-  // 引擎/目标语言/Hook 开关/全量扫描并发在 Stash 插件页设置，不写在此处
-  "googleApiKey": "",
-  "microsoftApiKey": "",
-  "microsoftRegion": "global",
-  "baiduAppId": "",
-  "baiduSecret": "",
-  "openaiApiKey": "",
-  "openaiModel": "gpt-4o-mini",
-  "openaiBaseUrl": "",
-  "deeplApiKey": "",
-  "deeplFreeApi": false,
-  "deeplBaseUrl": "",
+  // ── 翻译引擎配置（按引擎分区，选用对应引擎时填写）──
+  // 引擎/目标语言/全量扫描并发在 Stash 插件页设置，不写在此处
+  // google_free：免密钥，无需配置
+  "engines": {
+    "google_api": {
+      "apiKey": ""
+    },
+    "microsoft": {
+      "apiKey": "",
+      "region": "global"
+    },
+    "baidu": {
+      "appId": "",
+      "secret": ""
+    },
+    "openai": {
+      "apiKey": "",
+      "model": "gpt-4o-mini",
+      "baseUrl": ""
+    },
+    "deepl": {
+      "apiKey": "",
+      "freeApi": false,
+      "baseUrl": ""
+    }
+  },
 
   // ── 引擎级限速（每秒最大翻译请求数）──
   // 百度免费版 QPS=1；google_free 免费接口批量请求过高会 429

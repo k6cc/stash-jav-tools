@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.0.0：首发 — Scene Translate 的纯后台自动化版本，hook 自动翻译场景标题/简介 + 全量扫描任务
+> v1.0.1：config.json 引擎配置按分区组织（engines 块），兼容旧平铺配置
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
@@ -34,7 +34,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
-| 各引擎 API Key | 空 | 选用 `google_free` 以外引擎时必填（字段与 sceneTranslate 一致） |
+| `engines` | 各引擎密钥为空 | **按引擎分区**：`google_api`（apiKey）/ `microsoft`（apiKey, region）/ `baidu`（appId, secret）/ `openai`（apiKey, model, baseUrl）/ `deepl`（apiKey, freeApi, baseUrl）；`google_free` 免密钥无需配置。选用对应引擎时填写该区块 |
 | `rateLimits` | google_free 3 / baidu 1 / 其余 2 | 引擎级每秒最大翻译请求数（QPS 令牌桶，hook 与全量任务共用） |
 | `batchSize` | 10 | 全量任务每次请求合并的场景数（hook 路径固定单场景 title+details 合并一个请求） |
 | `codePattern` | `[A-Za-z]{2,10}[-_ ]?\d{2,6}` | 番号正则：全文匹配=纯番号跳过；部分匹配=翻译后原样还原 |

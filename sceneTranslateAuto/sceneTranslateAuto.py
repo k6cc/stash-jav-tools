@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.0.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.0.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
@@ -110,15 +110,36 @@ def load_config_json():
 
 # ─── 配置合并 ──────────────────────────────────────────────────────────────────
 
+# config.json engines 分区块字段 → 平铺设置字段的显式映射（引擎密钥分区配置）
+ENGINE_FIELD_MAP = {
+    "google_api": {"apiKey": "googleApiKey"},
+    "microsoft": {"apiKey": "microsoftApiKey", "region": "microsoftRegion"},
+    "baidu": {"appId": "baiduAppId", "secret": "baiduSecret"},
+    "openai": {"apiKey": "openaiApiKey", "model": "openaiModel", "baseUrl": "openaiBaseUrl"},
+    "deepl": {"apiKey": "deeplApiKey", "freeApi": "deeplFreeApi", "baseUrl": "deeplBaseUrl"},
+}
+
+
 def merged_settings(stash_cfg):
     s = dict(DEFAULTS)
     s["rateLimits"] = dict(DEFAULTS["rateLimits"])
     file_cfg = load_config_json()
     for k, v in file_cfg.items():
+        if k == "engines":
+            continue
         if isinstance(v, dict) and isinstance(s.get(k), dict):
             s[k].update(v)
         else:
             s[k] = v
+    # engines 分区块展开为平铺（分区配置优先于平铺兼容字段）
+    engines = file_cfg.get("engines")
+    if isinstance(engines, dict):
+        for eng, fields in ENGINE_FIELD_MAP.items():
+            blk = engines.get(eng)
+            if isinstance(blk, dict):
+                for src, dst in fields.items():
+                    if src in blk and blk[src] not in (None, ""):
+                        s[dst] = blk[src]
     if stash_cfg:
         for k in ("translateTool", "targetLanguage", "scanAllConcurrency"):
             if k in stash_cfg and stash_cfg[k] not in (None, ""):

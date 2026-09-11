@@ -1,6 +1,6 @@
 name: Scene Translate Auto
 description: Auto-translate scene title & details to the target language on scene create/update (hook), plus a manual full-scan task for existing scenes. Python backend only, no UI injection. Reuses translation engines from Scene Translate.
-version: 1.0.0
+version: 1.0.1
 url: https://discourse.stashapp.cc/t/scene-translate-auto/16281
 errLog: info
 exec:

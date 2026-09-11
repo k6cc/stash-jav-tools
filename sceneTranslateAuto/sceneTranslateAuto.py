@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.0.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.0.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
-- 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，攒批合并翻译 + 并发 + 限速 + 断点续扫（缓存跳过）。
+- 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译 + 限速 + 断点续扫（缓存跳过）。
 - 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；纯 ASCII 按目标语言决定。
   翻译后复检：结果已是目标语言且与原文不同才写回（防循环主防线）。
 - 写回仅 title/details 字段（sceneUpdate / galleryUpdate），code（番号）字段绝不写。
@@ -913,7 +913,7 @@ def scan_all(payload):
             break
     log("scan_all: %d scenes need translation (page %d, total %s)" % (len(needed), page - 1, total))
 
-    # 2) 攒批 + 并发翻译
+    # 2) 按 batchSize 分组并发翻译
     # 批量合并翻译按 batchSize 分组提交（每组一次 API 调用）；并发线程共享令牌桶限速
     ok = 0
     failed = 0

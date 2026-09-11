@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.5.0";
+  var PLUGIN_VERSION = "2.5.1";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -230,7 +230,7 @@
     return fetchMapFile();
   }
 
-  function fetchMapFile() {
+  async function fetchMapFile() {
     var lang = (_intlLocale || "").replace("-", "_");
     var cands = [];
     // 优先级：用户自定义（语言）→ 用户自定义（通用）→ 发行版（语言）→ 发行版默认
@@ -240,25 +240,21 @@
     cands.push(MAP_BASE + "tag_merge_map.json");
 
     var i = 0;
-    function attempt() {
+    async function attempt() {
       if (i >= cands.length) throw new Error("HTTP 404 (no mapping file)");
       var url = cands[i++];
-      return fetch(url + "?t=" + Date.now(), { cache: "no-store" })
-        .then(function (r) {
-          if (r.status === 404) return attempt();  // 该候选不存在 → 下一优先文件
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.text();
-        })
-        .then(function (text) {
-          // JSON.parse 后的对象遍历（for...in / Object.keys）会把整数键（如 "69"）
-          // 强制前置、无视文件顺序 — 从响应文本提取顶层键序传给 parseMapObject
-          var order = [];
-          var re = /^  "((?:[^"\\]|\\.)+)":/gm;
-          var m;
-          while ((m = re.exec(text)) !== null) order.push(m[1]);
-          var parsed = parseMapObject(JSON.parse(text), order);
-          return { list: parsed.list, names: parsed.names, meta: parsed.meta, source: url };
-        });
+      var r = await fetch(url + "?t=" + Date.now(), { cache: "no-store" });
+      if (r.status === 404) return attempt();  // 该候选不存在 → 下一优先文件（await 透传，不经解析）
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var text = await r.text();
+      // JSON.parse 后的对象遍历（for...in / Object.keys）会把整数键（如 "69"）
+      // 强制前置、无视文件顺序 — 从响应文本提取顶层键序传给 parseMapObject
+      var order = [];
+      var re = /^  "((?:[^"\\]|\\.)+)":/gm;
+      var m;
+      while ((m = re.exec(text)) !== null) order.push(m[1]);
+      var parsed = parseMapObject(JSON.parse(text), order);
+      return { list: parsed.list, names: parsed.names, meta: parsed.meta, source: url };
     }
     return attempt();
   }

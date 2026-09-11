@@ -1,6 +1,6 @@
 name: Scene Translate Auto
 description: Auto-translate scene title & details to the target language on scene create/update (hook), plus a manual full-scan task for existing scenes. Python backend only, no UI injection. Reuses translation engines from Scene Translate.
-version: 1.0.2
+version: 1.1.0
 url: https://discourse.stashapp.cc/t/scene-translate-auto/16281
 errLog: info
 exec:
@@ -31,3 +31,7 @@ settings:
     displayName: "全量扫描并发 / Scan-all concurrency"
     description: "并发翻译线程数；docker/低功耗设备建议 2-3，默认 3 / concurrent translate threads; 2-3 recommended on docker/low-power, default 3"
     type: STRING
+  gallerySync:
+    displayName: "同步翻译关联图库 / Translate linked galleries"
+    description: "翻译场景时顺带翻译其关联图库的标题/简介（图库按自身语言判断），默认开 / also translate linked galleries' title/details with the scene (judged by the gallery's own language), default on"
+    type: BOOLEAN

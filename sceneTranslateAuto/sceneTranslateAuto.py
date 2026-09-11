@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.0.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.1.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
@@ -10,7 +10,8 @@ Scene Translate Auto v1.0.2: 自动翻译场景标题/简介为目标语言（sc
   翻译后复检：结果已是目标语言且与原文不同才写回（防循环主防线）。
 - 写回仅 title/details 字段（sceneUpdate / galleryUpdate），code（番号）字段绝不写。
 - 图库同步：worker 处理场景时顺带翻译其关联 galleries 的 title/details（按图库自身语言判断，
-  已译/手动编辑过的图库不碰；galleryUpdate 写回不触发本插件 hook，无循环）。
+  已译/手动编辑过的图库不碰；galleryUpdate 写回不触发本插件 hook，无循环）。由 Stash 设置页
+  gallerySync 开关控制（默认开）。
 - 标准库 only。引擎密钥与限速等参数在插件目录 config.json；引擎/语言/并发在 Stash 插件页。
 """
 
@@ -57,6 +58,7 @@ DEFAULTS = {
     "deeplBaseUrl": "",
     "rateLimits": {"google_free": 3, "google_api": 3, "microsoft": 2, "baidu": 1, "openai": 2, "deepl": 2},
     "batchSize": 10,
+    "gallerySync": True,
     "codePattern": r"[A-Za-z]{2,10}[-_ ]?\d{2,6}",
     "minLength": 4,
     "cacheHours": 24,
@@ -141,7 +143,7 @@ def merged_settings(stash_cfg):
                     if src in blk and blk[src] not in (None, ""):
                         s[dst] = blk[src]
     if stash_cfg:
-        for k in ("translateTool", "targetLanguage", "scanAllConcurrency"):
+        for k in ("translateTool", "targetLanguage", "scanAllConcurrency", "gallerySync"):
             if k in stash_cfg and stash_cfg[k] not in (None, ""):
                 s[k] = stash_cfg[k]
     return s
@@ -727,19 +729,20 @@ def process_task(conn, sid, settings, limiter):
     if updates:
         log("scene %s translated: %s" % (sid, ",".join(updates.keys())))
     g_ok = 0
-    for g in scene.get("galleries") or []:
-        gid = g.get("id")
-        if not gid:
-            continue
-        try:
-            gu = translate_entity(gql, "gallery", gid, g.get("title"), g.get("details"),
-                                  settings, cache, limiter)
-            if gu:
-                g_ok += 1
-                log("gallery %s translated: %s" % (gid, ",".join(gu.keys())))
-        except Exception as e:
-            log("gallery %s error: %s" % (gid, e))
-            log_dead("g:%s" % gid, e)
+    if settings.get("gallerySync"):
+        for g in scene.get("galleries") or []:
+            gid = g.get("id")
+            if not gid:
+                continue
+            try:
+                gu = translate_entity(gql, "gallery", gid, g.get("title"), g.get("details"),
+                                      settings, cache, limiter)
+                if gu:
+                    g_ok += 1
+                    log("gallery %s translated: %s" % (gid, ",".join(gu.keys())))
+            except Exception as e:
+                log("gallery %s error: %s" % (gid, e))
+                log_dead("g:%s" % gid, e)
     if updates or g_ok:
         save_cache(cache)
     if not updates and not g_ok:
@@ -830,12 +833,13 @@ def handle_hook(payload):
     need = needs_translation(title, target, code_pat, min_len) or \
         needs_translation(details, target, code_pat, min_len)
     if not need:
-        # 场景无需翻译时仍检查关联图库（场景已译但图库日文 → 入队补齐）
-        for g in scene.get("galleries") or []:
-            if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or \
-               needs_translation((g.get("details") or "").strip(), target, code_pat, min_len):
-                need = True
-                break
+        # 场景无需翻译时仍检查关联图库（场景已译但图库日文 → 入队补齐）；gallerySync 关闭时跳过
+        if settings.get("gallerySync"):
+            for g in scene.get("galleries") or []:
+                if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or \
+                   needs_translation((g.get("details") or "").strip(), target, code_pat, min_len):
+                    need = True
+                    break
     if not need:
         print(json.dumps({"output": "skip (already in target language or nothing to translate)"}))
         return
@@ -893,7 +897,8 @@ def scan_all(payload):
             sid = str(sc.get("id"))
             title = (sc.get("title") or "").strip()
             details = (sc.get("details") or "").strip()
-            galleries = [g for g in (sc.get("galleries") or []) if g and g.get("id")]
+            galleries = [g for g in (sc.get("galleries") or []) if g and g.get("id")] \
+                if settings.get("gallerySync") else []
             gal_need = [g for g in galleries
                         if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or
                            needs_translation((g.get("details") or "").strip(), target, code_pat, min_len)]

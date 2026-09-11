@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.0.2：README/config 修正 batchSize 语义（并发分组，非请求合并数）
+> v1.1.0：新增「同步翻译关联图库」开关（Stash 设置页，默认开）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
@@ -27,6 +27,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 | 翻译引擎 / Engine | STRING | `google_free` | `google_free`（免密钥）/ `google_api` / `microsoft` / `baidu` / `openai` / `deepl` |
 | 目标语言 / Language | STRING | `zh-CN` | `zh-CN` / `zh-TW` / `en` / `ja` / `ko` 等 |
 | 全量扫描并发 / Scan-all concurrency | STRING | `3` | 存量批量翻译线程数；docker/低功耗设备建议 2-3 |
+| 同步翻译关联图库 / Translate linked galleries | BOOLEAN | 开 | 翻译场景时顺带翻译其关联图库的标题/简介（图库按自身语言判断） |
 
 ### config.json（插件目录，大部分配置）
 
@@ -45,8 +46,8 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 入口 | 触发 | 行为 |
 |---|---|---|
-| 钩子 `Scene.Create.Post` / `Scene.Update.Post` | 场景创建/更新 | 语言预检（毫秒级，无网络）→ 需翻译则写入 pending 队列并 spawn 单例后台 worker → worker 翻译场景并写回，**顺带翻译关联图库**（hook 立即返回，不阻塞 Stash） |
-| 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 分组并发 + 限速 → 批量写回（含关联图库；缓存跳过已翻译，可中断重跑） |
+| 钩子 `Scene.Create.Post` / `Scene.Update.Post` | 场景创建/更新 | 语言预检（毫秒级，无网络）→ 需翻译则写入 pending 队列并 spawn 单例后台 worker → worker 翻译场景并写回，**顺带翻译关联图库（按「同步翻译关联图库」开关）**（hook 立即返回，不阻塞 Stash） |
+| 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 分组并发 + 限速 → 批量写回（关联图库按开关同步；缓存跳过已翻译，可中断重跑） |
 
 ## 核心机制
 
@@ -65,7 +66,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 - 只写 `title` / `details`，**`code`（番号）字段绝不写**；标题内番号 token 翻译前提取、翻译后原样还原（占位符丢失时自动补回标题开头）
 - 翻译结果**已是目标语言**且**与原文不同**才写回（引擎原样返回/半吊子翻译不写）
-- **图库同步**：worker 按**图库自身语言**判断，只补翻译未到目标语言的图库——已翻译/手动编辑过的图库不动（不强制与场景标题一致）；写回走 `galleryUpdate`，不订阅 Gallery 事件，无循环
+- **图库同步**：worker 按**图库自身语言**判断，只补翻译未到目标语言的图库——已翻译/手动编辑过的图库不动（不强制与场景标题一致）；写回走 `galleryUpdate`，不订阅 Gallery 事件，无循环；可在插件设置页关闭（默认开）
 - 防循环：写回后再次触发 `Scene.Update.Post` → 语言复检（`is_target_language`）拦截，闭环终止
 - 后台 worker 单例（pid 锁），同时只跑一个消费进程，低功耗设备友好
 
@@ -75,7 +76,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 文件 | 说明 |
 |---|---|
-| `sceneTranslateAuto.yml` | Stash 插件定义（hooks + 任务 + 3 项设置） |
+| `sceneTranslateAuto.yml` | Stash 插件定义（hooks + 任务 + 4 项设置） |
 | `sceneTranslateAuto.py` | 后台逻辑：语言预检、六引擎多段翻译、限速器、缓存、pending 队列与单例 worker |
 | `config.json` | 引擎密钥 + 限速/批量合并/番号正则/长度阈值/缓存参数 |
 
@@ -84,6 +85,6 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 - 插件会**改写场景的标题与简介**；运行全量扫描前建议先做一次库备份（Stash「设置 → 任务 → 备份」）
 - 禁用插件（设置 → 插件 → 关闭）即关闭自动翻译，无需其他开关
 - 与 sceneGallerySync 同挂 `Scene.Update.Post`：两者 hook 均只做轻量预检/入队（毫秒级），互相不阻塞；本插件不订阅 Gallery/Image 事件
-- **图库翻译范围**：仅翻译场景**关联的**图库；由 sceneGallerySync 等创建的图库若在场景翻译前创建（快照了源语言元数据），会在下次场景更新或全量任务时被补齐翻译
+- **图库翻译范围**：仅翻译场景**关联的**图库；由 sceneGallerySync 等创建的图库若在场景翻译前创建（快照了源语言元数据），会在下次场景更新或全量任务时被补齐翻译；关闭「同步翻译关联图库」后不再翻译任何图库
 - 全量任务耗时长（受引擎 QPS 限制，1 万条 × baidu 1 QPS ≈ 数小时），可在任务运行中或中断后重跑，缓存自动跳过已处理场景
 - 付费引擎（baidu / microsoft / deepl / openai）按字符/请求计费，批量任务前请确认配额

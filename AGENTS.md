@@ -17,7 +17,7 @@
 |---|---|
 | sceneTranslate | `translateProxy.py` 头部 banner（`Scene Translate Proxy vX.Y.Z`） |
 | JavStashLinker / performerMerge / tagMerge | 对应 `.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示） |
-| studioToolsAuto / tagMergeAuto | 对应 `.py` 头部 docstring banner（`... Auto vX.Y.Z`） |
+| studioToolsAuto / tagMergeAuto / sceneTranslateAuto | 对应 `.py` 头部 docstring banner（`... Auto vX.Y.Z`） |
 
 ### 流程
 

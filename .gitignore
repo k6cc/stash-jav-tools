@@ -6,6 +6,13 @@ __pycache__/
 *_backend.log
 *_auto.log
 
+# 用户自定义映射表（导出生成，升级插件保留；不随仓库发布，避免被打包进 zip）
+tag_merge_map.custom.json
+tag_merge_map_*.custom.json
+
+# 插件运行时状态目录（pending 队列 / 缓存 / 进度 / dead-letter）
+auto_state/
+
 # 备份/临时文件
 *_original.js
 *_v*.js

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.0.1: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.1.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -47,6 +47,16 @@ def make_gql(conn):
         return j["data"]
     return gql
 
+def stash_language(gql):
+    """读取 Stash 全局界面语言（configuration.interface.language），失败返回空串。"""
+    try:
+        r = gql("query { configuration { interface { language } } }")
+        conf = (r or {}).get("configuration") or {}
+        iface = conf.get("interface") or {}
+        return (iface.get("language") or "").replace("-", "_")
+    except Exception:
+        return ""
+
 Q_TAG = "query($id: ID!){ findTag(id:$id){ id name aliases } }"
 Q_TAGS = "query { findTags(filter:{per_page:-1}){ tags{ id name } } }"
 Q_TAG_BY_NAME = ("query($n:String!){ findTags(tag_filter:{name:{value:$n,modifier:EQUALS}},"
@@ -59,33 +69,50 @@ M_TAG_UPDATE = "mutation($i: TagUpdateInput!){ tagUpdate(input:$i){ id } }"
 def nfc(s): return unicodedata.normalize("NFKC", (s or "").strip())
 def norm(s): return re.sub(SEP_RE, "", nfc(s).lower())
 
-def load_map():
-    """解析 tag_merge_map.json，返回 (items, error)。
+def map_candidates(lang):
+    """映射表优先级链：<lang>.custom → custom → <lang> → 默认（存在即定，不存在顺延）。
+    任何用户自定义（custom）优先于任何发行版。"""
+    base = os.path.join(os.path.dirname(MAP_FILE), "tag_merge_map")
+    cands = []
+    if lang:
+        cands.append("%s_%s.custom.json" % (base, lang))
+    cands.append(base + ".custom.json")
+    if lang:
+        cands.append("%s_%s.json" % (base, lang))
+    cands.append(base + ".json")
+    return cands
 
-    error 取值：None=正常；"load_failed"=文件不存在或 JSON 解析失败；
-    "bad_root"=根不是 JSON 对象；"empty"=无有效映射组（空表或全为 _ 键）。
-    空 sources 组（如 {"t": []}）不构成有效映射，过滤掉并计入空表判定。
+def load_map(lang=None):
+    """按优先级链解析映射表，返回 (items, error, path)。
+
+    error：None=正常；"load_failed"=首个存在的候选解析失败（不静默回退）；
+    "bad_root"=根非 JSON 对象；"empty"=无有效映射组。
+    所有候选都不存在 → ("load_failed", None)。空 sources 组不构成有效映射。
     """
-    try:
-        with open(MAP_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        log("load_map error: %s" % e)
-        return [], "load_failed"
-    if not isinstance(data, dict):
-        log("load_map error: root is not a JSON object")
-        return [], "bad_root"
-    items = []
-    for target, sources in data.items():
-        if not isinstance(target, str) or not target or target.startswith("_"):
+    for p in map_candidates(lang):
+        try:
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
             continue
-        if isinstance(sources, list):
-            cleaned = [s for s in sources if isinstance(s, str) and s.strip()]
-            if cleaned:
-                items.append({"target": target, "sources": cleaned})
-    if not items:
-        return [], "empty"
-    return items, None
+        except Exception as e:
+            log("load_map error (%s): %s" % (os.path.basename(p), e))
+            return [], "load_failed", p
+        if not isinstance(data, dict):
+            log("load_map error (%s): root is not a JSON object" % os.path.basename(p))
+            return [], "bad_root", p
+        items = []
+        for target, sources in data.items():
+            if not isinstance(target, str) or not target or target.startswith("_"):
+                continue
+            if isinstance(sources, list):
+                cleaned = [s for s in sources if isinstance(s, str) and s.strip()]
+                if cleaned:
+                    items.append({"target": target, "sources": cleaned})
+        if not items:
+            return [], "empty", p
+        return items, None, p
+    return [], "load_failed", None
 
 # ---------- 分组（与 tagMerge.js buildGroups 解析阶段一致） ----------
 def build_groups(tags, mapping):
@@ -173,7 +200,7 @@ def run_group(gql, g, consumed):
             "sources": [s["name"] for s in sources]}
 
 # ---------- 钩子：Tag.Create.Post ----------
-def handle_hook(gql):
+def handle_hook(gql, lang):
     payload = _PAYLOAD
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     tid = ctx.get("id")
@@ -185,7 +212,7 @@ def handle_hook(gql):
     if not t or not t.get("name"): return
     name = t["name"]
 
-    mapping, map_err = load_map()
+    mapping, map_err, _map_path = load_map(lang)
     if map_err:
         log("hook skip: mapping %s (new tag '%s' not merged)" % (map_err, name))
         print(json.dumps({"output": "skip (mapping %s)" % map_err}))
@@ -234,10 +261,10 @@ def handle_hook(gql):
         print(json.dumps({"output": "merge error", "error": str(e)}))
 
 # ---------- 任务：全量扫描合并 ----------
-def scan_all(gql):
+def scan_all(gql, lang):
     data = gql(Q_TAGS, {})
     tags = ((data or {}).get("findTags") or {}).get("tags") or []
-    mapping, map_err = load_map()
+    mapping, map_err, _map_path = load_map(lang)
     if map_err:
         return {"groups": 0, "merged": 0, "skipped": len(tags), "note": "mapping %s" % map_err}
     groups = build_groups(tags, mapping)
@@ -287,9 +314,10 @@ def main():
     args = _PAYLOAD.get("args") or {}
     mode = args.get("mode") or _PAYLOAD.get("mode") or "hook"
     gql = make_gql(conn)
+    lang = stash_language(gql)
     if mode == "scan_all":
         try:
-            r = scan_all(gql)
+            r = scan_all(gql, lang)
             log("scan_all done: %s" % r)
             print(json.dumps({"output": r}))
         except Exception as e:
@@ -297,7 +325,7 @@ def main():
             print(json.dumps({"output": "error", "error": str(e)}))
     else:
         try:
-            handle_hook(gql)
+            handle_hook(gql, lang)
         except Exception as e:
             log("hook error: %s" % e)
             print(json.dumps({"output": "hook error", "error": str(e)}))

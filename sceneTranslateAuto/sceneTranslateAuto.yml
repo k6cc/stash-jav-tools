@@ -1,0 +1,33 @@
+name: Scene Translate Auto
+description: Auto-translate scene title & details to the target language on scene create/update (hook), plus a manual full-scan task for existing scenes. Python backend only, no UI injection. Reuses translation engines from Scene Translate.
+version: 1.0.0
+url: https://discourse.stashapp.cc/t/scene-translate-auto/XXXX
+errLog: info
+exec:
+  - python
+  - "{pluginDir}/sceneTranslateAuto.py"
+interface: raw
+hooks:
+  - name: scene_translate_auto_hook
+    description: Enqueue a scene for title/details translation when it is created or updated (skips scenes already in the target language)
+    triggeredBy:
+      - Scene.Create.Post
+      - Scene.Update.Post
+tasks:
+  - name: "Full Scan & Translate"
+    description: "Translate all scenes whose title/details are not in the target language (for pre-existing scenes; respects rate limits and batch merge)"
+    defaultArgs:
+      mode: scan_all
+settings:
+  translateTool:
+    displayName: "翻译引擎 / Engine"
+    description: "google_free / google_api / microsoft / baidu / openai / deepl。默认 google_free（免密钥）；其余需在 config.json 配置 API 密钥 / default google_free (no key required); other engines need API key in config.json"
+    type: STRING
+  targetLanguage:
+    displayName: "目标语言 / Language"
+    description: "如 zh-CN zh-TW en ja ko，默认 zh-CN / e.g. zh-CN zh-TW en ja ko, default zh-CN"
+    type: STRING
+  scanAllConcurrency:
+    displayName: "全量扫描并发 / Scan-all concurrency"
+    description: "并发翻译线程数；docker/低功耗设备建议 2-3，默认 3 / concurrent translate threads; 2-3 recommended on docker/low-power, default 3"
+    type: STRING

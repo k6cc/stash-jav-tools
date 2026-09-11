@@ -9,7 +9,7 @@
 - 根 `README.md` 版本表（含全部八插件，发版必同步）
 - 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**；sceneGallerySync 例外：头部无 note，在文末「## 变更历史」新增 `### X.Y.Z` 条目
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
-- **tagMergeAuto 的 `tag_merge_map.json` 与 tagMerge 保持同源同步**（复制自 tagMerge 目录，任一侧更新后必须同步另一份）
+- **tagMergeAuto 的 `tag_merge_map.json` 与 tagMerge 保持同源同步**（复制自 tagMerge 目录，任一侧更新后必须同步另一份）；映射表读取按优先级链（`tag_merge_map_<lang>.custom.json` → `tag_merge_map.custom.json` → `tag_merge_map_<lang>.json` → `tag_merge_map.json`），用户自定义文件（`tag_merge_map*.custom.json`）是本地产物，不入库、不参与同步、不打进发布 zip
 
 代码内版本位置：
 

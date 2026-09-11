@@ -11,9 +11,10 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [studioTools](./studioTools/) | 1.5.3 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash |
 | [JavStashLinker](./JavStashLinker/) | 1.5.8 | Python + UI | 批量匹配 JAVStash 演员 ID：场景反推 + 名称搜索 + 手动搜索（证据评级，自动补图补信息） |
 | [performerMerge](./performerMerge/) | 1.6.3 | 纯 UI | 重名演员检测与合并（证据分级连组 + 树级冲突检查），附带短名清理与别名修复 |
-| [tagMerge](./tagMerge/) | 2.4.3 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出） |
+| [tagMerge](./tagMerge/) | 2.5.0 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出） |
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
-| [tagMergeAuto](./tagMergeAuto/) | 1.0.1 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
+| [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
+| [sceneTranslateAuto](./sceneTranslateAuto/) | 1.0.0 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
 
 ## 安装
 
@@ -46,6 +47,7 @@ plugins/
   tagMerge/            # 解压 tagMerge-vX.Y.Z.zip
   studioToolsAuto/     # 解压 studioToolsAuto-vX.Y.Z.zip
   tagMergeAuto/        # 解压 tagMergeAuto-vX.Y.Z.zip
+  sceneTranslateAuto/  # 解压 sceneTranslateAuto-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -60,10 +62,11 @@ plugins/
 | tagMerge | 不需要 | 不需要 | 不需要（需 Stash v0.30+） |
 | studioToolsAuto | 需要 | 不需要 | 需要（经「设置 → 元数据提供者」配置 Stash-box 实例，插件自动复用） |
 | tagMergeAuto | 需要 | 不需要 | 不需要 |
+| sceneTranslateAuto | 需要 | 不需要 | 不需要（需容器/宿主机可访问翻译 API 外网） |
 
 ### Docker 部署
 
-Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，studioToolsAuto / tagMergeAuto 是纯后台插件（标准库 only），Docker 和裸机均可直接使用。
+Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，studioToolsAuto / tagMergeAuto / sceneTranslateAuto 是纯后台插件（标准库 only），Docker 和裸机均可直接使用。sceneTranslateAuto 无代理无端口，Docker 无需映射额外端口（仅需容器可访问翻译 API 外网）。
 
 ### Windows / macOS 裸机部署（仅 Python 插件）
 
@@ -91,6 +94,7 @@ pip3 install requests
 | tagMerge | 纯 UI | 导航栏按钮 |
 | studioToolsAuto | 纯后台 | Studio.Create.Post 钩子 + 手动任务 |
 | tagMergeAuto | 纯后台 | Tag.Create.Post 钩子 + 手动任务 |
+| sceneTranslateAuto | 纯后台 | Scene.Create.Post / Scene.Update.Post 钩子 + 手动任务 |
 
 各插件详细使用说明见对应目录下的 `README.md`。
 

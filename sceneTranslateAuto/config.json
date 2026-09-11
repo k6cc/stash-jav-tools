@@ -1,0 +1,39 @@
+{
+  // ── 各引擎 API 密钥（按需填写，选用对应引擎时必填；支持 // 注释）──
+  // 引擎/目标语言/Hook 开关/全量扫描并发在 Stash 插件页设置，不写在此处
+  "googleApiKey": "",
+  "microsoftApiKey": "",
+  "microsoftRegion": "global",
+  "baiduAppId": "",
+  "baiduSecret": "",
+  "openaiApiKey": "",
+  "openaiModel": "gpt-4o-mini",
+  "openaiBaseUrl": "",
+  "deeplApiKey": "",
+  "deeplFreeApi": false,
+  "deeplBaseUrl": "",
+
+  // ── 引擎级限速（每秒最大翻译请求数）──
+  // 百度免费版 QPS=1；google_free 免费接口批量请求过高会 429
+  "rateLimits": {
+    "google_free": 3,
+    "google_api": 3,
+    "microsoft": 2,
+    "baidu": 1,
+    "openai": 2,
+    "deepl": 2
+  },
+
+  // ── 全量扫描批量合并：每次翻译请求合并的场景数（0 = 不合并，逐条提交）──
+  // 仅 scan_all 任务使用；hook 路径始终单场景 title+details 合并一个请求
+  "batchSize": 10,
+
+  // ── 番号正则：标题全文匹配视为纯番号（跳过翻译）；部分匹配时翻译后按原样还原 ──
+  "codePattern": "[A-Za-z]{2,10}[-_ ]?\\d{2,6}",
+
+  // ── 最小翻译长度：短于该字符数的标题/简介跳过（防番号/缩写/代词误翻）──
+  "minLength": 4,
+
+  // ── 翻译缓存有效期（小时）：同一场景内容一致且在有效期内不重复翻译 ──
+  "cacheHours": 24
+}

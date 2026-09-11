@@ -1,8 +1,8 @@
 # tagMergeAuto
 
-> v1.0.1：映射表异常状态补强 — 不存在/解析失败/空表在钩子路径不再静默（写日志并输出 skip），任务输出 note 区分故障类型（load_failed / bad_root / empty）
+> v1.1.0：映射表四层优先级链（`<界面语言>.custom.json` → `custom.json` → `<界面语言>.json` → `tag_merge_map.json`）— 用户自定义文件升级插件不覆盖；`<界面语言>` 取 Stash 全局界面语言
 
-Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：读取插件目录的映射库 `tag_merge_map.json`，把名称相似的 tags（英文/日文/中文变体）自动合并为规范中文 tag。
+Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：按优先级链读取插件目录的映射库（`tag_merge_map_<界面语言>.custom.json` → `tag_merge_map.custom.json` → `tag_merge_map_<界面语言>.json` → `tag_merge_map.json`），把名称相似的 tags（英文/日文/中文变体）自动合并为规范中文 tag。
 
 与 UI 版 [tagMerge](../tagMerge/README.md) 使用**同一套解析与合并逻辑**（归一化精确匹配、防链式、幂等、源名补写进目标别名），但触发方式完全自动化：
 
@@ -20,9 +20,18 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 2. 重启 Stash，在「设置 → 插件」中确认 Tag Merge Auto 已启用
 3. 任务列表页出现「Full Scan & Merge」任务即安装成功；新建任意 tag 即可验证钩子生效
 
-## 映射表同步（重要）
+## 映射表
 
-`tagMergeAuto/tag_merge_map.json` 是 UI 版 `tagMerge/tag_merge_map.json` 的副本。**编辑任一份后需同步另一份**（两者读的都是各自插件目录下的同名文件）。UI 版面板编辑导出后，请用导出的文件替换本插件目录下的同名文件，或直接复制 UI 版插件的映射文件过来。发布时以 UI 版为权威源，同步本目录。
+默认映射表 `tagMergeAuto/tag_merge_map.json` 是 UI 版 `tagMerge/tag_merge_map.json` 的副本，**编辑任一份后需同步另一份**（发布时以 UI 版为权威源）。读取优先级（存在即用，前面的不存在才顺延）：
+
+| 优先级 | 文件 | 角色 |
+|---|---|---|
+| 1 | `tag_merge_map_<界面语言>.custom.json` | 用户自定义（导出生成，升级插件不覆盖） |
+| 2 | `tag_merge_map.custom.json` | 用户自定义（导出生成，升级插件不覆盖） |
+| 3 | `tag_merge_map_<界面语言>.json` | 发行版语言映射（预留，暂不提供） |
+| 4 | `tag_merge_map.json` | 发行版默认（升级插件会覆盖） |
+
+`<界面语言>` 取 Stash 全局语言设置（Settings → Interface → Language，`zh-TW` → `zh_TW`）。自定义映射表由 UI 版「导出文件」生成后放入本插件目录即可，无需替换默认文件。
 
 ## 触发方式与行为
 

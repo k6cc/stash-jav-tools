@@ -12,8 +12,8 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.4.3";
-  var MAP_URL = "/plugin/tagMerge/assets/tag_merge_map.json";
+  var PLUGIN_VERSION = "2.5.0";
+  var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -223,27 +223,44 @@
     return { list: list, names: names, meta: meta, ignored: ignored };
   }
 
-  // 加载映射：读取插件目录的 tag_merge_map.json（经 /plugin/ 资源路由，绕过缓存）
+  // 加载映射：按优先级链读取插件目录的映射表（经 /plugin/ 资源路由，绕过缓存）。
+  // tag_merge_map_<lang>.custom.json → tag_merge_map.custom.json
+  // → tag_merge_map_<lang>.json → tag_merge_map.json（404 顺延下一候选，其余错误中断）
   function loadMapping() {
     return fetchMapFile();
   }
 
   function fetchMapFile() {
-    return fetch(MAP_URL + "?t=" + Date.now(), { cache: "no-store" })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.text();
-      })
-      .then(function (text) {
-        // JSON.parse 后的对象遍历（for...in / Object.keys）会把整数键（如 "69"）
-        // 强制前置、无视文件顺序 — 从响应文本提取顶层键序传给 parseMapObject
-        var order = [];
-        var re = /^  "((?:[^"\\]|\\.)+)":/gm;
-        var m;
-        while ((m = re.exec(text)) !== null) order.push(m[1]);
-        var parsed = parseMapObject(JSON.parse(text), order);
-        return { list: parsed.list, names: parsed.names, meta: parsed.meta };
-      });
+    var lang = (_intlLocale || "").replace("-", "_");
+    var cands = [];
+    // 优先级：用户自定义（语言）→ 用户自定义（通用）→ 发行版（语言）→ 发行版默认
+    if (lang) cands.push(MAP_BASE + "tag_merge_map_" + lang + ".custom.json");
+    cands.push(MAP_BASE + "tag_merge_map.custom.json");
+    if (lang) cands.push(MAP_BASE + "tag_merge_map_" + lang + ".json");
+    cands.push(MAP_BASE + "tag_merge_map.json");
+
+    var i = 0;
+    function attempt() {
+      if (i >= cands.length) throw new Error("HTTP 404 (no mapping file)");
+      var url = cands[i++];
+      return fetch(url + "?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) {
+          if (r.status === 404) return attempt();  // 该候选不存在 → 下一优先文件
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.text();
+        })
+        .then(function (text) {
+          // JSON.parse 后的对象遍历（for...in / Object.keys）会把整数键（如 "69"）
+          // 强制前置、无视文件顺序 — 从响应文本提取顶层键序传给 parseMapObject
+          var order = [];
+          var re = /^  "((?:[^"\\]|\\.)+)":/gm;
+          var m;
+          while ((m = re.exec(text)) !== null) order.push(m[1]);
+          var parsed = parseMapObject(JSON.parse(text), order);
+          return { list: parsed.list, names: parsed.names, meta: parsed.meta, source: url };
+        });
+    }
+    return attempt();
   }
 
   // ==================== 扫描 ====================
@@ -274,9 +291,9 @@
     var activeMap = map.list.filter(function (m) { return !m.ignored; });
     _state.mapping = activeMap;
     _state.mapStats = { groups: activeMap.length, names: map.names };
-    addLog(tc("映射库 " + activeMap.length + " 组 / " + map.names + " 个源名（tag_merge_map.json）"
+    addLog(tc("映射库 " + activeMap.length + " 组 / " + map.names + " 个源名（" + map.source + "）"
         + (map.ignored ? "，已忽略 " + map.ignored + " 组" : ""),
-      activeMap.length + " mapping groups / " + map.names + " source names (tag_merge_map.json)"
+      activeMap.length + " mapping groups / " + map.names + " source names (" + map.source + ")"
         + (map.ignored ? ", " + map.ignored + " ignored" : "")));
     render();
 
@@ -999,10 +1016,10 @@
       return wrap;
     }
 
-    // 黄框提示：数据文件在服务器端，需导出后手动替换
+    // 黄框提示：数据文件在服务器端，导出后放入插件目录即优先加载
     wrap.appendChild(el("div", "tgm-warn",
-      tc("编辑后点击「导出文件」下载 tag_merge_map.json，手动替换插件目录中的同名文件，替换后重新扫描生效",
-        "After editing, click Export File to download tag_merge_map.json, manually replace the file in the plugin folder, then rescan")));
+      tc("编辑后点击「导出文件」下载自定义映射表，放入插件目录即优先加载——升级插件不覆盖",
+        "After editing, click Export File to download the custom mapping — drop it into the plugin folder; it loads first and survives plugin updates")));
 
     // 工具栏：左搜索框，右（添加 + 导出文件）
     var searchInput = el("input", "tgm-search-input", null, {
@@ -1552,7 +1569,8 @@
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = "tag_merge_map.json";
+    var lang = (_intlLocale || "").replace("-", "_");
+    a.download = "tag_merge_map" + (lang ? "_" + lang : "") + ".custom.json";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1562,10 +1580,10 @@
     ed.dirty = false;
     ed.saveMsg = { ok: true, text: tc("已导出 " + count + " 组映射"
         + (ignoredCnt ? "（含 " + ignoredCnt + " 组已忽略）" : "")
-        + " — 请替换插件目录中的 tag_merge_map.json",
+        + " — 放入插件目录即优先加载，升级插件不覆盖",
       "Exported " + count + " mappings"
         + (ignoredCnt ? " (" + ignoredCnt + " ignored)" : "")
-        + " — replace tag_merge_map.json in the plugin folder") };
+        + " — drop into the plugin folder; it loads first and survives updates") };
     addLog(tc("映射编辑器: 导出 " + count + " 组映射", "Mapping editor: exported " + count + " mappings"));
     render();
     setTimeout(function () {

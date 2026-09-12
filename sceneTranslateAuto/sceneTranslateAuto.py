@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.1.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.2.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
 - 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译 + 限速 + 断点续扫（缓存跳过）。
-- 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；纯 ASCII 按目标语言决定。
+- 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；含谚文判韩语；
+  含西里尔文判俄语；含阿拉伯文判阿拉伯语；含拉丁扩展变音符判拉丁语族（法/德/西/葡/意共用）；
+  纯 ASCII 判英文；其余 other。目标语言支持 zh-CN/zh-TW/en/ja/ko/ru/ar/fr/de/es/pt/it。
   翻译后复检：结果已是目标语言且与原文不同才写回（防循环主防线）。
 - 写回仅 title/details 字段（sceneUpdate / galleryUpdate），code（番号）字段绝不写。
 - 图库同步：worker 处理场景时顺带翻译其关联 galleries 的 title/details（按图库自身语言判断，
@@ -267,6 +269,15 @@ def classify(text, code_pattern):
         return "ja"
     if re.search(r"[\u4e00-\u9fff]", t):
         return "zh"
+    if re.search(r"[\uAC00-\uD7AF]", t):
+        return "ko"                    # 韩语：谚文音节（字符独立，零误判）
+    if re.search(r"[\u0400-\u04FF]", t):
+        return "ru"                    # 俄语：西里尔文（字符独立，零误判）
+    if re.search(r"[\u0600-\u06FF]", t):
+        return "ar"                    # 阿拉伯语
+    # 拉丁扩展变音符区（法/德/西/葡/意共用，无法区分彼此）
+    if re.search(r"[\u00C0-\u017F\u1E9E\u00BF\u00A1]", t):
+        return "latin_ext"
     letters = sum(1 for c in t if c.isascii() and c.isalpha())
     if letters and letters / len(t) > 0.5:
         return "en"
@@ -283,7 +294,7 @@ def needs_translation(text, target_lang, code_pattern, min_length):
         return False
     tl = (target_lang or "zh-CN").lower()
     if tl.startswith("zh"):
-        if cls in ("ja", "en", "other"):
+        if cls in ("ja", "en", "ko", "ru", "latin_ext", "ar", "other"):
             return True
         # 番号 + 汉字（无假名）：JAV 标题高频形态（如 ABC-123 美少女），视为日文需翻译
         if cls == "zh":
@@ -294,9 +305,18 @@ def needs_translation(text, target_lang, code_pattern, min_length):
                 pass
         return False
     if tl.startswith("en"):
-        return cls in ("ja", "zh", "other")
+        return cls in ("ja", "zh", "ko", "ru", "latin_ext", "ar", "other")
     if tl.startswith("ja"):
-        return cls in ("zh", "en", "other")
+        return cls in ("zh", "en", "ko", "ru", "latin_ext", "ar", "other")
+    if tl.startswith("ko"):
+        return cls in ("zh", "ja", "en", "ru", "latin_ext", "ar", "other")
+    if tl.startswith("ru"):
+        return cls in ("zh", "ja", "en", "ko", "latin_ext", "ar", "other")
+    if tl.startswith("ar"):
+        return cls in ("zh", "ja", "en", "ko", "ru", "latin_ext", "other")
+    # 拉丁扩展语族（法/德/西/葡/意）：含变音符视为已译（跳过）；纯 ASCII 英文/其他语种需翻译
+    if tl in ("fr", "de", "es", "pt", "it"):
+        return cls in ("zh", "ja", "ko", "ru", "ar", "en", "other")
     return True
 
 
@@ -313,6 +333,15 @@ def is_target_language(text, target_lang, code_pattern):
         return cls == "en"
     if tl.startswith("ja"):
         return cls == "ja"
+    if tl.startswith("ko"):
+        return cls == "ko"
+    if tl.startswith("ru"):
+        return cls == "ru"
+    if tl.startswith("ar"):
+        return cls == "ar"
+    # 拉丁扩展语族（法/德/西/葡/意）：含变音符即视为已是目标语言
+    if tl in ("fr", "de", "es", "pt", "it") and cls == "latin_ext":
+        return True
     return False
 
 

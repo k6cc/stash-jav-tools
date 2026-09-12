@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.1.0：新增「同步翻译关联图库」开关（Stash 设置页，默认开）
+> v1.2.0：新增多语言目标（ko/ru/ar + 拉丁语族 fr/de/es/pt/it，预检/复检完整支持）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
@@ -25,7 +25,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 | 设置 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | 翻译引擎 / Engine | STRING | `google_free` | `google_free`（免密钥）/ `google_api` / `microsoft` / `baidu` / `openai` / `deepl` |
-| 目标语言 / Language | STRING | `zh-CN` | `zh-CN` / `zh-TW` / `en` / `ja` / `ko` 等 |
+| 目标语言 / Language | STRING | `zh-CN` | `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `ru` / `ar` / `fr` / `de` / `es` / `pt` / `it` |
 | 全量扫描并发 / Scan-all concurrency | STRING | `3` | 存量批量翻译线程数；docker/低功耗设备建议 2-3 |
 | 同步翻译关联图库 / Translate linked galleries | BOOLEAN | 开 | 翻译场景时顺带翻译其关联图库的标题/简介（图库按自身语言判断） |
 
@@ -51,16 +51,22 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 ## 核心机制
 
-**语言判断**（预检，目标语言 zh-CN 示例；en/ja 等目标语言对称）：
+**语言判断**（预检，启发式无网络；目标语言 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`ru`/`ar`/`fr`/`de`/`es`/`pt`/`it`）：
 
-| 文本特征 | 判定 | 行为 |
-|---|---|---|
-| 全文匹配番号（如 `ABC-123`） | 标识符 | 跳过翻译 |
-| 含日文假名（`\u3040-\u30ff`） | 日文 | 翻译 |
-| 含 CJK 无假名 | 已是中文 | 跳过 |
-| 含 CJK 无假名 + 含番号（如 `ABC-123 美少女`） | JAV 日文标题 | 翻译 |
-| 纯 ASCII | 英文 | 目标 zh-CN 时翻译；目标 en 时跳过 |
-| 短于此 `minLength` | — | 跳过 |
+| 文本特征 | 判定 | 已译（跳过） | 需译 |
+|---|---|---|---|
+| 全文匹配番号 | 标识符 | 任意目标 | — |
+| 含日文假名 | `ja` | ja | 其余 |
+| 含 CJK 无假名 | `zh` | zh（含番号除外） | 其余 |
+| 含谚文 | `ko` | ko | 其余 |
+| 含西里尔文 | `ru` | ru | 其余 |
+| 含阿拉伯文 | `ar` | ar | 其余 |
+| 含拉丁扩展变音符（é à ñ ö ß 等） | `latin_ext` | fr/de/es/pt/it | 其余 |
+| 纯 ASCII | `en` | en | 其余 |
+| 其他 | `other` | — | 翻译 |
+| 短于此 `minLength` | — | — | 跳过 |
+
+拉丁语族（法/德/西/葡/意）共用变音符判定：目标为该族任一语言时含变音符即视为已译，不区分彼此（单向「源语→目标语」场景下可接受）；韩语/俄语/阿拉伯语字符独立、判定精确。
 
 **写回语义**：
 

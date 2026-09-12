@@ -1,6 +1,6 @@
 name: Scene Translate Auto
 description: Auto-translate scene title & details to the target language on scene create/update (hook), plus a manual full-scan task for existing scenes. Python backend only, no UI injection. Reuses translation engines from Scene Translate.
-version: 1.1.0
+version: 1.2.0
 url: https://discourse.stashapp.cc/t/scene-translate-auto/16281
 errLog: info
 exec:
@@ -25,7 +25,7 @@ settings:
     type: STRING
   targetLanguage:
     displayName: "目标语言 / Language"
-    description: "如 zh-CN zh-TW en ja ko，默认 zh-CN / e.g. zh-CN zh-TW en ja ko, default zh-CN"
+    description: "如 zh-CN zh-TW en ja ko ru ar fr de es pt it，默认 zh-CN / e.g. zh-CN zh-TW en ja ko ru ar fr de es pt it, default zh-CN"
     type: STRING
   scanAllConcurrency:
     displayName: "全量扫描并发 / Scan-all concurrency"

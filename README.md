@@ -14,7 +14,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [tagMerge](./tagMerge/) | 2.5.1 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出） |
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
 | [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
-| [sceneTranslateAuto](./sceneTranslateAuto/) | 1.1.0 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
+| [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.0 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
 
 ## 安装
 

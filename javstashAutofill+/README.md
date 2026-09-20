@@ -24,7 +24,7 @@
 ## 场景行为
 
 - **按 oshash 查 JAVStash**：新场景入库时，Stash 自动用文件指纹查 JAVStash，匹配上就写。
-- **番号校验**：oshash 命中多个候选时，只采用 code 与本地番号一致的候选（容忍 carib/1pondo 式后缀标注，如 `012012-920-carib`）；本地番号按 scene.code / 标题前缀 / 文件名顺序提取，支持：字母-数字（`ABC-123`、`ABCD00123`）、caribbeancom/1pondo 式数字开头（`051011-694`、`070313_620`）、FC2（`FC2-PPV-4484216`）、单字母-数字（`n0783`）。无可信候选则整体丢弃，防止错误指纹条目把 NFO/已命名场景改写成别的番号。
+- **番号校验**：oshash 命中多个候选时，只采用 code 与本地番号一致的候选（容忍 carib/1pondo 式后缀标注，如 `012012-920-carib`）；本地番号按 scene.code / 标题前缀 / 文件名顺序提取，支持：字母-数字（`ABC-123`、`ABCD00123`）、caribbeancom/1pondo 式数字开头（`051011-694`、`070313_620`）、FC2（`FC2-PPV-4484216`）、单字母-数字（`n0783`）。无可信候选则整体丢弃；仅当番号 fallback 查询完全无结果（javstash 库中确无此番号）时，才降级采纳 oshash 第一个候选并在日志打 WARN 记录本地番号与候选番号，便于事后审计。
 - **番号 fallback**：oshash 未命中（或被校验丢弃）时，用本地番号作 query 再搜一次，返回 code 同样须与本地番号一致。
 - **NFO 场景**：视频旁存在同名 `.nfo` 时视为 NFO 管理，title/code/details/director/date 一律不写（交给 NFO 插件，避免 Scene.Create.Post 竞态抢先写入错误标题后 NFO 不覆盖）；stash_id / studio / performers / tags / urls / groups / 封面照常补。
 - **标量空才填**：title / code / details / director / date。

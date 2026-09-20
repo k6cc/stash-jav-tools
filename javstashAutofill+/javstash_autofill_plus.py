@@ -322,6 +322,7 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
         log(f"scene {sid}: scrape error: {e}")
         return []
     code = extract_code(scene or {})
+    oshash_hits = hits   # remember raw oshash candidates for the last-resort fallback
     if hits:
         # oshash can return several candidates (javstash fingerprint entries are
         # not always clean). When a local code is known, only trust candidates
@@ -360,6 +361,13 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
         except Exception as e:
             log(f"scene {sid}: code fallback error: {e}")
             return []
+        # fallback found nothing at all (javstash has no entry for this code):
+        # adopt the oshash fingerprint candidate as a last resort, loudly, so
+        # mismatches stay auditable in the log.
+        if not hits and oshash_hits:
+            adopted = oshash_hits[0].get("code") or "<no code>"
+            log(f"scene {sid}: WARN fallback empty for '{code}', adopting oshash candidate '{adopted}' anyway (audit log)")
+            return oshash_hits
     return hits
 
 def _find_by_name(q_by_name, name, id_key):

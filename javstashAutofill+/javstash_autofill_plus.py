@@ -20,7 +20,7 @@ fields are filled / missing entries appended) unless a per-field overwrite toggl
 is enabled. Measurements are normalised from javstash form (91H-56-88) to
 (91(H)-56-88). Standard library only.
 """
-import sys, json, re, unicodedata, urllib.request, difflib, os, datetime, base64, subprocess, ssl
+import sys, json, re, unicodedata, urllib.request, difflib, os, datetime, base64, subprocess, ssl, time
 
 JAV = "https://javstash.org/graphql"
 THRESHOLD = 0.9
@@ -509,6 +509,7 @@ def handle_scene_backfill(payload, conn, gql):
             if src in eps: continue
             if not (sc.get("files") or []): continue
             sid = sc["id"]
+            time.sleep(0.3)  # rate-limit JAVStash (~200/min)
             scene = get_scene_full(gql, sid)
             scene["__conn__"] = conn
             hits = scrape_scene_full(gql, sid, src)

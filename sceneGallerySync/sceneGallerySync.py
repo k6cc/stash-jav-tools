@@ -38,7 +38,7 @@ class SceneGallerySync:
             # 按钮触发：图片入库由扫描负责，不做入库轮询，直接创建或立即失败
             # stash 对插件任务失败也标 FINISHED（job 状态不可依赖），
             # 前端通过解析本次任务写入 stash 的原始日志判定真实结果
-            return self.__create_gallery_for_scene(scene_id, wait_for_images=False)
+            return self.__create_gallery_for_scene(scene_id, wait_for_images=False, verbose=True)
 
         if not scene_id:
             log.LogWarning("No scene_id")
@@ -316,7 +316,7 @@ class SceneGallerySync:
             f"no_images={no_images} not_indexed={not_indexed} failed={failed}"
         )
 
-    def __create_gallery_for_scene(self, scene_id, wait_for_images=True):
+    def __create_gallery_for_scene(self, scene_id, wait_for_images=True, verbose=False):
         # 成功返回 None，失败返回原因字符串（按钮任务据此向 stash job 报错）
         # wait_for_images：后台路径等待图片入库（扫描可能尚未完成）；按钮路径立即判定
         scene = self._stash.gql_findScene(scene_id)
@@ -330,6 +330,7 @@ class SceneGallerySync:
 
         extrafanart_path = self.__find_extrafanart_folder(scene_dir)
         if not extrafanart_path:
+                if verbose: log.LogInfo(f"Scene {scene_id}: no extrafanart folder, skipped")
                 return "No extrafanart folder"
 
         poster_path = self.__find_poster_file(scene_dir, scene_filename)
@@ -337,6 +338,7 @@ class SceneGallerySync:
         extrafanart_files = self.__list_extrafanart_files(extrafanart_path)
 
         if not extrafanart_files:
+            if verbose: log.LogInfo(f"Scene {scene_id}: no images in extrafanart folder, skipped")
             return "No images in extrafanart folder"
 
         all_paths = []
@@ -353,6 +355,7 @@ class SceneGallerySync:
             extrafanart_ids = [found[p] for p in extrafanart_files if p in found]
 
         if not extrafanart_ids:
+            if verbose: log.LogInfo(f"Scene {scene_id}: extrafanart images not indexed, skipped")
             return "Extrafanart images not indexed in Stash"
 
         poster_id = found.get(poster_path) if poster_path else None

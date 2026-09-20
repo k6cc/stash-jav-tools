@@ -1,6 +1,6 @@
 name: sceneGallerySync
 description: Automatically creates galleries for scenes with matching metadata, cover, and fanart images
-version: 1.9.3
+version: 1.9.4
 url: https://discourse.stashapp.cc/t/scenegallerysync/13853
 exec:
   - python

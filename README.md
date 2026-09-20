@@ -69,7 +69,7 @@ plugins/
 
 ### Docker 部署
 
-Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，studioToolsAuto / tagMergeAuto / sceneTranslateAuto 是纯后台插件（标准库 only），Docker 和裸机均可直接使用。sceneTranslateAuto 无代理无端口，Docker 无需映射额外端口（仅需容器可访问翻译 API 外网）。
+Stash 官方镜像已预装 Python 和 requests，无需额外操作。studioTools、performerMerge 和 tagMerge 是纯 UI 插件，studioToolsAuto / tagMergeAuto / sceneTranslateAuto / javstashAutofill+ 是纯后台插件（标准库 only），Docker 和裸机均可直接使用。sceneTranslateAuto 无代理无端口，Docker 无需映射额外端口（仅需容器可访问翻译 API 外网）。
 
 ### Windows / macOS 裸机部署（仅 Python 插件）
 

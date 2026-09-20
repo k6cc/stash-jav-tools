@@ -273,15 +273,39 @@ def get_scene_full(gql, sid):
          "studio{ id name } performers{ id } tags{ id } groups{ group{ id } } paths{ screenshot } stash_ids{ endpoint stash_id } created_at } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
-def scrape_scene_full(gql, sid, source_url):
+_CODE_RE = re.compile(r"^([A-Za-z]{2,6}[-_]?\d{2,5})")
+def extract_code(scene):
+    """Get studio code from scene, or extract from title prefix."""
+    c = (scene.get("code") or "").strip()
+    if c: return c
+    t = (scene.get("title") or "").strip()
+    m = _CODE_RE.match(t)
+    return m.group(1) if m else None
+
+def scrape_scene_full(gql, sid, source_url, scene=None):
     q = ("query($s:ScraperSourceInput!,$i:ScrapeSingleSceneInput!){"
          " scrapeSingleScene(source:$s,input:$i){ %s } }" % SCENE_FULL_FIELDS)
     try:
-        return gql(q, {"s": {"stash_box_endpoint": source_url},
+        hits = gql(q, {"s": {"stash_box_endpoint": source_url},
                        "i": {"scene_id": str(sid)}}).get("scrapeSingleScene") or []
     except Exception as e:
         log(f"scene {sid}: scrape error: {e}")
         return []
+    if hits: return hits
+    # fallback: try code/title as query
+    code = extract_code(scene or {})
+    if not code:
+        log(f"scene {sid}: oshash miss, no code to fallback")
+        return []
+    try:
+        hits = gql(q, {"s": {"stash_box_endpoint": source_url},
+                       "i": {"query": code}}).get("scrapeSingleScene") or []
+        if hits:
+            log(f"scene {sid}: oshash miss, code '{code}' matched")
+    except Exception as e:
+        log(f"scene {sid}: code fallback error: {e}")
+        return []
+    return hits
 
 def _find_by_name(q_by_name, name, id_key):
     """Shared find-or-create: q_by_name(name) -> list of {id...}; caller does create."""
@@ -481,7 +505,7 @@ def handle_scene_create(payload, conn, gql):
     scene = get_scene_full(gql, sid)
     if not scene:
         print(json.dumps({"output": "skip (scene not found)"})); return
-    rows = scrape_scene_full(gql, sid, src)
+    rows = scrape_scene_full(gql, sid, src, scene)
     if not rows:
         log(f"scene {sid}: no fingerprint match at {src} -> skip")
         print(json.dumps({"output": "skip (no match by hash)"})); return
@@ -527,7 +551,7 @@ def handle_scene_backfill(payload, conn, gql):
         scene = get_scene_full(gql, sid)
         if not scene: continue
         scene["__conn__"] = conn
-        hits = scrape_scene_full(gql, sid, src)
+        hits = scrape_scene_full(gql, sid, src, scene)
         if not hits: continue
         try:
             apply_scene_fill(gql, sid, scene, hits[0], src)

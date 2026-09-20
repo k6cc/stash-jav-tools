@@ -24,6 +24,7 @@
 ## 场景行为
 
 - **按 oshash 查 JAVStash**：新场景入库时，Stash 自动用文件指纹查 JAVStash，匹配上就写。
+- **番号 fallback**：oshash 搜不到时，自动用番号（本地 code 字段，或从标题前缀提取）作 query 再搜一次。
 - **标量空才填**：title / code / details / director / date。
 - **studio**：仅当场景无 studio 时按名找/建。
 - **performers / tags / urls**：与本地已有值合并去重（scraper 自带 `stored_id` 优先，否则按名 find-or-create；新建演员会触发演员 hook 补全）。

@@ -301,6 +301,11 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
         hits = gql(q, {"s": {"stash_box_endpoint": source_url},
                        "i": {"query": code}}).get("scrapeSingleScene") or []
         if hits:
+            # verify returned code matches searched code
+            ret_code = (hits[0].get("code") or "").strip().upper()
+            if ret_code and ret_code != code.upper():
+                log(f"scene {sid}: code '{code}' returned '{ret_code}', mismatch, discarding")
+                return []
             log(f"scene {sid}: oshash miss, code '{code}' matched")
     except Exception as e:
         log(f"scene {sid}: code fallback error: {e}")
@@ -471,7 +476,7 @@ def apply_scene_fill(gql, sid, scene, sc, src):
     # much later timestamp means a custom cover was set => skip. data: URI set directly; http async.
     shot = ((scene.get("paths") or {}).get("screenshot") or "")
     sc_image = (sc.get("image") or "").strip()
-    shot_is_auto = True
+    shot_is_auto = False
     try:
         if "?t=" in shot:
             shot_ts = int(shot.split("?t=")[1].split("&")[0])
@@ -480,7 +485,7 @@ def apply_scene_fill(gql, sid, scene, sc, src):
             created_ts = int(_dt.datetime.fromisoformat(ca.replace("Z","+00:00")).timestamp())
             shot_is_auto = abs(shot_ts - created_ts) < 7200
     except Exception:
-        shot_is_auto = True
+        shot_is_auto = False
     if sc_image and shot_is_auto:
         if sc_image.startswith("data:"):
             upd["cover_image"] = sc_image

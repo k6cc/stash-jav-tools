@@ -103,10 +103,11 @@ def scrape_source(gql, name, source_input):
 def get_settings(gql):
     try:
         plugins = (gql("{ configuration { plugins } }").get("configuration", {}) or {}).get("plugins") or {}
-        return plugins.get("javstashAutofill+") or {}
+        # Stash derives the plugin id from the yml filename (javstashAutofillPlus.yml),
+        # so settings are saved under "javstashAutofillPlus" — the only key we read.
+        return plugins.get("javstashAutofillPlus") or {}
     except Exception:
         return {}
-
 def build_source(source_str):
     # A URL is treated as a stash-box endpoint; anything else as a scraper_id.
     s = (source_str or JAV).strip()
@@ -270,17 +271,46 @@ SCENE_FULL_FIELDS = ("title code details director date urls image remote_site_id
 
 def get_scene_full(gql, sid):
     q = ("query($id:ID!){ findScene(id:$id){ id title code details director date urls "
-         "studio{ id name } performers{ id } tags{ id } groups{ group{ id } } paths{ screenshot } stash_ids{ endpoint stash_id } created_at } }")
+         "studio{ id name } performers{ id } tags{ id } groups{ group{ id } } paths{ screenshot } "
+         "stash_ids{ endpoint stash_id } created_at files{ path } } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
-_CODE_RE = re.compile(r"^([A-Za-z]{2,6}[-_]?\d{2,5})")
+_CODE_RE = re.compile(r"^((?:FC2[-_]?PPV[-_]?\d{5,7}|[A-Za-z]{2,6}[-_]?\d{2,5}|\d{6}[-_]\d{2,5}|[A-Za-z]\d{4}))")
+def codes_match(a, b):
+    """Code equality with javstash-style suffix tolerance ('012012-920' vs
+    '012012-920-carib', '020519_001' vs '020519_001-1pon'). Only a dash/underscore
+    followed by a non-pure-digit suffix is tolerated, so unrelated codes
+    (WANZ-334 vs WANZ-330) and numeric extensions (SSIS-123 vs SSIS-1234) never
+    match while site annotations (carib/1pon/4K) do."""
+    a, b = (a or "").strip().upper(), (b or "").strip().upper()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    for long, short in ((a, b), (b, a)):
+        if long.startswith(short):
+            rest = long[len(short):]
+            if rest.startswith(("-", "_")) and len(rest) > 1 and not rest[1:].isdigit():
+                return True
+    return False
 def extract_code(scene):
-    """Get studio code from scene, or extract from title prefix."""
+    """Get studio code from scene.code, else from the title prefix, else from the
+    first file's basename. The last source matters for a bare scene right after
+    scan, where the NFO/metadata has not been applied yet and title/code are empty
+    (Scene.Create.Post races with the NFO parser)."""
     c = (scene.get("code") or "").strip()
     if c: return c
     t = (scene.get("title") or "").strip()
-    m = _CODE_RE.match(t)
-    return m.group(1) if m else None
+    if t:
+        m = _CODE_RE.match(t)
+        if m: return m.group(1)
+    for f in (scene.get("files") or []):
+        p = (f.get("path") or "").strip()
+        if not p: continue
+        base = p.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        m = _CODE_RE.match(base)
+        if m: return m.group(1)
+    return None
 
 def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
     q = ("query($s:ScraperSourceInput!,$i:ScrapeSingleSceneInput!){"
@@ -291,25 +321,45 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
     except Exception as e:
         log(f"scene {sid}: scrape error: {e}")
         return []
-    if hits: return hits
-    # fallback: try code/title as query
     code = extract_code(scene or {})
-    if not code:
-        log(f"scene {sid}: oshash miss, no code to fallback")
-        return []
-    try:
-        hits = gql(q, {"s": {"stash_box_endpoint": source_url},
-                       "i": {"query": code}}).get("scrapeSingleScene") or []
-        if hits:
-            # verify returned code matches searched code
-            ret_code = (hits[0].get("code") or "").strip().upper()
-            if ret_code and ret_code != code.upper():
-                log(f"scene {sid}: code '{code}' returned '{ret_code}', mismatch, discarding")
-                return []
-            log(f"scene {sid}: oshash miss, code '{code}' matched")
-    except Exception as e:
-        log(f"scene {sid}: code fallback error: {e}")
-        return []
+    if hits:
+        # oshash can return several candidates (javstash fingerprint entries are
+        # not always clean). When a local code is known, only trust candidates
+        # whose code matches it; otherwise a wrong fingerprint entry would
+        # overwrite an NFO/named scene with a foreign title/code/stash_id.
+        if code:
+            exact = [h for h in hits if codes_match(h.get("code"), code)]
+            if exact:
+                if len(exact) < len(hits):
+                    log(f"scene {sid}: oshash gave {len(hits)} candidates, picked code-match '{exact[0].get('code')}'")
+                return exact
+            log(f"scene {sid}: oshash candidates {[(h.get('code') or '') for h in hits]} don't match local code '{code}', discarding")
+            hits = []
+        else:
+            return hits   # no local code to verify against; best effort, unchanged
+    if not use_fallback:
+        return hits
+    if not hits:
+        # fallback: try code/title as query
+        if not code:
+            log(f"scene {sid}: oshash miss, no code to fallback")
+            return []
+        try:
+            hits = gql(q, {"s": {"stash_box_endpoint": source_url},
+                           "i": {"query": code}}).get("scrapeSingleScene") or []
+            if hits:
+                exact = [h for h in hits if codes_match(h.get("code"), code)]
+                if exact:
+                    log(f"scene {sid}: oshash miss, code '{code}' matched")
+                    return exact
+                ret_code = (hits[0].get("code") or "").strip().upper()
+                if ret_code and not codes_match(ret_code, code):
+                    log(f"scene {sid}: code '{code}' returned '{ret_code}', mismatch, discarding")
+                    return []
+                log(f"scene {sid}: oshash miss, code '{code}' matched (result has no code)")
+        except Exception as e:
+            log(f"scene {sid}: code fallback error: {e}")
+            return []
     return hits
 
 def _find_by_name(q_by_name, name, id_key):
@@ -427,8 +477,20 @@ def apply_scene_fill(gql, sid, scene, sc, src):
     def empty(f):
         v = scene.get(f)
         return v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, list) and len(v) == 0)
-    # scalars: empty only
+    # Scenes with a sibling .nfo are NFO-managed: the NFO plugin owns the scalar
+    # metadata (title/code/details/director/date). Skip them here so the
+    # Scene.Create.Post race cannot write a (possibly wrong) title before the NFO
+    # plugin applies the NFO — the NFO plugin then never overwrites it and the
+    # foreign title sticks. Relations (stash_id/studio/performers/tags/urls/
+    # groups/cover) are still filled.
+    nfo_managed = any(
+        os.path.exists(os.path.splitext((f.get("path") or ""))[0] + ".nfo")
+        for f in (scene.get("files") or []) if f.get("path"))
+    if nfo_managed:
+        log(f"scene {sid}: sibling .nfo present, scalar fields left to the NFO plugin")
+    # scalars: empty only (skipped entirely for NFO-managed scenes)
     for f in ("title", "code", "details", "director", "date"):
+        if nfo_managed: break
         if empty(f) and sc.get(f):
             upd[f] = sc[f]
     # urls: merge de-dup

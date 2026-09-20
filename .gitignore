@@ -5,6 +5,7 @@ __pycache__/
 # 插件运行时日志（写入插件目录，不随仓库发布）
 *_backend.log
 *_auto.log
+javstash_autofill_plus.log
 
 # 用户自定义映射表（导出生成，升级插件保留；不随仓库发布，避免被打包进 zip）
 tag_merge_map.custom.json

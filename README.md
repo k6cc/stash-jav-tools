@@ -1,97 +1,93 @@
-# stash-jav-tools
+﻿# stash-jav-tools
 
-Stash 鎻掍欢宸ュ叿闆?鈥?Python + UI 娣峰悎鎻掍欢鍚堥泦銆?
-## 鍖呭惈鎻掍欢
+Stash 閹绘帊娆㈠銉ュ徔闂?閳?Python + UI 濞ｅ嘲鎮庨幓鎺嶆閸氬牓娉﹂妴?
+## 閸栧懎鎯堥幓鎺嶆
 
-| 鎻掍欢 | 鐗堟湰 | 绫诲瀷 | 璇存槑 |
+| 閹绘帊娆?| 閻楀牊婀?| 缁鐎?| 鐠囧瓨妲?|
 |------|------|------|------|
-| [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 鍦烘櫙/鍥剧墖/鍥惧簱缂栬緫椤典竴閿炕璇戯紙Google/Microsoft/Baidu/DeepL/OpenAI锛孲tash UI 鍙厤缃級 |
-| [sceneGallerySync](./sceneGallerySync/) | 1.9.1 | Python + UI | 鎵弿鍏ュ簱鏃惰嚜鍔ㄥ垱寤哄浘搴撳苟鍏宠仈褰辩墖 |
-| [studioTools](./studioTools/) | 1.5.3 | 绾?UI | 宸ヤ綔瀹ゅ悎骞?+ 澶氭簮鎼滅储鏇存柊 StashDB/ThePornDB/JAVStash |
-| [JavStashLinker](./JavStashLinker/) | 1.5.8 | Python + UI | 鎵归噺鍖归厤 JAVStash 婕斿憳 ID锛氬満鏅弽鎺?+ 鍚嶇О鎼滅储 + 鎵嬪姩鎼滅储锛堣瘉鎹瘎绾э紝鑷姩琛ュ浘琛ヤ俊鎭級 |
-| [performerMerge](./performerMerge/) | 1.6.3 | 绾?UI | 閲嶅悕婕斿憳妫€娴嬩笌鍚堝苟锛堣瘉鎹垎绾ц繛缁?+ 鏍戠骇鍐茬獊妫€鏌ワ級锛岄檮甯︾煭鍚嶆竻鐞嗕笌鍒悕淇 |
-| [tagMerge](./tagMerge/) | 2.5.1 | 绾?UI | 鎸夊彲缂栬緫鏄犲皠搴撳悎骞剁浉浼?tags 涓鸿鑼冧腑鏂?tag锛堟簮鍚嶄繚鐣欎负鍒悕锛屾槧灏勫彲缂栬緫瀵煎嚭锛?|
-| [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 绾悗鍙?| 宸ヤ綔瀹ゅ垱寤烘椂鑷姩浠?Stash-box 瀹炰緥鎷夊彇璧勬枡锛屽綊涓€鍖栫簿纭尮閰嶅悗鍚堝苟/琛ュ叏锛堥浂 UI 娉ㄥ叆锛屽彲寮€澶氭簮琛ラ綈锛?|
-| [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 绾悗鍙?| 閽╁瓙鑷姩鍚堝苟鏂板缓 tag + 浠诲姟椤靛叏閲忔壂鎻忥紙鏈湴鏄犲皠琛ㄣ€侀浂缃戠粶闆惰缃級 |
-| [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.0 | 绾悗鍙?| 閽╁瓙鑷姩缈昏瘧鍦烘櫙鏍囬/绠€浠嬩负鐩爣璇█ + 浠诲姟椤靛叏閲忔壂鎻忥紙澶嶇敤 sceneTranslate 寮曟搸锛屾棤浠ｇ悊鏃犵鍙ｏ級 |
-| [javstashAutofill+](./javstashAutofill+/) | 1.0.8 | 绾悗鍙?| 鏂版紨鍛樻寜鍚嶅埉鍓?JAVStash 琛ュ叏瀛楁+stash_id锛涙柊鍦烘櫙鎸?oshash 琛ョ┖鐧藉瓧娈?stash_id锛涙墜鍔ㄤ换鍔℃壒閲忓洖濉?|
+| [sceneTranslate](./sceneTranslate/) | 2.9.2 | Python + UI | 閸︾儤娅?閸ュ墽澧?閸ユ儳绨辩紓鏍帆妞ゅ吀绔撮柨顔剧倳鐠囨埊绱橤oogle/Microsoft/Baidu/DeepL/OpenAI閿涘tash UI 閸欘垶鍘ょ純顕嗙礆 |
+| [sceneGallerySync](./sceneGallerySync/) | 1.9.2 | Python + UI | 閹殿偅寮块崗銉ョ氨閺冩儼鍤滈崝銊ュ灡瀵ゅ搫娴樻惔鎾宠嫙閸忓疇浠堣ぐ杈╁ |
+| [studioTools](./studioTools/) | 1.5.3 | 缁?UI | 瀹搞儰缍旂€广倕鎮庨獮?+ 婢舵碍绨幖婊呭偍閺囧瓨鏌?StashDB/ThePornDB/JAVStash |
+| [JavStashLinker](./JavStashLinker/) | 1.5.8 | Python + UI | 閹靛綊鍣洪崠褰掑帳 JAVStash 濠曟柨鎲?ID閿涙艾婧€閺咁垰寮介幒?+ 閸氬秶袨閹兼粎鍌?+ 閹靛濮╅幖婊呭偍閿涘牐鐦夐幑顔跨槑缁狙嶇礉閼奉亜濮╃悰銉ユ禈鐞涖儰淇婇幁顖ょ礆 |
+| [performerMerge](./performerMerge/) | 1.6.3 | 缁?UI | 闁插秴鎮曞鏂挎喅濡偓濞村绗岄崥鍫濊嫙閿涘牐鐦夐幑顔煎瀻缁狙嗙箾缂?+ 閺嶆垹楠囬崘鑼崐濡偓閺屻儻绱氶敍宀勬鐢妇鐓崥宥嗙閻炲棔绗岄崚顐㈡倳娣囶喖顦?|
+| [tagMerge](./tagMerge/) | 2.5.1 | 缁?UI | 閹稿褰茬紓鏍帆閺勭姴鐨犳惔鎾虫値楠炲墎娴夋导?tags 娑撻缚顫夐懠鍐ц厬閺?tag閿涘牊绨崥宥勭箽閻ｆ瑤璐熼崚顐㈡倳閿涘本妲х亸鍕讲缂傛牞绶€电厧鍤敍?|
+| [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 缁绢垰鎮楅崣?| 瀹搞儰缍旂€广倕鍨卞鐑樻閼奉亜濮╂禒?Stash-box 鐎圭偘绶ラ幏澶婂絿鐠у嫭鏋￠敍灞界秺娑撯偓閸栨牜绨跨涵顔煎爱闁板秴鎮楅崥鍫濊嫙/鐞涖儱鍙忛敍鍫ユ祩 UI 濞夈劌鍙嗛敍灞藉讲瀵偓婢舵碍绨悰銉╃秷閿?|
+| [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 缁绢垰鎮楅崣?| 闁解晛鐡欓懛顏勫З閸氬牆鑻熼弬鏉跨紦 tag + 娴犺濮熸い闈涘弿闁插繑澹傞幓蹇ョ礄閺堫剙婀撮弰鐘茬殸鐞涖劊鈧線娴傜純鎴犵捕闂嗘儼顔曠純顕嗙礆 |
+| [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.0 | 缁绢垰鎮楅崣?| 闁解晛鐡欓懛顏勫З缂堟槒鐦ч崷鐑樻珯閺嶅洭顣?缁犫偓娴犲璐熼惄顔界垼鐠囶叀鈻?+ 娴犺濮熸い闈涘弿闁插繑澹傞幓蹇ョ礄婢跺秶鏁?sceneTranslate 瀵洘鎼搁敍灞炬￥娴狅絿鎮婇弮鐘殿伂閸欙綇绱?|
+| [javstashAutofill+](./javstashAutofill+/) | 1.0.8 | 缁绢垰鎮楅崣?| 閺傜増绱ㄩ崨妯诲瘻閸氬秴鍩夐崜?JAVStash 鐞涖儱鍙忕€涙顔?stash_id閿涙稒鏌婇崷鐑樻珯閹?oshash 鐞涖儳鈹栭惂钘夌摟濞?stash_id閿涙稒澧滈崝銊ゆ崲閸斺剝澹掗柌蹇撴礀婵?|
 
-## 瀹夎
-
-### 鏂瑰紡涓€锛氶€氳繃 Stash 鎻掍欢婧愬畨瑁咃紙鎺ㄨ崘锛?
-鍦?**Stash 鈫?璁剧疆 鈫?鎻掍欢 鈫?鍙敤鎻掍欢 鈫?娣诲姞婧?* 涓坊鍔狅細
+## 鐎瑰顥?
+### 閺傜懓绱℃稉鈧敍姘垛偓姘崇箖 Stash 閹绘帊娆㈠┃鎰暔鐟佸拑绱欓幒銊ㄥ礃閿?
+閸?**Stash 閳?鐠佸墽鐤?閳?閹绘帊娆?閳?閸欘垳鏁ら幓鎺嶆 閳?濞ｈ濮炲┃?* 娑擃厽鍧婇崝鐙呯窗
 
 ```
 https://k6cc.github.io/stash-plugins/plugins/main/index.yml
 ```
 
-> 姝?URL 鏄粺涓€鎻掍欢婧愶紝鍖呭惈澶氫釜鎻掍欢锛屽彲涓€骞跺畨瑁呫€?
-### 鏂瑰紡浜岋細鎵嬪姩瀹夎
-
-浠?[Releases](https://github.com/k6cc/stash-jav-tools/releases) 涓嬭浇瀵瑰簲鎻掍欢鐨?zip锛岃В鍘嬪埌 Stash 鎻掍欢鐩綍锛?
+> 濮?URL 閺勵垳绮烘稉鈧幓鎺嶆濠ф劧绱濋崠鍛儓婢舵矮閲滈幓鎺嶆閿涘苯褰叉稉鈧獮璺虹暔鐟佸懌鈧?
+### 閺傜懓绱℃禍宀嬬窗閹靛濮╃€瑰顥?
+娴?[Releases](https://github.com/k6cc/stash-jav-tools/releases) 娑撳娴囩€电懓绨查幓鎺嶆閻?zip閿涘矁袙閸樺鍩?Stash 閹绘帊娆㈤惄顔肩秿閿?
 - **Windows**: `%USERPROFILE%\.stash\plugins\`
 - **Linux/macOS**: `~/.stash/plugins/`
 
-姣忎釜 zip 鍐呮枃浠剁洿鎺ユ斁鍦ㄤ互鎻掍欢鍚嶅懡鍚嶇殑瀛愮洰褰曚笅锛?
+濮ｅ繋閲?zip 閸愬懏鏋冩禒鍓佹纯閹恒儲鏂侀崷銊や簰閹绘帊娆㈤崥宥呮嚒閸氬秶娈戠€涙劗娲拌ぐ鏇氱瑓閿?
 ```
 plugins/
-  sceneTranslate/      # 瑙ｅ帇 sceneTranslate-vX.Y.Z.zip
-  sceneGallerySync/    # 瑙ｅ帇 sceneGallerySync-vX.Y.Z.zip
-  studioTools/         # 瑙ｅ帇 studioTools-vX.Y.Z.zip
-  JavStashLinker/      # 瑙ｅ帇 JavStashLinker-vX.Y.Z.zip
-  performerMerge/      # 瑙ｅ帇 performerMerge-vX.Y.Z.zip
-  tagMerge/            # 瑙ｅ帇 tagMerge-vX.Y.Z.zip
-  studioToolsAuto/     # 瑙ｅ帇 studioToolsAuto-vX.Y.Z.zip
-  tagMergeAuto/        # 瑙ｅ帇 tagMergeAuto-vX.Y.Z.zip
-  sceneTranslateAuto/  # 瑙ｅ帇 sceneTranslateAuto-vX.Y.Z.zip
-  javstashAutofill+/  # 瑙ｅ帇 javstashAutofill+-vX.Y.Z.zip
+  sceneTranslate/      # 鐟欙絽甯?sceneTranslate-vX.Y.Z.zip
+  sceneGallerySync/    # 鐟欙絽甯?sceneGallerySync-vX.Y.Z.zip
+  studioTools/         # 鐟欙絽甯?studioTools-vX.Y.Z.zip
+  JavStashLinker/      # 鐟欙絽甯?JavStashLinker-vX.Y.Z.zip
+  performerMerge/      # 鐟欙絽甯?performerMerge-vX.Y.Z.zip
+  tagMerge/            # 鐟欙絽甯?tagMerge-vX.Y.Z.zip
+  studioToolsAuto/     # 鐟欙絽甯?studioToolsAuto-vX.Y.Z.zip
+  tagMergeAuto/        # 鐟欙絽甯?tagMergeAuto-vX.Y.Z.zip
+  sceneTranslateAuto/  # 鐟欙絽甯?sceneTranslateAuto-vX.Y.Z.zip
+  javstashAutofill+/  # 鐟欙絽甯?javstashAutofill+-vX.Y.Z.zip
 ```
 
-## 鍓嶇疆渚濊禆
+## 閸撳秶鐤嗘笟婵婄
 
-| 鎻掍欢 | Python | requests | Stash-box API Key |
+| 閹绘帊娆?| Python | requests | Stash-box API Key |
 |------|--------|----------|-----------------|
-| sceneTranslate | 闇€瑕?| 闇€瑕?| 涓嶉渶瑕?|
-| sceneGallerySync | 闇€瑕?| 闇€瑕?| 涓嶉渶瑕?|
-| studioTools | 涓嶉渶瑕?| 涓嶉渶瑕?| Search 妯″潡闇€瑕侊紙StashDB/ThePornDB/JAVStash 浠讳竴锛?|
-| JavStashLinker | 闇€瑕?| 闇€瑕?| JAVStash锛堢粡銆岃缃?鈫?鍏冩暟鎹彁渚涜€呫€峴tash-box 绔偣閰嶇疆锛屾彃浠惰嚜鍔ㄥ鐢級 |
-| performerMerge | 涓嶉渶瑕?| 涓嶉渶瑕?| 涓嶉渶瑕侊紙闇€ Stash v0.31.0+锛?|
-| tagMerge | 涓嶉渶瑕?| 涓嶉渶瑕?| 涓嶉渶瑕侊紙闇€ Stash v0.30+锛?|
-| studioToolsAuto | 闇€瑕?| 涓嶉渶瑕?| 闇€瑕侊紙缁忋€岃缃?鈫?鍏冩暟鎹彁渚涜€呫€嶉厤缃?Stash-box 瀹炰緥锛屾彃浠惰嚜鍔ㄥ鐢級 |
-| tagMergeAuto | 闇€瑕?| 涓嶉渶瑕?| 涓嶉渶瑕?|
-| sceneTranslateAuto | 闇€瑕?| 涓嶉渶瑕?| 涓嶉渶瑕侊紙闇€瀹瑰櫒/瀹夸富鏈哄彲璁块棶缈昏瘧 API 澶栫綉锛?|
-| javstashAutofill+ | 闇€瑕?| 涓嶉渶瑕?| JAVStash锛堢粡銆岃缃?鈫?鍏冩暟鎹彁渚涜€呫€峴tash-box 绔偣閰嶇疆锛屾彃浠惰嚜鍔ㄥ鐢級 |
+| sceneTranslate | 闂団偓鐟?| 闂団偓鐟?| 娑撳秹娓剁憰?|
+| sceneGallerySync | 闂団偓鐟?| 闂団偓鐟?| 娑撳秹娓剁憰?|
+| studioTools | 娑撳秹娓剁憰?| 娑撳秹娓剁憰?| Search 濡€虫健闂団偓鐟曚緤绱橲tashDB/ThePornDB/JAVStash 娴犺绔撮敍?|
+| JavStashLinker | 闂団偓鐟?| 闂団偓鐟?| JAVStash閿涘牏绮￠妴宀冾啎缂?閳?閸忓啯鏆熼幑顔藉絹娓氭稖鈧懌鈧炒tash-box 缁旑垳鍋ｉ柊宥囩枂閿涘本褰冩禒鎯板殰閸斻劌顦查悽顭掔礆 |
+| performerMerge | 娑撳秹娓剁憰?| 娑撳秹娓剁憰?| 娑撳秹娓剁憰渚婄礄闂団偓 Stash v0.31.0+閿?|
+| tagMerge | 娑撳秹娓剁憰?| 娑撳秹娓剁憰?| 娑撳秹娓剁憰渚婄礄闂団偓 Stash v0.30+閿?|
+| studioToolsAuto | 闂団偓鐟?| 娑撳秹娓剁憰?| 闂団偓鐟曚緤绱欑紒蹇嬧偓宀冾啎缂?閳?閸忓啯鏆熼幑顔藉絹娓氭稖鈧懌鈧秹鍘ょ純?Stash-box 鐎圭偘绶ラ敍灞惧絻娴犳儼鍤滈崝銊ヮ槻閻㈩煉绱?|
+| tagMergeAuto | 闂団偓鐟?| 娑撳秹娓剁憰?| 娑撳秹娓剁憰?|
+| sceneTranslateAuto | 闂団偓鐟?| 娑撳秹娓剁憰?| 娑撳秹娓剁憰渚婄礄闂団偓鐎圭懓娅?鐎瑰じ瀵岄張鍝勫讲鐠佸潡妫剁紙鏄忕槯 API 婢舵牜缍夐敍?|
+| javstashAutofill+ | 闂団偓鐟?| 娑撳秹娓剁憰?| JAVStash閿涘牏绮￠妴宀冾啎缂?閳?閸忓啯鏆熼幑顔藉絹娓氭稖鈧懌鈧炒tash-box 缁旑垳鍋ｉ柊宥囩枂閿涘本褰冩禒鎯板殰閸斻劌顦查悽顭掔礆 |
 
-### Docker 閮ㄧ讲
-
-Stash 瀹樻柟闀滃儚宸查瑁?Python 鍜?requests锛屾棤闇€棰濆鎿嶄綔銆俿tudioTools銆乸erformerMerge 鍜?tagMerge 鏄函 UI 鎻掍欢锛宻tudioToolsAuto / tagMergeAuto / sceneTranslateAuto / javstashAutofill+ 鏄函鍚庡彴鎻掍欢锛堟爣鍑嗗簱 only锛夛紝Docker 鍜岃８鏈哄潎鍙洿鎺ヤ娇鐢ㄣ€俿ceneTranslateAuto 鏃犱唬鐞嗘棤绔彛锛孌ocker 鏃犻渶鏄犲皠棰濆绔彛锛堜粎闇€瀹瑰櫒鍙闂炕璇?API 澶栫綉锛夈€?
-### Windows / macOS 瑁告満閮ㄧ讲锛堜粎 Python 鎻掍欢锛?
-楠岃瘉 `python --version` 涓?`python -c "import requests"`锛涚己澶辨椂鎸夐『搴忓畨瑁咃細
-
+### Docker 闁劎璁?
+Stash 鐎规ɑ鏌熼梹婊冨剼瀹告煡顣╃憗?Python 閸?requests閿涘本妫ら棁鈧０婵嗩樆閹垮秳缍旈妴淇縯udioTools閵嗕垢erformerMerge 閸?tagMerge 閺勵垳鍑?UI 閹绘帊娆㈤敍瀹籺udioToolsAuto / tagMergeAuto / sceneTranslateAuto / javstashAutofill+ 閺勵垳鍑介崥搴″酱閹绘帊娆㈤敍鍫熺垼閸戝棗绨?only閿涘绱滵ocker 閸滃矁锛橀張鍝勬綆閸欘垳娲块幒銉ゅ▏閻劊鈧靠ceneTranslateAuto 閺冪姳鍞悶鍡樻￥缁旑垰褰涢敍瀛宱cker 閺冪娀娓堕弰鐘茬殸妫版繂顦荤粩顖氬經閿涘牅绮庨棁鈧€圭懓娅掗崣顖濐問闂傤喚鐐曠拠?API 婢舵牜缍夐敍澶堚偓?
+### Windows / macOS 鐟佸憡婧€闁劎璁查敍鍫滅矌 Python 閹绘帊娆㈤敍?
+妤犲矁鐦?`python --version` 娑?`python -c "import requests"`閿涙稓宸辨径杈ㄦ閹稿銆庢惔蹇撶暔鐟佸拑绱?
 ```powershell
-# Windows锛坵inget锛?winget install Python.Python.3.12
+# Windows閿涘澋inget閿?winget install Python.Python.3.12
 pip install requests
 
-# macOS锛坔omebrew锛?brew install python@3.12
+# macOS閿涘潝omebrew閿?brew install python@3.12
 pip3 install requests
 ```
 
-## 瑙﹀彂鏂瑰紡
+## 鐟欙箑褰傞弬鐟扮础
 
-| 鎻掍欢 | 绫诲瀷 | 瑙﹀彂鏂瑰紡 |
+| 閹绘帊娆?| 缁鐎?| 鐟欙箑褰傞弬鐟扮础 |
 |------|------|---------|
-| sceneTranslate | Python + UI | 鎵嬪姩浠诲姟 + 鍦烘櫙/鍥剧墖缂栬緫椤垫寜閽?|
-| sceneGallerySync | Python + UI | Scene.Update.Post 閽╁瓙 + 鎵嬪姩鎸夐挳 |
-| studioTools | 绾?UI | 宸ヤ綔瀹よ鎯呴〉鎸夐挳 |
-| JavStashLinker | Python + UI | 瀵艰埅鏍忔寜閽?+ 鎵嬪姩浠诲姟 |
-| performerMerge | 绾?UI | 瀵艰埅鏍忔寜閽?|
-| tagMerge | 绾?UI | 瀵艰埅鏍忔寜閽?|
-| studioToolsAuto | 绾悗鍙?| Studio.Create.Post 閽╁瓙 + 鎵嬪姩浠诲姟 |
-| tagMergeAuto | 绾悗鍙?| Tag.Create.Post 閽╁瓙 + 鎵嬪姩浠诲姟 |
-| sceneTranslateAuto | 绾悗鍙?| Scene.Create.Post / Scene.Update.Post 閽╁瓙 + 鎵嬪姩浠诲姟 |
-| javstashAutofill+ | 绾悗鍙?| Performer.Create.Post / Scene.Create.Post 閽╁瓙 + 鎵嬪姩浠诲姟 |
+| sceneTranslate | Python + UI | 閹靛濮╂禒璇插 + 閸︾儤娅?閸ュ墽澧栫紓鏍帆妞ゅ灚瀵滈柦?|
+| sceneGallerySync | Python + UI | Scene.Update.Post 闁解晛鐡?+ 閹靛濮╅幐澶愭尦 |
+| studioTools | 缁?UI | 瀹搞儰缍旂€广倛顕涢幆鍛淬€夐幐澶愭尦 |
+| JavStashLinker | Python + UI | 鐎佃壈鍩呴弽蹇斿瘻闁?+ 閹靛濮╂禒璇插 |
+| performerMerge | 缁?UI | 鐎佃壈鍩呴弽蹇斿瘻闁?|
+| tagMerge | 缁?UI | 鐎佃壈鍩呴弽蹇斿瘻闁?|
+| studioToolsAuto | 缁绢垰鎮楅崣?| Studio.Create.Post 闁解晛鐡?+ 閹靛濮╂禒璇插 |
+| tagMergeAuto | 缁绢垰鎮楅崣?| Tag.Create.Post 闁解晛鐡?+ 閹靛濮╂禒璇插 |
+| sceneTranslateAuto | 缁绢垰鎮楅崣?| Scene.Create.Post / Scene.Update.Post 闁解晛鐡?+ 閹靛濮╂禒璇插 |
+| javstashAutofill+ | 缁绢垰鎮楅崣?| Performer.Create.Post / Scene.Create.Post 闁解晛鐡?+ 閹靛濮╂禒璇插 |
 
-鍚勬彃浠惰缁嗕娇鐢ㄨ鏄庤瀵瑰簲鐩綍涓嬬殑 `README.md`銆?
+閸氬嫭褰冩禒鎯邦嚊缂佸棔濞囬悽銊嚛閺勫氦顫嗙€电懓绨查惄顔肩秿娑撳娈?`README.md`閵?
 ## License
 
 MIT

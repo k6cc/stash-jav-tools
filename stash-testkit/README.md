@@ -58,6 +58,7 @@ s.wait_for_scene(q="TST-", timeout=120, interval=5)
 5. **DB 直写前先停实例**：Stash 内存缓存与 WAL 不同步，运行中直接改 SQLite 会不一致。`db_cleanup.py` 已内置停→写→重启；自定义 DB 操作照此办。
 6. **hook 并发 spawn worker**：重扫风暴下多个 hook 并发可能同时 spawn 多个 worker 处理同一 pending 文件（重复翻译一次）。插件守卫（写回前重读）保证不覆盖，仅浪费一次调用——已知，后续原子 PID 优化方向。
 7. **sceneDestroy 后 files 表残留**：销毁场景只删关联；测试视频文件被手动删除后 `files` 表会残留记录（rescan 崩溃等场景可能漏清），用 `db_cleanup.py` 兜底。
+8. **config.yml / `configuration { plugins }` 只记录改过设置的插件**：仅安装且设置保持默认的插件不会出现在 config.yml 与 plugins 查询结果里——**不要用它们判断插件是否启用或读取默认设置**。启用状态与设置存于 Stash DB（以插件页为准）；读不到某插件时按「默认设置 + 插件目录 config.json」处理（sceneTranslateAuto 的 `read_stash_plugin_config` 即此兜底）。
 
 ## 清理规范
 

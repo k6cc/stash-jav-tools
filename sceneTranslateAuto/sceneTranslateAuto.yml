@@ -1,6 +1,6 @@
 name: Scene Translate Auto
 description: Auto-translate scene title & details to the target language on scene create/update (hook), plus a manual full-scan task for existing scenes. Python backend only, no UI injection. Reuses translation engines from Scene Translate.
-version: 1.2.1
+version: 1.2.2
 url: https://discourse.stashapp.cc/t/scene-translate-auto/16281
 errLog: info
 exec:
@@ -35,3 +35,7 @@ settings:
     displayName: "同步翻译关联图库 / Translate linked galleries"
     description: "翻译场景时顺带翻译其关联图库的标题/简介（图库按自身语言判断），默认开 / also translate linked galleries' title/details with the scene (judged by the gallery's own language), default on"
     type: BOOLEAN
+  hookDelaySeconds:
+    displayName: "钩子入队延迟（秒）/ Hook enqueue delay (s)"
+    description: "新场景创建/更新后延迟处理翻译，等 nfoSceneParser / javstashAutofill+ 等插件先写入元数据（同场景多次入队覆盖合并，最后一次写入后静默 N 秒再处理），默认 25；机械硬盘/多插件环境建议 30-60 / delay before a hooked scene is translated, letting nfoSceneParser / javstashAutofill+ write metadata first (same-scene enqueues merge; processed N seconds after the last write), default 25; 30-60 recommended on slow disks / busy plugin setups"
+    type: STRING

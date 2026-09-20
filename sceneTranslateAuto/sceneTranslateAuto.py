@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.2.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.2.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
-  写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
-- 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译 + 限速 + 断点续扫（缓存跳过）。
+  写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
+  任务带入队时间戳，worker 按 hookDelaySeconds（默认 25s）延迟处理，等待 nfo/javstashAutofill+
+  等插件先写入元数据（同场景多次入队覆盖合并，只处理"最后一次写入后静默 N 秒"的快照）。
+- 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译
+  + 限速 + 断点续扫（缓存跳过），不经过入队延迟。
 - 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；含谚文判韩语；
   含西里尔文判俄语；含阿拉伯文判阿拉伯语；含拉丁扩展变音符判拉丁语族（法/德/西/葡/意共用）；
   纯 ASCII 判英文；其余 other。目标语言支持 zh-CN/zh-TW/en/ja/ko/ru/ar/fr/de/es/pt/it。
@@ -68,6 +71,7 @@ DEFAULTS = {
     "translateTool": "google_free",
     "targetLanguage": "zh-CN",
     "scanAllConcurrency": 3,
+    "hookDelaySeconds": 25,
 }
 
 # ─── JSON with Comments Parser（与 translateProxy.py 一致）─────────────────────
@@ -145,7 +149,7 @@ def merged_settings(stash_cfg):
                     if src in blk and blk[src] not in (None, ""):
                         s[dst] = blk[src]
     if stash_cfg:
-        for k in ("translateTool", "targetLanguage", "scanAllConcurrency", "gallerySync"):
+        for k in ("translateTool", "targetLanguage", "scanAllConcurrency", "gallerySync", "hookDelaySeconds"):
             if k in stash_cfg and stash_cfg[k] not in (None, ""):
                 s[k] = stash_cfg[k]
     return s
@@ -673,10 +677,10 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
             updates[f] = new
     if not updates:
         return None
-    # 竞态保护：写回前重读当前实体（scene/gallery），若 title/details 已被他人修改
-    # （典型：nfoSceneParser 在扫描流程内把标题改写为加工标题，晚于本插件的快照读取），
-    # 则放弃对应字段的写回，避免用过期快照的翻译结果覆盖新内容；重读失败/实体消失时
-    # 保守跳过写回（字段保持现状，下次 hook/全量任务可重试）。
+    # 竞态保护：写回前重读当前实体（scene/gallery），若 title/details 已被其他插件/他人修改，
+    # 按语言判据处理——已是目标语言 → 放弃写回（尊重 nfo 加工标题等新内容）；仍非目标语言 →
+    # 以当前值重译写回（最多重译一次），保证"一切非目标语言最终翻译为目标语言"且不覆盖目标
+    # 语言内容。重读失败/实体消失时保守跳过写回（字段保持现状，下次 hook/全量任务可重试）。
     try:
         if kind == "gallery":
             cur = find_gallery(gql, str(eid))
@@ -688,13 +692,46 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
     if not cur:
         log("%s %s re-read before write returned empty, write skipped" % (kind, eid))
         return None
+    retranslate = {}
     for f in list(updates.keys()):
         cur_v = (cur.get(f) or "").strip()
         orig_v = (title if f == "title" else details) or ""
         if cur_v != orig_v:
-            log("%s %s %s changed since read (%r -> %r), field write dropped"
-                % (kind, eid, f, orig_v, cur_v))
-            del updates[f]
+            if is_target_language(cur_v, target, code_pat):
+                log("%s %s %s changed since read (%r -> %r), field write dropped"
+                    % (kind, eid, f, orig_v, cur_v))
+                del updates[f]
+            else:
+                log("%s %s %s changed since read (%r -> %r), re-translating current value"
+                    % (kind, eid, f, orig_v, cur_v))
+                del updates[f]
+                retranslate[f] = cur_v
+    # 重译一轮（限 1 次：用当前值重新翻译，不再重读；结果校验后写回，失败则放弃该字段）
+    if retranslate:
+        engine = settings.get("translateTool") or "google_free"
+        texts2, fields2 = [], []
+        for f in retranslate:
+            texts2.append(retranslate[f])
+            fields2.append(f)
+        protected2, tokens2 = [], []
+        for t in texts2:
+            p, toks = protect_codes(t, code_pat)
+            protected2.append(p)
+            tokens2.append(toks)
+        limiter.acquire()
+        try:
+            translated2 = dispatch_translate_multi(protected2, target, engine, settings)
+        except Exception as e:
+            log("%s %s re-translate failed: %s" % (kind, eid, e))
+            translated2 = [None] * len(texts2)
+        restored2 = [ensure_codes(restore_codes(tr or "", toks), toks)
+                     for tr, toks in zip(translated2, tokens2)]
+        for f, orig2, new2 in zip(fields2, texts2, restored2):
+            new2 = (new2 or "").strip()
+            if new2 and new2 != orig2 and is_target_language(new2, target, code_pat):
+                updates[f] = new2
+            else:
+                log("%s %s %s re-translate rejected (%r -> %r)" % (kind, eid, f, orig2, new2))
     if not updates:
         return None
     if kind == "gallery":
@@ -713,7 +750,8 @@ def enqueue_task(conn, sid):
     tf = os.path.join(PENDING_DIR, "%s.json" % sid)
     try:
         with open(tf, "w", encoding="utf-8") as f:
-            json.dump({"scene_id": str(sid), "server_connection": conn}, f)
+            json.dump({"scene_id": str(sid), "server_connection": conn,
+                       "enqueued_at": time.time()}, f)
     except Exception as e:
         log("enqueue error: %s" % e)
 
@@ -821,6 +859,7 @@ def worker_main():
     settings = None
     limiter = None
     processed = 0
+    delay = float(DEFAULTS.get("hookDelaySeconds") or 25)
     while True:
         try:
             files = sorted(f for f in os.listdir(PENDING_DIR) if f.endswith(".json")) \
@@ -829,6 +868,7 @@ def worker_main():
             files = []
         if not files:
             break
+        tasks = []
         for fn in files:
             tf = os.path.join(PENDING_DIR, fn)
             try:
@@ -841,14 +881,42 @@ def worker_main():
                 except OSError:
                     pass
                 continue
+            tasks.append((fn, task))
+        if not tasks:
+            continue
+        # 首次读到任务时用其连接初始化配置（settings/limiter/延迟），保证到期判断与处理用同一配置
+        if settings is None:
+            conn0 = (tasks[0][1].get("server_connection") or {})
+            try:
+                gql0 = make_gql(conn0)
+                stash_cfg = read_stash_plugin_config(gql0)
+                settings = merged_settings(stash_cfg)
+                limiter = RateLimiter(qps_for(settings))
+                try:
+                    delay = float(settings.get("hookDelaySeconds") or 25)
+                except Exception:
+                    delay = 25.0
+            except Exception as e:
+                log("config init error: %s" % e)
+                settings = merged_settings({})
+                limiter = RateLimiter(qps_for(settings))
+        now = time.time()
+        due = [t for t in tasks if now - float(t[1].get("enqueued_at") or 0) >= delay]
+        if not due:
+            # 全部未到期：等待最早到期时刻再轮询（任务被新 enqueue 刷新时间戳时自然顺延）
+            if tasks:
+                try:
+                    earliest = min(float(t[1].get("enqueued_at") or 0) + delay for t in tasks)
+                except Exception:
+                    earliest = now + delay
+                wait = min(max(earliest - time.time() + 0.5, 1.0), 30.0)
+                time.sleep(wait)
+            continue
+        for fn, task in due:
+            tf = os.path.join(PENDING_DIR, fn)
             sid = task.get("scene_id")
             conn = task.get("server_connection") or {}
             try:
-                if settings is None:
-                    gql0 = make_gql(conn)
-                    stash_cfg = read_stash_plugin_config(gql0)
-                    settings = merged_settings(stash_cfg)
-                    limiter = RateLimiter(qps_for(settings))
                 process_task(conn, sid, settings, limiter)
                 processed += 1
             except Exception as e:

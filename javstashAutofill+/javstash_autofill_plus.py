@@ -479,26 +479,19 @@ def set_scene_image_mode(sid, image_url):
             log(f"scene {sid}: cover async attempt {attempt+1} failed ({e})")
     log(f"scene {sid}: cover async gave up")
 
-def apply_scene_fill(gql, sid, scene, sc, src):
+def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
     """Build & run sceneUpdate for one scraped match. Empty-only for scalars; merge-dedup for urls/performers/tags; studio only when unset; stash_ids appended."""
     upd = {"id": str(sid)}
     def empty(f):
         v = scene.get(f)
         return v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, list) and len(v) == 0)
-    # Scenes with a sibling .nfo are NFO-managed: the NFO plugin owns the scalar
-    # metadata (title/code/details/director/date). Skip them here so the
-    # Scene.Create.Post race cannot write a (possibly wrong) title before the NFO
-    # plugin applies the NFO — the NFO plugin then never overwrites it and the
-    # foreign title sticks. Relations (stash_id/studio/performers/tags/urls/
-    # groups/cover) are still filled.
-    nfo_managed = any(
-        os.path.exists(os.path.splitext((f.get("path") or ""))[0] + ".nfo")
-        for f in (scene.get("files") or []) if f.get("path"))
-    if nfo_managed:
-        log(f"scene {sid}: sibling .nfo present, scalar fields left to the NFO plugin")
-    # scalars: empty only (skipped entirely for NFO-managed scenes)
-    for f in ("title", "code", "details", "director", "date"):
-        if nfo_managed: break
+    # Scalars empty-only. The scene hook fills from a delayed worker (20s after
+    # creation) so the NFO parser has already written title/details/date;
+    # non-empty values are kept. Title is also skipped unless overwriteSceneTitle
+    # is on (setups without NFO import).
+    if (empty("title") or ow_title) and sc.get("title"):
+        upd["title"] = sc["title"]
+    for f in ("code", "details", "director", "date"):
         if empty(f) and sc.get(f):
             upd[f] = sc[f]
     # urls: merge de-dup
@@ -566,6 +559,44 @@ def apply_scene_fill(gql, sid, scene, sc, src):
         gql("mutation($i:SceneUpdateInput!){ sceneUpdate(input:$i){ id } }", {"i": upd})
     return upd
 
+def spawn_fill_later(conn, sid):
+    """Spawn a detached worker that waits for the NFO parser then fills the scene."""
+    try:
+        env = dict(os.environ, JAVSTASH_CONN=json.dumps(conn))
+        subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                          "--fill-scene-later", str(sid)],
+                         env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:
+        log(f"scene {sid}: delayed fill spawn failed ({e})")
+
+def fill_scene_later_mode(sid, delay=20):
+    """Delayed worker entry: wait for the NFO parser, then re-read and fill."""
+    conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
+    gql = make_gql(conn)
+    time.sleep(delay)
+    settings = get_settings(gql)
+    if settings.get("sceneAutoFill") is False:
+        log(f"scene {sid}: delayed fill skipped (autofill disabled)"); return
+    src = (settings.get("sceneSource") or JAV).strip()
+    if not src.startswith("http"):
+        log(f"scene {sid}: delayed fill skipped (bad source)"); return
+    scene = get_scene_full(gql, sid)
+    if not scene:
+        log(f"scene {sid}: delayed fill: scene not found, skip"); return
+    rows = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
+    if not rows:
+        log(f"scene {sid}: no fingerprint match at {src} -> skip"); return
+    sc = rows[0]
+    scene["__conn__"] = conn
+    try:
+        upd = apply_scene_fill(gql, sid, scene, sc, src,
+                               ow_title=settings.get("overwriteSceneTitle") is True)
+        log(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
+    except Exception as e:
+        log(f"scene {sid}: delayed fill error: {e}")
+
 def handle_scene_create(payload, conn, gql):
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     sid = ctx.get("id")
@@ -577,22 +608,12 @@ def handle_scene_create(payload, conn, gql):
     src = (settings.get("sceneSource") or JAV).strip()
     if not src.startswith("http"):
         log_info("scene hook: sceneSource must be a stash-box URL"); return
-    scene = get_scene_full(gql, sid)
-    if not scene:
-        log_info(f"scene {sid}: not found, skip"); return
-    rows = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
-    if not rows:
-        log(f"scene {sid}: no fingerprint match at {src} -> skip")
-        log_info(f"scene {sid}: no match, skip"); return
-    sc = rows[0]
-    scene["__conn__"] = conn
-    try:
-        upd = apply_scene_fill(gql, sid, scene, sc, src)
-        log(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
-        log_info(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
-    except Exception as e:
-        log(f"scene {sid}: fill error: {e}")
-        log_info(f"scene {sid}: fill error: {e}")
+    # Spawn a delayed worker instead of filling now: the NFO parser may still
+    # be writing title/details/date seconds after scene creation. Filling
+    # immediately would race it; the delayed worker re-reads the scene after a
+    # short wait and fills empty-only.
+    spawn_fill_later(conn, sid)
+    log_info(f"scene {sid}: queued delayed fill (20s)")
 
 def handle_scene_backfill(payload, conn, gql):
     """Task: scan all scenes missing the configured stash-box endpoint, look them up by file hash and fill."""
@@ -629,7 +650,8 @@ def handle_scene_backfill(payload, conn, gql):
         hits = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
         if not hits: continue
         try:
-            apply_scene_fill(gql, sid, scene, hits[0], src)
+            apply_scene_fill(gql, sid, scene, hits[0], src,
+                              ow_title=settings.get("overwriteSceneTitle") is True)
             matched += 1
             if (hits[0].get("remote_site_id") or "").strip():
                 filled += 1
@@ -760,7 +782,9 @@ def main():
         log_info(f"performer {pid} '{name}': apply error: {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 4 and sys.argv[1] == "--set-scene-image":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--fill-scene-later":
+        fill_scene_later_mode(sys.argv[2])
+    elif len(sys.argv) >= 4 and sys.argv[1] == "--set-scene-image":
         set_scene_image_mode(sys.argv[2], sys.argv[3])
     elif len(sys.argv) >= 4 and sys.argv[1] == "--set-image":
         set_image_mode(sys.argv[2], sys.argv[3])

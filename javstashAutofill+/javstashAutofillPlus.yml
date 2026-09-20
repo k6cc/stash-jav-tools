@@ -1,6 +1,6 @@
 name: Javstash Autofill+
 description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
-version: 1.1.1
+version: 1.1.2
 url: https://discourse.stashapp.cc/u/ufousox007/activity/topics
 errLog: info
 exec:
@@ -16,6 +16,10 @@ settings:
     displayName: Scraper (scene)
     description: Stash-box endpoint URL used to look up new scenes by file hash (e.g. https://javstash.org/graphql). Empty = javstash. Must be a stash-box URL, not a scraper_id.
     type: STRING
+  overwriteSceneTitle:
+    displayName: Overwrite scene title
+    description: When ON, write the scraped title even if the scene already has one. OFF = title kept as-is (recommended when NFO import owns the title; the delayed fill runs 20s after creation so NFO has already written it). Default OFF.
+    type: BOOLEAN
   identifySource:
     displayName: Scraper (Identify)
     description: Source for performers auto-created by Identify. A stash-box endpoint URL (e.g. https://javstash.org/graphql) or a scraper_id (e.g. Minnano-AV-JP). Empty = javstash.

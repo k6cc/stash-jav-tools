@@ -14,7 +14,7 @@ Stash 鎻掍欢宸ュ叿闆?鈥?Python + UI 娣峰悎鎻掍欢鍚堥泦銆?
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 绾悗鍙?| 宸ヤ綔瀹ゅ垱寤烘椂鑷姩浠?Stash-box 瀹炰緥鎷夊彇璧勬枡锛屽綊涓€鍖栫簿纭尮閰嶅悗鍚堝苟/琛ュ叏锛堥浂 UI 娉ㄥ叆锛屽彲寮€澶氭簮琛ラ綈锛?|
 | [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 绾悗鍙?| 閽╁瓙鑷姩鍚堝苟鏂板缓 tag + 浠诲姟椤靛叏閲忔壂鎻忥紙鏈湴鏄犲皠琛ㄣ€侀浂缃戠粶闆惰缃級 |
 | [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.0 | 绾悗鍙?| 閽╁瓙鑷姩缈昏瘧鍦烘櫙鏍囬/绠€浠嬩负鐩爣璇█ + 浠诲姟椤靛叏閲忔壂鎻忥紙澶嶇敤 sceneTranslate 寮曟搸锛屾棤浠ｇ悊鏃犵鍙ｏ級 |
-| [javstashAutofill+](./javstashAutofill+/) | 1.0.7 | 绾悗鍙?| 鏂版紨鍛樻寜鍚嶅埉鍓?JAVStash 琛ュ叏瀛楁+stash_id锛涙柊鍦烘櫙鎸?oshash 琛ョ┖鐧藉瓧娈?stash_id锛涙墜鍔ㄤ换鍔℃壒閲忓洖濉?|
+| [javstashAutofill+](./javstashAutofill+/) | 1.0.8 | 绾悗鍙?| 鏂版紨鍛樻寜鍚嶅埉鍓?JAVStash 琛ュ叏瀛楁+stash_id锛涙柊鍦烘櫙鎸?oshash 琛ョ┖鐧藉瓧娈?stash_id锛涙墜鍔ㄤ换鍔℃壒閲忓洖濉?|
 
 ## 瀹夎
 

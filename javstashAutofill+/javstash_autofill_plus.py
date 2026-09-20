@@ -495,13 +495,13 @@ def handle_scene_create(payload, conn, gql):
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     sid = ctx.get("id")
     if not sid:
-        print(json.dumps({"output": "skip (no scene id)"})); return
+        log_info("scene hook: no scene id"); return
     settings = get_settings(gql)
     if settings.get("sceneAutoFill") is False:   # default ON
-        print(json.dumps({"output": "skip (scene autofill disabled)"})); return
+        log_info("scene hook: autofill disabled"); return
     src = (settings.get("sceneSource") or JAV).strip()
     if not src.startswith("http"):
-        print(json.dumps({"output": "skip (sceneSource must be a stash-box URL)"})); return
+        log_info("scene hook: sceneSource must be a stash-box URL"); return
     scene = get_scene_full(gql, sid)
     if not scene:
         log_info(f"scene {sid}: not found, skip"); return
@@ -572,7 +572,7 @@ def main():
     try:
         payload = json.loads(sys.stdin.read())
     except Exception:
-        print(json.dumps({"output": "no input"})); return
+        log_info("no input from stdin"); return
     conn = payload.get("server_connection", {})
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     pid = ctx.get("id")
@@ -587,16 +587,16 @@ def main():
     if "Scene.Create" in htype:
         handle_scene_create(payload, conn, gql); return
     if not pid or "Performer.Create" not in htype:
-        print(json.dumps({"output": "skip (not performer/scene create)"})); return
+        log_info("skip: not performer/scene create"); return
     create_input = ctx.get("input") or {}
     from_identify = bool(create_input.get("stash_ids"))
 
     try:
         perf = get_performer(gql, pid)
     except Exception as e:
-        log(f"get_performer error {pid}: {e}"); print(json.dumps({"output": "skip (fetch error)"})); return
+        log(f"get_performer error {pid}: {e}"); log_info(f"performer {pid}: fetch error, skip"); return
     if not perf or not perf.get("name"):
-        print(json.dumps({"output": "skip (no name)"})); return
+        log_info(f"performer {pid}: no name, skip"); return
     name = perf["name"]
     targets = [name] + list(perf.get("alias_list") or [])
 
@@ -627,13 +627,13 @@ def main():
     cands = scrape_source(gql, name, source_input)
     if not cands:
         log(f"{pid} '{name}': no candidate ({source_input}) -> skip")
-        print(json.dumps({"output": "skip (no candidate)"})); return
+        log_info(f"performer {pid} '{name}': no candidate, skip"); return
     scored = sorted(((match_score(targets, [c.get("name")] + split_aliases(c.get("aliases"))), c)
                      for c in cands), key=lambda x: x[0], reverse=True)
     top_score, top = scored[0]
     if top_score < threshold:
         log(f"{pid} '{name}': best score {top_score:.2f} < {threshold} -> skip")
-        print(json.dumps({"output": f"skip (no match {top_score:.2f})"})); return
+        log_info(f"performer {pid} '{name}': score {top_score:.2f} too low, skip"); return
 
     cand_name = (top.get("name") or "").strip()
     prefer_scraper = bool(use_scraper_name) and bool(cand_name) and norm(cand_name) != norm(name)
@@ -662,7 +662,7 @@ def main():
                 apply_image_async(conn, dup_id, dest, top, overwrite=ow.get("image"))
                 log(f"{pid} '{name}' [{ctx_label}]: MERGED into {dup_id} '{dest['name']}' "
                     f"(fields={sorted(values.keys())}, score={top_score:.2f})")
-                print(json.dumps({"output": f"merged into {dup_id}"})); return
+                log_info(f"performer {pid}: merged into {dup_id}"); return
             # no duplicate -> rename to the scraper name (created name kept as alias)
             values = build_update(perf, top, primary_name=cand_name, extra_aliases=[perf["name"]], set_name=True, ow=ow)
             mode = f"{ctx_label}(rename)"
@@ -679,10 +679,10 @@ def main():
             performer_update(gql, pid, values)
         apply_image_async(conn, pid, perf, top, overwrite=ow.get("image"))
         log(f"{pid} '{name}' [{mode}]: filled {sorted(values.keys())} (score={top_score:.2f})")
-        print(json.dumps({"output": f"filled {sorted(values.keys())}"}))
+        log_info(f"performer {pid} '{name}': filled {sorted(values.keys())}")
     except Exception as e:
         log(f"{pid} '{name}': apply error {e}")
-        print(json.dumps({"output": "apply error", "error": str(e)}))
+        log_info(f"performer {pid} '{name}': apply error: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "--set-scene-image":

@@ -65,7 +65,7 @@ plugins/
 | studioToolsAuto | 需要 | 不需要 | 需要（经「设置 → 元数据提供者」配置 Stash-box 实例，插件自动复用） |
 | tagMergeAuto | 需要 | 不需要 | 不需要 |
 | sceneTranslateAuto | 需要 | 不需要 | 不需要（需容器/宿主机可访问翻译 API 外网） |
-| javstashAutofill+ | 需要 | 不需要 | 不需要（需容器/宿主机可访问 JAVStash 外网） |
+| javstashAutofill+ | 需要 | 不需要 | JAVStash（经「设置 → 元数据提供者」stash-box 端点配置，插件自动复用） |
 
 ### Docker 部署
 

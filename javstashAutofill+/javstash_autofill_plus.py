@@ -34,6 +34,13 @@ def log(msg):
         pass
     print(f"[Javstash Autofill+] {msg}")
 
+def _proto(level, msg):
+    print(f"\x01{level}\x02{msg}", file=sys.stderr, flush=True)
+def log_info(msg):
+    _proto("i", msg)
+def log_progress(p):
+    _proto("p", f"{max(0.0,min(1.0,float(p))):.3f}")
+
 # ---------- Stash GraphQL ----------
 def make_gql(conn):
     scheme = conn.get("Scheme", "http")
@@ -493,39 +500,48 @@ def handle_scene_backfill(payload, conn, gql):
     settings = get_settings(gql)
     src = (settings.get("sceneSource") or JAV).strip()
     if not src.startswith("http"):
-        print(json.dumps({"output": "sceneSource must be a stash-box URL"})); return
-    # page through scenes; for each without this endpoint and with files, scrape & fill
-    page = 1; filled = 0; checked = 0; matched = 0
+        log_info("sceneSource must be a stash-box URL"); return
+    # First pass: collect all scenes needing fill (missing endpoint + has files)
+    todo = []
+    page = 1
     while True:
         q = ('{ findScenes(filter:{per_page:100,page:%d,sort:"id"}){ scenes{ id files{ id } stash_ids{ endpoint } } } }' % page)
         try:
             rows = gql(q).get("findScenes", {}).get("scenes", [])
         except Exception as e:
-            print(json.dumps({"output": f"list error: {e}"})); return
+            log_info(f"list error: {e}"); return
         if not rows: break
         for sc in rows:
-            checked += 1
             eps = {s["endpoint"] for s in (sc.get("stash_ids") or [])}
             if src in eps: continue
             if not (sc.get("files") or []): continue
-            sid = sc["id"]
-            time.sleep(0.3)  # rate-limit JAVStash (~200/min)
-            scene = get_scene_full(gql, sid)
-            scene["__conn__"] = conn
-            hits = scrape_scene_full(gql, sid, src)
-            if not hits: continue
-            try:
-                apply_scene_fill(gql, sid, scene, hits[0], src)
-                matched += 1
-                if (hits[0].get("remote_site_id") or "").strip():
-                    filled += 1
-            except Exception as e:
-                log(f"backfill scene {sid}: {e}")
+            todo.append(sc["id"])
         page += 1
-        print(json.dumps({"output": f"progress: checked {checked}, matched {matched}, added stash_id {filled} (page {page})"}))
-    out = f"backfill done: checked {checked}, matched {matched}, added stash_id {filled}"
+    total = len(todo)
+    log_info(f"backfill: {total} scenes need stash_id, starting")
+    filled = 0; matched = 0; done = 0
+    for sid in todo:
+        done += 1
+        log_progress(done / total if total else 1.0)
+        time.sleep(0.3)  # rate-limit JAVStash (~200/min)
+        scene = get_scene_full(gql, sid)
+        if not scene: continue
+        scene["__conn__"] = conn
+        hits = scrape_scene_full(gql, sid, src)
+        if not hits: continue
+        try:
+            apply_scene_fill(gql, sid, scene, hits[0], src)
+            matched += 1
+            if (hits[0].get("remote_site_id") or "").strip():
+                filled += 1
+        except Exception as e:
+            log(f"backfill scene {sid}: {e}")
+        if done % 10 == 0 or done == total:
+            log_info(f"progress: {done}/{total} (matched {matched}, added stash_id {filled})")
+    out = f"backfill done: {total} scenes, matched {matched}, added stash_id {filled}"
     log(out)
-    print(json.dumps({"output": out}))
+    log_info(out)
+    log_progress(1.0)
 
 # ---------- main ----------
 def main():

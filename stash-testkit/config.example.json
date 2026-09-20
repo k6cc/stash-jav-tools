@@ -1,0 +1,10 @@
+{
+  "_comment": "复制本文件为 config.json 并填写真实值；config.json 已被 .gitignore 忽略，不会提交。api_key 必填（Stash 设置里生成的 API Key，请求需双发 ApiKey 与 Authorization: Bearer 头）。",
+  "api_url": "http://localhost:9999/graphql",
+  "api_key": "",
+  "db_path": "E:/stashAPP/stash-go.sqlite",
+  "stash_exe": "E:/stashAPP/stash-win.exe",
+  "ffmpeg_exe": "C:/path/to/ffmpeg.exe",
+  "plugin_dir": "E:/stashAPP/plugins/k6cc",
+  "test_dir": "E:/Temp/test-scenes"
+}

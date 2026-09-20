@@ -23,6 +23,9 @@ auto_state/
 # 论坛发帖草稿（不随仓库发布）
 forum-post-*.md
 
+# 测试工具本地配置（含 API key，不提交）
+stash-testkit/config.json
+
 # 系统文件
 Thumbs.db
 Desktop.ini

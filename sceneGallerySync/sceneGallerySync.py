@@ -27,7 +27,6 @@ class SceneGallerySync:
         mode = self._stash.get_mode()
         scene_id = self._stash.get_scene_id()
         hook_type = self._stash.get_hook_type()
-        log.LogInfo(f"mode={mode} hook={hook_type} scene_id={scene_id}")
 
         if hook_type == "Scene.Create.Post":
             return
@@ -57,8 +56,7 @@ class SceneGallerySync:
                 return
             scene_dir = os.path.dirname(scene["files"][0]["path"])
             if not self.__find_extrafanart_folder(scene_dir):
-                log.LogInfo("No extrafanart folder, skipping")
-                return
+                        return
             self.__spawn_background(scene_id)
         elif mode == "background":
             self.__run_background(scene_id)
@@ -133,10 +131,8 @@ class SceneGallerySync:
         finally:
             log_fh.close()
 
-        log.LogInfo(f"Background task spawned for scene {scene_id}")
 
     def __run_background(self, scene_id):
-        log.LogInfo(f"Background task started for scene {scene_id}")
 
         sleep_time = 3
         for attempt in range(12):
@@ -334,15 +330,13 @@ class SceneGallerySync:
 
         extrafanart_path = self.__find_extrafanart_folder(scene_dir)
         if not extrafanart_path:
-            log.LogInfo("No extrafanart folder, skipping")
-            return "No extrafanart folder"
+                return "No extrafanart folder"
 
         poster_path = self.__find_poster_file(scene_dir, scene_filename)
         fanart_paths = self.__find_fanart_files(scene_dir, scene_filename)
         extrafanart_files = self.__list_extrafanart_files(extrafanart_path)
 
         if not extrafanart_files:
-            log.LogInfo("No images in extrafanart folder, skipping")
             return "No images in extrafanart folder"
 
         all_paths = []
@@ -359,7 +353,6 @@ class SceneGallerySync:
             extrafanart_ids = [found[p] for p in extrafanart_files if p in found]
 
         if not extrafanart_ids:
-            log.LogInfo("No extrafanart images in DB, skipping (use button to create later)")
             return "Extrafanart images not indexed in Stash"
 
         poster_id = found.get(poster_path) if poster_path else None
@@ -482,7 +475,6 @@ if __name__ == '__main__':
         if is_background:
             log.set_plain(True)
 
-        log.LogInfo("sceneGallerySync starting")
         stash = StashInterface(fragment)
         SceneGallerySync(stash).process()
         stash.exit_plugin("OK")

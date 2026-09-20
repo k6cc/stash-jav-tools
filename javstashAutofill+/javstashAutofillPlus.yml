@@ -1,0 +1,125 @@
+name: Javstash Autofill+
+description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
+version: 1.0.0
+url: https://discourse.stashapp.cc/u/ufousox007/activity/topics
+errLog: info
+exec:
+  - python3
+  - "{pluginDir}/javstash_autofill_plus.py"
+interface: raw
+settings:
+  sceneAutoFill:
+    displayName: Scene auto-add stash IDs
+    description: When ON, a newly scanned scene is looked up on the configured stash-box by its file fingerprint (oshash) and the matching stash_id is written into the scene's stash_ids (only when that endpoint is not already set). Default ON.
+    type: BOOLEAN
+  sceneSource:
+    displayName: Scraper (scene)
+    description: Stash-box endpoint URL used to look up new scenes by file hash (e.g. https://javstash.org/graphql). Empty = javstash. Must be a stash-box URL, not a scraper_id.
+    type: STRING
+  identifySource:
+    displayName: Scraper (Identify)
+    description: Source for performers auto-created by Identify. A stash-box endpoint URL (e.g. https://javstash.org/graphql) or a scraper_id (e.g. Minnano-AV-JP). Empty = javstash.
+    type: STRING
+  identifyUseScraperName:
+    displayName: Identify - use scraper name as primary
+    description: When ON, Identify-created performers get the scraper's canonical name as primary (created name -> alias; merged if a same-named performer exists). When OFF, keep the created name. Default ON.
+    type: BOOLEAN
+  manualSource:
+    displayName: Scraper (manual)
+    description: Source for manually-created performers. Endpoint URL or scraper_id. Empty = javstash.
+    type: STRING
+  manualUseScraperName:
+    displayName: Manual - use scraper name as primary
+    description: When ON, manually-created performers also get the scraper's canonical name as primary. When OFF, keep the created name. Default OFF.
+    type: BOOLEAN
+  threshold:
+    displayName: Name-match threshold (0-1)
+    description: Skip when the best name-match score is below this. Default 0.9.
+    type: NUMBER
+  owBirthdate:
+    displayName: "Overwrite: birthdate"
+    description: Overwrite even if a value already exists. OFF = fill only when empty.
+    type: BOOLEAN
+  owDeathDate:
+    displayName: "Overwrite: death date"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owMeasurements:
+    displayName: "Overwrite: measurements"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owHeight:
+    displayName: "Overwrite: height"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owWeight:
+    displayName: "Overwrite: weight"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owCountry:
+    displayName: "Overwrite: country"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owEthnicity:
+    displayName: "Overwrite: ethnicity"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owHairColor:
+    displayName: "Overwrite: hair color"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owEyeColor:
+    displayName: "Overwrite: eye color"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owGender:
+    displayName: "Overwrite: gender"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owFakeTits:
+    displayName: "Overwrite: fake tits (Natural/Fake)"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owCareerLength:
+    displayName: "Overwrite: career length"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owTattoos:
+    displayName: "Overwrite: tattoos"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owPiercings:
+    displayName: "Overwrite: piercings"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owDetails:
+    displayName: "Overwrite: details"
+    description: Overwrite even if set. OFF = empty only.
+    type: BOOLEAN
+  owUrls:
+    displayName: "Overwrite: URLs"
+    description: When ON, replace urls with the scraper's. OFF = keep existing and append missing.
+    type: BOOLEAN
+  owAliasList:
+    displayName: "Overwrite: aliases"
+    description: When ON, replace alias_list from the scraper. OFF = keep existing and append missing (recommended).
+    type: BOOLEAN
+  owImage:
+    displayName: "Overwrite: image"
+    description: When ON, replace an existing image with the scraper's. OFF = set only when there is no image.
+    type: BOOLEAN
+tasks:
+  - name: "Backfill scenes stash-box ID"
+    description: "For every scene without the configured stash-box ID, look it up by file hash and fill empty fields (title/code/details/director/date, studio, performers, tags, urls) and the stash_id."
+    defaultArgs:
+      mode: scene_backfill
+
+hooks:
+  - name: performer_create_autofill
+    description: Fill fields when a performer is created
+    triggeredBy:
+      - Performer.Create.Post
+  - name: scene_create_autofill
+    description: Look up a newly scanned scene by file hash and fill empty fields (title/code/details/director/date, studio, performers, tags, urls, cover) and stash_id
+    triggeredBy:
+      - Scene.Create.Post

@@ -24,6 +24,7 @@ on:
       - "tagMergeAuto-v*.*.*"
       - "studioToolsAuto-v*.*.*"
       - "sceneTranslateAuto-v*.*.*"
+      - "javstashAutofill+-v*.*.*"
 
 # 不使用 concurrency 串行：GitHub Actions 同组排队只保留最新一个 pending run，
 # 多 tag 同时推送会把中间的运行直接取消（曾导致 studioTools-v1.1.1 被 cancel）。

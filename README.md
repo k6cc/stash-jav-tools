@@ -15,6 +15,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
 | [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
 | [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.0 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
+| [javstashAutofill+](./javstashAutofill+/) | 1.0.0 | 纯后台 | 新演员按名刮削 JAVStash 补全字段+stash_id；新场景按 oshash 补空白字段+stash_id；手动任务批量回填 |
 
 ## 安装
 
@@ -48,6 +49,7 @@ plugins/
   studioToolsAuto/     # 解压 studioToolsAuto-vX.Y.Z.zip
   tagMergeAuto/        # 解压 tagMergeAuto-vX.Y.Z.zip
   sceneTranslateAuto/  # 解压 sceneTranslateAuto-vX.Y.Z.zip
+  javstashAutofill+/  # 解压 javstashAutofill+-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -63,6 +65,7 @@ plugins/
 | studioToolsAuto | 需要 | 不需要 | 需要（经「设置 → 元数据提供者」配置 Stash-box 实例，插件自动复用） |
 | tagMergeAuto | 需要 | 不需要 | 不需要 |
 | sceneTranslateAuto | 需要 | 不需要 | 不需要（需容器/宿主机可访问翻译 API 外网） |
+| javstashAutofill+ | 需要 | 不需要 | 不需要（需容器/宿主机可访问 JAVStash 外网） |
 
 ### Docker 部署
 
@@ -95,6 +98,7 @@ pip3 install requests
 | studioToolsAuto | 纯后台 | Studio.Create.Post 钩子 + 手动任务 |
 | tagMergeAuto | 纯后台 | Tag.Create.Post 钩子 + 手动任务 |
 | sceneTranslateAuto | 纯后台 | Scene.Create.Post / Scene.Update.Post 钩子 + 手动任务 |
+| javstashAutofill+ | 纯后台 | Performer.Create.Post / Scene.Create.Post 钩子 + 手动任务 |
 
 各插件详细使用说明见对应目录下的 `README.md`。
 

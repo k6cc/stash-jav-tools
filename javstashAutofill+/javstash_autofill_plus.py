@@ -262,7 +262,7 @@ SCENE_FULL_FIELDS = ("title code details director date urls image remote_site_id
 
 def get_scene_full(gql, sid):
     q = ("query($id:ID!){ findScene(id:$id){ id title code details director date urls "
-         "studio{ id name } performers{ id } tags{ id } groups{ group_id } paths{ screenshot } stash_ids{ endpoint stash_id } created_at } }")
+         "studio{ id name } performers{ id } tags{ id } groups{ group{ id } } paths{ screenshot } stash_ids{ endpoint stash_id } created_at } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
 def scrape_scene_full(gql, sid, source_url):
@@ -422,7 +422,7 @@ def apply_scene_fill(gql, sid, scene, sc, src):
     if want_tids != existing_tids:
         upd["tag_ids"] = sorted(want_tids, key=int)
     # groups: find-or-create by name
-    existing_gids = {str(g.get("group_id")) for g in (scene.get("groups") or [])}
+    existing_gids = {str(g["group"]["id"] if g.get("group") else None) for g in (scene.get("groups") or [])}
     want_groups = []
     for g in (sc.get("groups") or []):
         gid = g.get("stored_id") or find_or_create_group(gql, g.get("name"))

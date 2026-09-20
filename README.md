@@ -1,4 +1,4 @@
-﻿# stash-jav-tools
+# stash-jav-tools
 
 Stash 閹绘帊娆㈠銉ュ徔闂?閳?Python + UI 濞ｅ嘲鎮庨幓鎺嶆閸氬牓娉﹂妴?
 ## 閸栧懎鎯堥幓鎺嶆

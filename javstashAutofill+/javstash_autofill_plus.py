@@ -504,20 +504,20 @@ def handle_scene_create(payload, conn, gql):
         print(json.dumps({"output": "skip (sceneSource must be a stash-box URL)"})); return
     scene = get_scene_full(gql, sid)
     if not scene:
-        print(json.dumps({"output": "skip (scene not found)"})); return
+        log_info(f"scene {sid}: not found, skip"); return
     rows = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
     if not rows:
         log(f"scene {sid}: no fingerprint match at {src} -> skip")
-        print(json.dumps({"output": "skip (no match by hash)"})); return
+        log_info(f"scene {sid}: no match, skip"); return
     sc = rows[0]
     scene["__conn__"] = conn
     try:
         upd = apply_scene_fill(gql, sid, scene, sc, src)
         log(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
-        print(json.dumps({"output": f"filled {sorted(k for k in upd if k != 'id')}"}))
+        log_info(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
     except Exception as e:
         log(f"scene {sid}: fill error: {e}")
-        print(json.dumps({"output": "fill error", "error": str(e)}))
+        log_info(f"scene {sid}: fill error: {e}")
 
 def handle_scene_backfill(payload, conn, gql):
     """Task: scan all scenes missing the configured stash-box endpoint, look them up by file hash and fill."""

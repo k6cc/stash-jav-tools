@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.2.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.2.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）。
@@ -225,6 +225,7 @@ def make_gql(conn):
 Q_PLUGINS = "query { configuration { plugins } }"
 Q_SCENE = ("query($id: ID!){ findScene(id:$id){ id title details "
            "galleries { id title details } } }")
+Q_GALLERY = "query($id: ID!){ findGallery(id:$id){ id title details } }"
 Q_SCENES_PAGE = ("query($filter: FindFilterType!, $scene_filter: SceneFilterType){ "
                  "findScenes(filter: $filter, scene_filter: $scene_filter){ count scenes{ "
                  "id title details galleries { id title details } } } }")
@@ -247,6 +248,15 @@ def find_scene(gql, sid):
         return ((data or {}).get("findScene")) or {}
     except Exception as e:
         log("findScene %s error: %s" % (sid, e))
+        return {}
+
+
+def find_gallery(gql, gid):
+    try:
+        data = gql(Q_GALLERY, {"id": str(gid)})
+        return ((data or {}).get("findGallery")) or {}
+    except Exception as e:
+        log("findGallery %s error: %s" % (gid, e))
         return {}
 
 
@@ -661,6 +671,30 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
         # 只写回「已是目标语言」且「与原文不同」的结果（防循环 + 防引擎原样/半吊子返回）
         if new and new != orig and is_target_language(new, target, code_pat):
             updates[f] = new
+    if not updates:
+        return None
+    # 竞态保护：写回前重读当前实体（scene/gallery），若 title/details 已被他人修改
+    # （典型：nfoSceneParser 在扫描流程内把标题改写为加工标题，晚于本插件的快照读取），
+    # 则放弃对应字段的写回，避免用过期快照的翻译结果覆盖新内容；重读失败/实体消失时
+    # 保守跳过写回（字段保持现状，下次 hook/全量任务可重试）。
+    try:
+        if kind == "gallery":
+            cur = find_gallery(gql, str(eid))
+        else:
+            cur = find_scene(gql, str(eid))
+    except Exception as e:
+        log("%s %s re-read before write failed, write skipped: %s" % (kind, eid, e))
+        return None
+    if not cur:
+        log("%s %s re-read before write returned empty, write skipped" % (kind, eid))
+        return None
+    for f in list(updates.keys()):
+        cur_v = (cur.get(f) or "").strip()
+        orig_v = (title if f == "title" else details) or ""
+        if cur_v != orig_v:
+            log("%s %s %s changed since read (%r -> %r), field write dropped"
+                % (kind, eid, f, orig_v, cur_v))
+            del updates[f]
     if not updates:
         return None
     if kind == "gallery":

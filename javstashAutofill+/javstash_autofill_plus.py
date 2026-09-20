@@ -32,6 +32,7 @@ def log(msg):
             f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
     except Exception:
         pass
+    print(f"[Javstash Autofill+] {msg}")
 
 # ---------- Stash GraphQL ----------
 def make_gql(conn):

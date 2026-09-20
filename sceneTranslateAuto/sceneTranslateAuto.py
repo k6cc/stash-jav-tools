@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.2.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.2.3: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
-  任务带入队时间戳，worker 按 hookDelaySeconds（默认 25s）延迟处理，等待 nfo/javstashAutofill+
-  等插件先写入元数据（同场景多次入队覆盖合并，只处理"最后一次写入后静默 N 秒"的快照）。
+  任务带入队时间戳与 title/details 快照，worker 按 hookDelaySeconds（默认 25s）延迟处理，
+  等待 nfo/javstashAutofill+ 等插件先写入元数据（同场景覆盖合并；快照未变的相关更新
+  跳过重入队不刷新延迟，仅内容变化才顺延——只处理"最后一次内容变化后静默 N 秒"的快照）。
 - 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译
   + 限速 + 断点续扫（缓存跳过），不经过入队延迟。
-- 语言判断：番号全文匹配跳过；含日文假名判日文；含 CJK 无假名判已译（中文）；含谚文判韩语；
+- 语言判断：番号全文匹配跳过；含假名文本按汉字/假名占比判定——假名占优/纯日文判日文，
+  汉字占优（汉字数 > 假名数 且 汉字 ≥ 2）判已译（中文）；含 CJK 无假名判已译（中文）；
+  含谚文判韩语；
   含西里尔文判俄语；含阿拉伯文判阿拉伯语；含拉丁扩展变音符判拉丁语族（法/德/西/葡/意共用）；
   纯 ASCII 判英文；其余 other。目标语言支持 zh-CN/zh-TW/en/ja/ko/ru/ar/fr/de/es/pt/it。
   翻译后复检：结果已是目标语言且与原文不同才写回（防循环主防线）。
@@ -270,6 +273,11 @@ def update_scene(gql, sid, fields):
 
 # ─── 语言检测（启发式，无网络）────────────────────────────────────────────────
 
+# 中文占优阈值（目标语言 zh）：含假名文本中「汉字数 > 假名数 且 汉字数 ≥ 此阈值」视为中文
+# 跳过翻译（中文读者已可读）；阈值 2 防单字噪声，更短标题由 minLength（默认 4）先行拦截。
+ZH_DOMINANT_HANZI_MIN = 2
+
+
 def classify(text, code_pattern):
     t = (text or "").strip()
     if not t:
@@ -308,15 +316,20 @@ def needs_translation(text, target_lang, code_pattern, min_length):
         return False
     tl = (target_lang or "zh-CN").lower()
     if tl.startswith("zh"):
-        if cls in ("ja", "en", "ko", "ru", "latin_ext", "ar", "other"):
+        if cls == "ja":
+            # 组合判据（v1.2.3）：含假名 ≠ 无条件日文。汉字数 > 假名数 且 汉字数 ≥ 阈值 →
+            # 中文为主（中文读者已可读），跳过翻译；假名占优 / 纯日文 → 判 ja 翻译。
+            # 番号前缀是 ASCII/数字，不计入汉字或假名，不影响判定。
+            hanzi = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+            kana = sum(1 for c in text if "\u3040" <= c <= "\u30ff")
+            if hanzi > kana and hanzi >= ZH_DOMINANT_HANZI_MIN:
+                return False
             return True
-        # 番号 + 汉字（无假名）：JAV 标题高频形态（如 ABC-123 美少女），视为日文需翻译
-        if cls == "zh":
-            try:
-                if re.search(code_pattern, text):
-                    return True
-            except Exception:
-                pass
+        if cls in ("en", "ko", "ru", "latin_ext", "ar", "other"):
+            return True
+        # cls == "zh"（无假名的汉字文本）：视为已译（中文），跳过翻译。
+        # v1.2.3 起移除旧规则「番号+汉字（无假名）视为日文需翻译」：中文读者已可读，
+        # 番号前缀不影响判定（与混合判据一致）。
         return False
     if tl.startswith("en"):
         return cls in ("ja", "zh", "ko", "ru", "latin_ext", "ar", "other")
@@ -394,32 +407,31 @@ class TranslateError(Exception):
 
 
 def google_free_translate_multi(texts, target_lang):
-    url = "https://translate.googleapis.com/translate_a/single?" + urlencode(
-        [("client", "gtx"), ("sl", "auto"), ("tl", target_lang), ("dt", "t")] +
-        [("q", t) for t in texts])
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    for attempt in range(3):
-        try:
-            with urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            segs = data[0] if data and isinstance(data[0], list) else None
-            if not segs:
-                return list(texts)
-            # 多 q：外层每段对应一个 q，内层是该 q 的分段
-            if isinstance(segs[0], list) and segs[0] and isinstance(segs[0][0], list):
-                out = []
-                for q_segs in segs:
-                    out.append("".join(s[0] for s in q_segs if isinstance(s, list) and s and s[0]))
-                if len(out) == len(texts):
-                    return out
-            # 单 q 扁平
-            return ["".join(s[0] for s in segs if isinstance(s, list) and s and s[0])]
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(1)
-            else:
-                raise TranslateError("Google free translate failed: %s" % e)
-    return list(texts)
+    """逐 q 调用（v1.2.3）：free 端点的多 q 参数实测只返回第一个 q 的译文、无法可靠解析
+    多 q 响应，故每个入参文本独立请求一次，按入参顺序返回译文列表——保证 title+details
+    同时需翻译时各自都能拿到对应译文并写回。限速沿用调用侧 RateLimiter 语义（每批一次
+    acquire，本函数内串行请求，不新增并发）。"""
+    out = []
+    for t in texts:
+        url = "https://translate.googleapis.com/translate_a/single?" + urlencode(
+            [("client", "gtx"), ("sl", "auto"), ("tl", target_lang), ("dt", "t"), ("q", t)])
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        for attempt in range(3):
+            try:
+                with urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                segs = data[0] if data and isinstance(data[0], list) else None
+                if not segs:
+                    out.append(t)
+                else:
+                    out.append("".join(s[0] for s in segs if isinstance(s, list) and s and s[0]))
+                break
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(1)
+                else:
+                    raise TranslateError("Google free translate failed: %s" % e)
+    return out
 
 
 def google_api_translate_multi(texts, target_lang, api_key):
@@ -745,15 +757,38 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
 
 # ─── pending 队列 + 单例 worker ──────────────────────────────────────────────
 
-def enqueue_task(conn, sid):
+def enqueue_task(conn, sid, title=None, details=None):
     os.makedirs(PENDING_DIR, exist_ok=True)
     tf = os.path.join(PENDING_DIR, "%s.json" % sid)
     try:
         with open(tf, "w", encoding="utf-8") as f:
             json.dump({"scene_id": str(sid), "server_connection": conn,
-                       "enqueued_at": time.time()}, f)
+                       "enqueued_at": time.time(),
+                       # 方案 D 快照（v1.2.3）：入队时记录当时的 title/details，
+                       # handle_hook 借此判断"无关更新"跳过重入队，防翻译顺延。
+                       "title_snapshot": (title or "").strip(),
+                       "details_snapshot": (details or "").strip()}, f)
     except Exception as e:
         log("enqueue error: %s" % e)
+
+
+def pending_task_matches(sid, title, details):
+    """方案 D 快照比对：pending 任务文件若带 title_snapshot/details_snapshot 且与当前
+    title/details 完全一致 → True（跳过重入队，保留原到期时间，防无关更新把翻译顺延 25s）。
+    旧格式任务文件（v1.2.2 及更早，无快照字段）→ 视为无快照返回 False，按现有逻辑刷新一次
+    enqueued_at（历史任务不被误跳过）；文件缺失/读取失败同样返回 False，由 enqueue_task
+    覆盖写。"""
+    tf = os.path.join(PENDING_DIR, "%s.json" % sid)
+    try:
+        with open(tf, "r", encoding="utf-8") as f:
+            task = json.load(f)
+    except Exception:
+        return False
+    snap_t = task.get("title_snapshot")
+    snap_d = task.get("details_snapshot")
+    if snap_t is None or snap_d is None:
+        return False
+    return snap_t == (title or "") and snap_d == (details or "")
 
 
 def pid_alive(pid):
@@ -974,7 +1009,16 @@ def handle_hook(payload):
     if not need:
         print(json.dumps({"output": "skip (already in target language or nothing to translate)"}))
         return
-    enqueue_task(conn, sid)
+    # 方案 D（v1.2.3）：快照比对防顺延 —— pending 任务已存在且其快照与当前 title/details
+    # 完全一致（如 javstashAutofill+ 只写 stash_id、不改 title/details）时跳过重入队，保留
+    # 原到期时间，避免每次无关更新都把翻译顺延 25s；快照不同（nfo 真改了 title/details）→
+    # 正常入队刷新。旧格式任务文件视为无快照，按现有逻辑刷新一次（见 pending_task_matches）。
+    if pending_task_matches(sid, title, details):
+        if not spawn_worker():
+            log("worker already running, task queued")
+        print(json.dumps({"output": "enqueued scene %s for translation" % sid}))
+        return
+    enqueue_task(conn, sid, title, details)
     if not spawn_worker():
         log("worker already running, task queued")
     print(json.dumps({"output": "enqueued scene %s for translation" % sid}))

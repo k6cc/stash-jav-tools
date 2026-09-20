@@ -49,7 +49,7 @@ s.wait_for_scene(q="TST-", timeout=120, interval=5)
 ## 已知坑（实测沉淀，改插件/写验证脚本前先看）
 
 1. **oshash 内容去重**：复制/复用已有视频文件，Stash 按内容 hash 合并进已有场景，**不建新场景**——扫描表现为"空跑"。测试视频必须内容唯一（`gen_test_video.py` 用不同信号源/尺寸/帧率保证）。
-2. **rescan:true 崩溃**：`metadataScan(input:{rescan:true})` 强制全量重扫 + 多插件 hook 并发 → Stash 进程崩溃（控制台日志尾为 hook 进程 `exit status 0xc000013a`）。**手动增量扫描从未复现**（怀疑与测试脚本触发方式/并发有关，待后续定位）。测试一律用增量扫描；若必须全量重扫，先停多余插件或观察控制台。
+2. **不要用 rescan:true（风暴源头）**：`metadataScan(input:{rescan:true})` 强制全量重扫 + 多插件 hook 并发 → Stash 进程崩溃（控制台日志尾为 hook 进程 `exit status 0xc000013a`）。**手动增量扫描从未复现**（怀疑与测试脚本触发方式/并发有关，待后续定位）。测试一律用增量扫描（`trigger_scan()` 不带 rescan）；全量重扫需求改用 UI 触发或先停多余插件。
 3. **封面 blob 文件锁**：Windows 下多插件（如 javstashAF+ 与 nfoSceneParser）并发写封面 → `sceneUpdate` 因删除旧 blob 被占用整体失败（日志 `deleting from filesystem ... being used by another process`）。这不是查询/守卫问题，是文件锁；重试或错峰可解。
 4. **老版本 GraphQL 差异**（v0.31.1 实测）：
    - `findScenes` 无 `path` 字段（`Scene` 只有 `paths` 数组）；定位用 `filter.q` + title/路径子串本地过滤。

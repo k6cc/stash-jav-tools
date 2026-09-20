@@ -282,7 +282,7 @@ def extract_code(scene):
     m = _CODE_RE.match(t)
     return m.group(1) if m else None
 
-def scrape_scene_full(gql, sid, source_url, scene=None):
+def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
     q = ("query($s:ScraperSourceInput!,$i:ScrapeSingleSceneInput!){"
          " scrapeSingleScene(source:$s,input:$i){ %s } }" % SCENE_FULL_FIELDS)
     try:
@@ -505,7 +505,7 @@ def handle_scene_create(payload, conn, gql):
     scene = get_scene_full(gql, sid)
     if not scene:
         print(json.dumps({"output": "skip (scene not found)"})); return
-    rows = scrape_scene_full(gql, sid, src, scene)
+    rows = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
     if not rows:
         log(f"scene {sid}: no fingerprint match at {src} -> skip")
         print(json.dumps({"output": "skip (no match by hash)"})); return
@@ -551,7 +551,7 @@ def handle_scene_backfill(payload, conn, gql):
         scene = get_scene_full(gql, sid)
         if not scene: continue
         scene["__conn__"] = conn
-        hits = scrape_scene_full(gql, sid, src, scene)
+        hits = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
         if not hits: continue
         try:
             apply_scene_fill(gql, sid, scene, hits[0], src)

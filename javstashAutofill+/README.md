@@ -43,6 +43,7 @@
 | --- | --- |
 | Scene auto-add stash IDs | 新场景自动按 oshash 查 JAVStash 并填充。默认开。 |
 | Scraper (scene) | 场景刮削的 stash-box URL。空 = javstash。必须是 URL，不能是 scraper_id。 |
+| Fallback to code search | oshash 搜不到时用番号再搜。默认开。 |
 | Scraper (Identify) / (manual) | 演员刮削源，按创建来源区分。URL 或 scraper_id。空 = javstash。 |
 | Use scraper name (Identify) / (manual) | 对应来源是否用 scraper 名为主名。默认 Identify 开、manual 关。 |
 | Name-match threshold | 名字相似度阈值（0-1），默认 0.9。 |

@@ -37,5 +37,5 @@ settings:
     type: BOOLEAN
   hookDelaySeconds:
     displayName: "钩子入队延迟（秒）/ Hook enqueue delay (s)"
-    description: "新场景创建/更新后延迟处理翻译，等 nfoSceneParser / javstashAutofill+ 等插件先写入元数据（同场景多次入队覆盖合并，最后一次写入后静默 N 秒再处理），默认 25；机械硬盘/多插件环境建议 30-60 / delay before a hooked scene is translated, letting nfoSceneParser / javstashAutofill+ write metadata first (same-scene enqueues merge; processed N seconds after the last write), default 25; 30-60 recommended on slow disks / busy plugin setups"
+    description: "新场景创建/更新后延迟处理翻译，防止多插件写入竞态，默认 25 / delay hooked-scene translation to avoid multi-plugin write races, default 25"
     type: STRING

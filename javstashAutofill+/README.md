@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.2.0：演员解析重构——带 stash_id 时反查本地（命中即复用合并、创建名追加为别名）或按 stash_id 直抓补全，绕过名称匹配；无 stash_id 时才走 0.9 名称匹配（候选命中本地主名/别名即复用不新建；候选身份锚定他处保守忽略；主名默认保留创建名）；Performer.Create.Post 钩子异步化，手动创建不再卡 UI 25s。场景番号 oshash+fallback 全失败后剥离 BD 后缀重试（CWPBD-98→CWP-98），本地 code 非空不覆盖。
+> v1.2.1：日志文件显式 UTF-8 编码（errors=backslashreplace），消除 Linux/Docker 容器 C locale 下日志静默丢失（插件功能本不受影响）。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

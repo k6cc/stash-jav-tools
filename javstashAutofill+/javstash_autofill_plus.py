@@ -26,7 +26,7 @@ LOG = os.path.join(os.path.dirname(__file__), "javstash_autofill_plus.log")
 
 def log(msg):
     try:
-        with open(LOG, "a") as f:
+        with open(LOG, "a", encoding="utf-8", errors="backslashreplace") as f:
             f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
     except Exception:
         pass

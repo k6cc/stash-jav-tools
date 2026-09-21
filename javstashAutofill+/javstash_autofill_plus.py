@@ -671,6 +671,13 @@ def find_or_create_tag(gql, name):
         rows = []
     for r in rows:
         if nfc(r["name"]) == nfc(name): return str(r["id"])
+    # Pre-check: a Tag.Create.Post hook (e.g. tagMergeAuto) may have already merged
+    # this name into a canonical tag's aliases; creating it again would fail with
+    # 'name X is used as alias for Y' and spam the Stash log. Resolve name OR alias
+    # first and return the canonical tag without firing the doomed tagCreate.
+    hit = _find_tag_by_name_or_alias(gql, name)
+    if hit is not None:
+        return hit
     try:
         r = gql("mutation($n:String!){ tagCreate(input:{name:$n}){ id } }", {"n": name})
         if r and r.get("tagCreate"):
@@ -678,14 +685,15 @@ def find_or_create_tag(gql, name):
         log(f"tag create '{name}' returned no tag (likely merged by a Tag.Create.Post hook), alias lookup fallback")
     except Exception as e:
         log(f"tag create '{name}' failed: {e}, alias lookup fallback")
-    # Fallback: a Tag.Create.Post hook (e.g. tagMergeAuto) can merge the brand-new
-    # tag into a canonical one before the tagCreate response is built; the source
-    # name then lives in the destination's aliases. Re-scan all tags and match
-    # name OR alias (old Stash has no names filter — full pull, failure path only).
+    # Race window: the hook merged the tag between the pre-check and tagCreate.
+    return _find_tag_by_name_or_alias(gql, name)
+
+def _find_tag_by_name_or_alias(gql, name):
+    # Old Stash has no names filter — full pull; called only on fallback paths.
     try:
         rows = gql('{ findTags(filter:{per_page:-1}){ tags{ id name aliases } } }').get("findTags", {}).get("tags", [])
     except Exception:
-        rows = []
+        return None
     for r in rows:
         if nfc(r.get("name") or "") == nfc(name):
             return str(r["id"])

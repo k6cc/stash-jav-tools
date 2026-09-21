@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""find_or_create_tag null-return + alias fallback: when tagCreate returns null
-or errors (a Tag.Create.Post hook, e.g. tagMergeAuto, merged/deleted the new tag
-before the mutation response was built), the plugin falls back to a full tag scan
-matching name OR alias and returns the canonical tag id. Offline mocks."""
+"""find_or_create_tag name/alias pre-check + fallback (v1.2.4):
+- before creating, a full scan resolves a name already merged into a canonical
+  tag's aliases (Tag.Create.Post hook, e.g. tagMergeAuto) and returns it WITHOUT
+  firing a doomed tagCreate (Stash log stays quiet);
+- tagCreate null/error still falls back to the same scan (race window).
+Offline mocks."""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "javstashAutofill+"))
@@ -28,40 +30,45 @@ class FakeGQL:
         return {"findTags": {"tags": []}}
 
 CANON = [{"id": "210", "name": "辣妹", "aliases": ["ギャル"]}]
+n_create = lambda g: sum(1 for q, _ in g.calls if "tagCreate" in q)
 
-# 1) null tagCreate -> alias fallback resolves canonical tag
-g = FakeGQL([{"tagCreate": None}], CANON)
+# 1) alias pre-check hit -> canonical id, NO tagCreate fired (log stays quiet)
+g = FakeGQL([], CANON)
 r = M.find_or_create_tag(g, "ギャル")
-check("null tagCreate -> canonical via alias", r == "210", str(r))
-check("fallback issued (3 calls: by-name + create + full scan)", len(g.calls) == 3, str(len(g.calls)))
+check("alias pre-check -> canonical, no tagCreate", r == "210" and n_create(g) == 0,
+      "r=%s create_calls=%d" % (r, n_create(g)))
 
-# 2) tagCreate exception -> alias fallback resolves canonical tag
-g2 = FakeGQL([RuntimeError("boom")], CANON)
+# 2) pre-check main-name hit (tag exists as main name only)
+g2 = FakeGQL([], [{"id": "77", "name": "ギャル", "aliases": []}])
 r2 = M.find_or_create_tag(g2, "ギャル")
-check("tagCreate error -> canonical via alias", r2 == "210", str(r2))
+check("pre-check main-name -> its id, no tagCreate", r2 == "77" and n_create(g2) == 0, str(r2))
 
-# 3) null tagCreate, full scan has NO alias match -> None (unchanged skip behaviour)
-g3 = FakeGQL([{"tagCreate": None}], [])
+# 3) pre-check empty, tagCreate exception -> post fallback resolves alias
+g3 = FakeGQL([RuntimeError("boom")], CANON)
 r3 = M.find_or_create_tag(g3, "ギャル")
-check("null tagCreate no fallback hit -> None", r3 is None, str(r3))
+check("create error -> post fallback canonical", r3 == "210", str(r3))
 
-# 4) null tagCreate, full scan matches by main name (tag appeared meanwhile) -> its id
-g4 = FakeGQL([{"tagCreate": None}], [{"id": "77", "name": "ギャル", "aliases": []}])
+# 4) pre-check empty, tagCreate null -> post fallback resolves alias
+g4 = FakeGQL([{"tagCreate": None}], CANON)
 r4 = M.find_or_create_tag(g4, "ギャル")
-check("fallback matches main name", r4 == "77", str(r4))
+check("create null -> post fallback canonical", r4 == "210", str(r4))
 
-# 5) normal tagCreate -> id returned, no fallback query
-g5 = FakeGQL([{"tagCreate": {"id": "99"}}], CANON)
-r5 = M.find_or_create_tag(g5, "正常tag")
-check("normal tagCreate -> id, no fallback", r5 == "99" and len(g5.calls) == 2, "%s calls=%d" % (r5, len(g5.calls)))
+# 5) pre-check empty, create null, no fallback hit -> None
+g5 = FakeGQL([{"tagCreate": None}], [])
+r5 = M.find_or_create_tag(g5, "ギャル")
+check("no fallback hit -> None", r5 is None, str(r5))
 
-# 6) name already exists -> found by-name, no create, no fallback
-g6 = FakeGQL([], [])
-# by-name query returns the tag
-def g6fn(q, v=None, timeout=30):
+# 6) normal create: pre-check empty -> tagCreate succeeds, no extra scan
+g6 = FakeGQL([{"tagCreate": {"id": "99"}}], [])
+r6 = M.find_or_create_tag(g6, "正常tag")
+check("normal create -> id", r6 == "99", str(r6))
+check("normal create: by-name + pre-scan + create", len(g6.calls) == 3, str(len(g6.calls)))
+
+# 7) name already exists by-name -> id, single query
+def g7(q, v=None, timeout=30):
     return {"findTags": {"tags": [{"id": "55", "name": "已有tag"}]}}
-r6 = M.find_or_create_tag(g6fn, "已有tag")
-check("existing by name -> id without create", r6 == "55", str(r6))
+r7 = M.find_or_create_tag(g7, "已有tag")
+check("existing by name -> id", r7 == "55", str(r7))
 
 print("")
 print("PASS: %d, FAIL: %d" % (len(PASS), len(FAIL)))

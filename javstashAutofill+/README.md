@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.2.3：tag 创建被 Tag.Create.Post 钩子（如 tagMergeAuto）即时合并时，find_or_create_tag 增加别名兜底查询（源名进目标别名后反查规范 tag），场景 tag 正确写入规范 tag、日志降噪、消除重复创建死循环。
+> v1.2.4：find_or_create_tag 创建前先做 name/别名预查——已合并进规范 tag 别名的名称直接返回规范 tag，不再发起必然失败的 tagCreate（Stash 日志零噪音）；保留创建失败/竞态窗口的别名兜底。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

@@ -1,6 +1,6 @@
 # stash-testkit
 
-Stash 插件开发用的**实例测试/验证工具集**（供本仓库各插件复用）。沉淀自 sceneTranslateAuto v1.2.1/v1.2.2 竞态修复与 javstashAutofill+ v1.1.3 封面 blob 锁竞态修复的实测流程：连实例、造测试场景、扫描入库、验证插件行为、清理。
+Stash 插件开发用的**实例测试/验证工具集**（供本仓库各插件复用）。沉淀自 sceneTranslateAuto v1.2.1/v1.2.2 竞态修复、javstashAutofill+ v1.1.3 封面 blob 锁竞态修复与 v1.2.0 演员解析重构/番号 BD 剥离的实测流程：连实例、造测试场景、扫描入库、验证插件行为、清理。
 
 ## 目录结构
 
@@ -13,7 +13,7 @@ stash-testkit/
 ├── db_cleanup.py            # 测试后 DB 孤儿清理（白名单前缀；停实例→SQL→重启）
 └── tests/
     ├── sceneTranslateAuto/  # 插件特定验证脚本（单测 / 回归 / 端到端）
-    └── javstashAutofill/    # 封面 blob 锁竞态修复单测（test_cover_race.py）
+    └── javstashAutofill/    # v1.1.3 封面竞态 + v1.2.0 演员解析/BD 剥离单测、E2E 与 javstash 探测工具
 ```
 
 ## 快速开始
@@ -72,6 +72,17 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 11. **封面「是否仍为自动帧」判别**：`paths.screenshot ?t=` 是场景 **updated_at 的 epoch**（响应缓存令牌，非截图文件 mtime）。`?t= == created_at` ⇔ 场景创建后无人写入任何元数据 ⇒ 封面仍是自动帧；任何写入（nfo 设 title/details/cover 等）都会使二者偏离。**「?t= 与 created_at 差 <2h」这类启发式是错的**（它测的是最后更新时间，与封面有无无关）。判别器封装在 `stash_client.scene_shot_ts()`。
 12. **封面内容验证**：screenshot 端点返回自定义封面（有则封面字节，无则自动截图帧）——`fetch_scene_image()` 抓字节与本地封面文件比对（如 nfo 的 `-cover.jpg`）即可判定「封面被谁写了」。验证 javstash 侧封面以插件日志（`cover set` / `cover skipped (custom cover already in place)`）+ 截图字节变化佐证（本地 GraphQL 刮削签名不同、javstash.org 直连 403，见已知坑 ⑥）。
 13. **PowerShell 内联 GraphQL 会被插值**：`$id`、`!` 在 PowerShell 双引号/here-string 里会被当变量/历史展开，导致 422 或语法错——**GraphQL 查询（尤其含变量的）一律写成 .py 脚本文件执行**，勿在命令行内联。本会话 Git 的 Edit 工具对部分文件曾出现「File has not been read yet」卡死，改用 `[IO.File]::ReadAllText/WriteAllText`（UTF-8 无 BOM、LF 结尾）绕过。
+14. **javstash 直抓（findPerformer by id）schema 实测**（v1.2.0 直抓通道）：
+    - 查询名是 `findPerformer(id:ID!)`，**不是** `findPerformerByID`（422 `unknown field`）。
+    - 裸 urllib 请求被 javstash 拒（403）——需镜像 Stash 客户端头 `ApiKey: <key>` + `User-Agent: stash/1.0.0`；key 从 stashBoxes 配置按 endpoint 取（老版本在 `configuration.general.stashBoxes`，新版本在 `configuration.stashBoxes`）。
+    - schema 平铺：`birth_date`/`death_date`（String）、`band_size`/`cup_size`/`waist_size`/`hip_size` 拼 `measurements`、`career_start_year`/`career_end_year`（Int）、`height`（Int）、`breast_type`（enum NATURAL/FAKE/NA）、`tattoos`/`piercings`（BodyModification 对象数组需子选择 `{ location description }`）、**`urls` 是 `[URL!]!` 对象数组**（必须 `urls{ url }`，直接列 `urls` 会 422）、`images{ url }`。
+    - 枚举白名单：gender/ethnicity/hair_color/eye_color 未知值（如 BALD）丢弃再写本地，否则本地 Stash 拒绝。
+15. **老版本 Stash 无 `names` 过滤器**：`performer_filter:{names:{...}}` 在 v0.31.1 报 422（`Field "names" is not defined by type "PerformerFilterType"`，只有 `name` 主名过滤器）——查「主名∪别名」需新版 names 优先 + 老版本回退全量拉取（`findPerformers(filter:{per_page:500})` 分页）端侧 norm 比对。
+16. **`ScraperSourceInput` 不含 `api_key` 字段**：`scrapeSinglePerformer`/`scrapeSingleScene` 的 `source` 变量传 `api_key` 会 422（unknown field）——Stash 服务端 scrape 自动用自身配置的 stash-box key，插件侧 source 只传 `stash_box_endpoint`。
+17. **javstash 限流敏感**：连发请求出现 5 分钟级 read timeout（非 429，是挂起到超时）——探测/直抓必须单请求 + 长 timeout（45s）+ 请求间隙 sleep；E2E 脚本用 `run_in_background` + TaskOutput 读输出，别前台等。
+18. **performerDestroy 变量名**：`mutation($id:ID!){ performerDestroy(input:{id:$id}) }`——写成 `$i` 而 mutation 内未用会 422（`Variable "$i" is never used`）。`Performer.Create.Post` 钩子对裸 performers 无 IndexError 问题（坑 ① 只针对 Scene.Create.Post）。
+19. **0.9 匹配用例的前缀陷阱**：E2E 测试演员名带前缀（`TST-AF1-`）会拉低 javstash 搜索分数（0.31-0.50 < 0.9）走不到 0.9 分支——带 stash_id 的用例可带前缀（反查/直抓不搜名），**0.9 用例必须用 javstash 可命中的真实名字**；且按名查询会把「别名含测试名」的本地演员算进结果，断言按 pid 而非名字。
+20. **tagCreate 被别名占用名拒绝**：`tagCreate` 对「已被用作其他 tag 别名」的名称报错（`name X is used as alias for 'Y'`）——库数据状态所致，插件捕获跳过即可，不是插件 bug（场景 tag 填充失败只影响 tag，不影响主数据）。
 
 ## 封面竞态 E2E 方法（javstashAF+ × nfoSceneParser）
 
@@ -90,6 +101,23 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 4. 日志：nfo 与 javstashAF+ 日志、Stash 控制台全窗口 **无 `being used by another process`**。
 5. 清理：`sceneDestroy`（锁拦则重试）→ 删测试目录 → `db_cleanup.py --prefix A-` / `--prefix B-`（前缀 ≥3 字符）→ 测试新建实体（studio 等）diff 清理。
 
+## 演员解析类插件 E2E 方法（javstashAutofill+ v1.2.0 重构验证）
+
+**无需视频场景**：`performerCreate` mutation 直接触发 `Performer.Create.Post` 钩子（钩子已异步化，mutation 立即返回；填充在 detached worker 延迟 `performerFillDelay` 默认 2s 后执行，断言前等 8-10s）。
+
+用例骨架（真实 javstash + 测试库，见 `tests/javstashAutofill/test_e2e.py`）：
+- **反查合并**：创建带「本地已有」javstash stash_id 的演员 → 反查命中 → 源演员被合并消失（performerMerge 删源）、创建名追加为别名（若与目标主名/别名不同）、目标 stash_ids 不变。
+- **直抓补全**：创建带「本地没有」javstash stash_id 的演员 → 按 id 直抓详情（绕过名称匹配），主名保留创建名、详情空才填、图片异步。
+- **0.9 合并**：创建 javstash 可命中的真实名字（不带 id，如「三上悠亜」）→ 候选名命中本地演员别名且同 stash_id → 合并（防重复覆盖主名∪别名）。
+- **保守忽略**：先建「别名=候选名、带假 javstash id」的锚定演员（反查/直抓失败保持空白），再建同名无 id 演员 → 0.9 命中真实候选（rid ≠ 假 id）→ 保持空白不合并不挂 id。
+- **25s 消除**：创建 javstash 查无结果的怪名 → mutation 应 <8s 返回（旧版同步钩子约 25s）。
+
+**场景番号 BD 剥离 E2E**（真实 javstash，见 `test_e2e_strip.py`）：
+1. 选无 javstash stash_id 的场景，`sceneUpdate` 改 code 为「javstash 无收录」的 BD 番号（如 `CWPBD-98`，javstash 只有 `CWP-98`）。
+2. `scrape_scene_full` → oshash miss → code fallback miss → BD 剥离（`CWP-98`）命中。
+3. `apply_scene_fill` 后断言：本地 code 非空则保持 `CWPBD-98` 不变；本地 code 字段为空则写入 `CWP-98`；stash_id/空字段填上。
+4. 恢复场景快照 + 清理新建演员（destroy 被 blob 锁拦时等 Stash 释放再重试，见坑 ⑤/⑱）。
+
 ## 清理规范
 
 - 测试场景：`sceneDestroy(input:{id:"..."})`（返回 Boolean，不 selection；被 blob 锁拦时重试 2-3 次）。
@@ -106,5 +134,11 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 
 `tests/javstashAutofill/`：
 - `test_cover_race.py`：v1.1.3 封面 blob 锁竞态修复单测（`_shot_is_auto` 严格判别三态 / blob 锁错误识别 / 1s-2s-4s 退避重试 / 重试期间 NFO 写入放弃 / cover 分离提交且先于主更新），12 项，纯离线。
+- `test_unified_resolve.py`：v1.2.0 演员解析单测（反查 / 直抓归一化 / 防重复主名∪别名 / 0.9 三态 / 合并别名 / 保守忽略 / build_update），37 项，纯离线（FakeGQL + 本地 fetch stub）。
+- `test_strip_bd.py`：v1.2.0 场景番号 BD 剥离单测（剥离形态 / 真含 BD 不剥离 / mismatch 丢弃 / fallback 关闭不触发 / oshash 优先 / 本地 code 空保留写入），19 项，纯离线。
+- `test_e2e.py`：端到端回归（反查合并 / 直抓补全 / 25s 消除 / 0.9 别名合并 / 保守忽略），18 断言，真实 javstash + 测试库（已部署插件，断言前等 8-12s）。
+- `test_e2e_strip.py`：BD 剥离端到端（本地 code 非空保持 / 空则写入 + stash_id/空字段填充 + 快照恢复），真实 javstash。
+- `probe_javstash.py`：javstash 探测工具（`--code` 番号查询命中 / `--performer` 名称刮削 / `--fetch <uuid>` 直抓测试）。
+- `FINAL_RESULT.md`：v1.2.0 验证结论存档（单测/E2E 矩阵 + 过程修复记录）。
 
 单测直接运行：`python tests/sceneTranslateAuto/test_guard_lang_delay.py`、`python tests/javstashAutofill/test_cover_race.py`（相对仓库定位插件源码，可整体搬移）。

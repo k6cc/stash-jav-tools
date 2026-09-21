@@ -18,7 +18,7 @@ fields are filled / missing entries appended) unless a per-field overwrite toggl
 is enabled. Measurements are normalised from javstash form (91H-56-88) to
 (91(H)-56-88). Standard library only.
 """
-import sys, json, re, unicodedata, urllib.request, difflib, os, datetime, base64, subprocess, ssl, time
+import sys, json, re, unicodedata, urllib.request, urllib.error, difflib, os, datetime, base64, subprocess, ssl, time
 
 JAV = "https://javstash.org/graphql"
 THRESHOLD = 0.9
@@ -366,12 +366,31 @@ def strip_bd_code(code):
     out = "%s-%s" % (m.group(1), m.group(2))
     return out if out != c else None
 
+def _gql_scrape(gql, q, source_url, input_, label):
+    """scrapeSingleScene with one retry on network-class failures. javstash.org
+    drops keep-alive connections transiently (Stash logs 'unexpected EOF'), so
+    batch backfills skip a few scenes per run; a single retry after a short
+    pause recovers most. Non-network errors and normal empty results are not
+    retried (empty results would just burn the rate limit)."""
+    def once():
+        return gql(q, {"s": {"stash_box_endpoint": source_url}, "i": input_}).get("scrapeSingleScene") or []
+    try:
+        return once()
+    except Exception as e:
+        msg = str(e).lower()
+        is_net = isinstance(e, (urllib.error.URLError, urllib.error.HTTPError, TimeoutError)) or any(
+            k in msg for k in ("eof", "request failed", "connection", "timeout", "reset", "503", "502", "500"))
+        if not is_net:
+            raise
+        log(f"scene {label}: scrape network error: {e}, retrying once")
+        time.sleep(1.5)
+        return once()
+
 def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
     q = ("query($s:ScraperSourceInput!,$i:ScrapeSingleSceneInput!){"
          " scrapeSingleScene(source:$s,input:$i){ %s } }" % SCENE_FULL_FIELDS)
     try:
-        hits = gql(q, {"s": {"stash_box_endpoint": source_url},
-                       "i": {"scene_id": str(sid)}}).get("scrapeSingleScene") or []
+        hits = _gql_scrape(gql, q, source_url, {"scene_id": str(sid)}, sid)
     except Exception as e:
         log(f"scene {sid}: scrape error: {e}")
         return []
@@ -400,8 +419,7 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
             log(f"scene {sid}: oshash miss, no code to fallback")
             return []
         try:
-            hits = gql(q, {"s": {"stash_box_endpoint": source_url},
-                           "i": {"query": code}}).get("scrapeSingleScene") or []
+            hits = _gql_scrape(gql, q, source_url, {"query": code}, sid)
             if hits:
                 exact = [h for h in hits if codes_match(h.get("code"), code)]
                 if exact:
@@ -422,8 +440,7 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
             stripped = strip_bd_code(code)
             if stripped:
                 try:
-                    hits = gql(q, {"s": {"stash_box_endpoint": source_url},
-                                   "i": {"query": stripped}}).get("scrapeSingleScene") or []
+                    hits = _gql_scrape(gql, q, source_url, {"query": stripped}, sid)
                 except Exception as e:
                     log(f"scene {sid}: BD-stripped retry error: {e}")
                     hits = []

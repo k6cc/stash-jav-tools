@@ -136,6 +136,7 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 - `test_cover_race.py`：v1.1.3 封面 blob 锁竞态修复单测（`_shot_is_auto` 严格判别三态 / blob 锁错误识别 / 1s-2s-4s 退避重试 / 重试期间 NFO 写入放弃 / cover 分离提交且先于主更新），12 项，纯离线。
 - `test_unified_resolve.py`：v1.2.0 演员解析单测（反查 / 直抓归一化 / 防重复主名∪别名 / 0.9 三态 / 合并别名 / 保守忽略 / build_update），37 项，纯离线（FakeGQL + 本地 fetch stub）。
 - `test_strip_bd.py`：v1.2.0 场景番号 BD 剥离单测（剥离形态 / 真含 BD 不剥离 / mismatch 丢弃 / fallback 关闭不触发 / oshash 优先 / 本地 code 空保留写入），19 项，纯离线。
+- `test_scrape_retry.py`：v1.2.2 场景刮削网络类失败重试单测（URLError/EOF 文本/request failed 识别、重试仅一次、重试仍失败回退跳过、非网络/空结果不重试、sleep 1.5s、三路径 oshash/fallback/BD-strip），18 项，纯离线。
 - `test_e2e.py`：端到端回归（反查合并 / 直抓补全 / 25s 消除 / 0.9 别名合并 / 保守忽略），18 断言，真实 javstash + 测试库（已部署插件，断言前等 8-12s）。
 - `test_e2e_strip.py`：BD 剥离端到端（本地 code 非空保持 / 空则写入 + stash_id/空字段填充 + 快照恢复），真实 javstash。
 - `probe_javstash.py`：javstash 探测工具（`--code` 番号查询命中 / `--performer` 名称刮削 / `--fetch <uuid>` 直抓测试）。

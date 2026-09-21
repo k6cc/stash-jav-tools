@@ -15,7 +15,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
 | [tagMergeAuto](./tagMergeAuto/) | 1.1.0 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描（本地映射表、零网络零设置） |
 | [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.3 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
-| [javstashAutofill+](./javstashAutofill+/) | 1.2.1 | 纯后台 | 演员带 stash_id 反查复用/直抓补全，无 id 走 0.9 名称匹配（防重复）；新场景按 oshash 补空白字段+stash_id，番号全失败后剥离 BD 重试；手动任务批量回填 |
+| [javstashAutofill+](./javstashAutofill+/) | 1.2.2 | 纯后台 | 演员带 stash_id 反查复用/直抓补全，无 id 走 0.9 名称匹配（防重复）；新场景按 oshash 补空白字段+stash_id，番号全失败后剥离 BD 重试；手动任务批量回填 |
 
 ## 安装
 

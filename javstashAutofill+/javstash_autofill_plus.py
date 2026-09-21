@@ -444,40 +444,97 @@ def find_or_create_group(gql, name):
 def _first_or_none(x):
     return (x or [None])[0]
 
-def apply_scene_image_async(conn, sid, image_url):
-    """Spawn a detached process to download the cover and set it via sceneUpdate.cover_image."""
-    if not conn: return
-    try:
-        env = dict(os.environ, JAVSTASH_CONN=json.dumps(conn))
-        subprocess.Popen([sys.executable, os.path.abspath(__file__),
-                          "--set-scene-image", str(sid), image_url],
-                         env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-    except Exception as e:
-        log(f"scene {sid}: cover spawn skipped ({e})")
+def _shot_is_auto(scene):
+    """True when the scene still uses the auto-generated screenshot (no custom cover).
 
-def set_scene_image_mode(sid, image_url):
-    """Subprocess entry: download the cover and set it as base64 via sceneUpdate.cover_image."""
-    conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
-    gql = make_gql(conn)
+    Stash's paths.screenshot ?t= is the scene's updated_at (cache-buster), so for a
+    freshly created scene that no metadata writer has touched it equals created_at
+    (delta 0). ANY write — e.g. the NFO parser setting title/details/cover right after
+    the scan — moves ?t= away from created_at, meaning the cover is no longer the auto
+    frame. Strict equality (not "within 2h") is what distinguishes "NFO already wrote a
+    cover at scan time" from "still auto". Fail-closed: unreadable -> False (skip)."""
+    shot = ((scene or {}).get("paths") or {}).get("screenshot") or ""
+    if not shot or "?t=" not in shot:
+        return False
+    try:
+        shot_ts = int(shot.split("?t=")[1].split("&")[0])
+        ca = scene.get("created_at") or ""
+        created_ts = int(datetime.datetime.fromisoformat(ca.replace("Z", "+00:00")).timestamp())
+        return shot_ts == created_ts
+    except Exception:
+        return False
+
+
+def _is_blob_lock_error(e):
+    """Windows blob file-lock error: Stash fails to delete the old cover blob while
+    another process holds it ('deleting from filesystem ... being used by another
+    process'). Transient; a short retry usually succeeds."""
+    s = str(e)
+    return "deleting from filesystem" in s or "being used by another process" in s
+
+
+def _reload_scene_cover(gql, sid):
+    """Fresh read of the scene's cover-relevant state. None on read failure (skip cover)."""
+    try:
+        return gql("query($id:ID!){ findScene(id:$id){ created_at paths{ screenshot } } }",
+                   {"id": str(sid)}).get("findScene")
+    except Exception as e:
+        log(f"scene {sid}: cover re-read failed ({e})")
+        return None
+
+
+def _download_image(image_url):
+    """Download the cover bytes. Returns (raw, content_type) or (None, error)."""
     sslctx = ssl.create_default_context()
     sslctx.check_hostname = False
-    sslctx.verify_mode = ssl.CERT_NONE
+    sslctx.verify_mode = ssl.CERT_NONE  # some Python builds lack CA certs; the image is public
+    last = None
     for attempt in range(3):
         try:
             req = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=20, context=sslctx) as r:
-                raw = r.read()
-                ctype = r.headers.get("Content-Type", "image/jpeg")
-            b64 = base64.b64encode(raw).decode()
-            gql("mutation($i:SceneUpdateInput!){ sceneUpdate(input:$i){ id } }",
-                {"i": {"id": str(sid), "cover_image": f"data:{ctype};base64,{b64}"}})
-            log(f"scene {sid}: cover set async ({len(raw)} bytes)")
-            return
+                return r.read(), r.headers.get("Content-Type", "image/jpeg")
         except Exception as e:
-            log(f"scene {sid}: cover async attempt {attempt+1} failed ({e})")
-    log(f"scene {sid}: cover async gave up")
+            last = e
+            time.sleep(1 << attempt)   # 1s, 2s
+    return None, last
+
+
+def _apply_cover_with_retry(gql, sid, image):
+    """Write the scene cover in a SEPARATE sceneUpdate, never inside the main payload:
+    a cover write failing on a Windows blob lock must not take down title/code/
+    performers/tags etc. Re-reads the scene before every attempt and skips when the
+    NFO parser (or anyone else) already set a custom cover; retries transient blob-lock
+    errors with 1s/2s/4s backoff (3 retries). Returns True when the cover was written."""
+    if not image:
+        return False
+    if image.startswith("data:"):
+        payload = {"id": str(sid), "cover_image": image}
+    else:
+        raw, ctype = _download_image(image)
+        if raw is None:
+            log(f"scene {sid}: cover download failed ({ctype})")
+            return False
+        payload = {"id": str(sid),
+                   "cover_image": "data:%s;base64,%s" % (ctype, base64.b64encode(raw).decode())}
+    for attempt in range(4):   # 1 write + 3 retries
+        fresh = _reload_scene_cover(gql, sid)
+        if fresh is None or not _shot_is_auto(fresh):
+            log(f"scene {sid}: cover skipped (custom cover already in place)")
+            return False
+        try:
+            gql("mutation($i:SceneUpdateInput!){ sceneUpdate(input:$i){ id } }", {"i": payload})
+            log(f"scene {sid}: cover set")
+            return True
+        except Exception as e:
+            if not _is_blob_lock_error(e):
+                log(f"scene {sid}: cover update failed ({e})")
+                return False
+            if attempt < 3:
+                log(f"scene {sid}: cover blob lock (retry {attempt + 1}/3 in {1 << attempt}s)")
+                time.sleep(1 << attempt)
+    log(f"scene {sid}: cover update gave up after 3 retries")
+    return False
 
 def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
     """Build & run sceneUpdate for one scraped match. Empty-only for scalars; merge-dedup for urls/performers/tags; studio only when unset; stash_ids appended."""
@@ -485,8 +542,8 @@ def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
     def empty(f):
         v = scene.get(f)
         return v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, list) and len(v) == 0)
-    # Scalars empty-only. The scene hook fills from a delayed worker (20s after
-    # creation) so the NFO parser has already written title/details/date;
+    # Scalars empty-only. The scene hook fills from a delayed worker (sceneFillDelay,
+    # default 20s after creation) so the NFO parser has already written title/details/date;
     # non-empty values are kept. Title is also skipped unless overwriteSceneTitle
     # is on (setups without NFO import).
     if (empty("title") or ow_title) and sc.get("title"):
@@ -534,26 +591,19 @@ def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
     sids = add_endpoint_stash_id(scene.get("stash_ids"), src, (sc.get("remote_site_id") or "").strip())
     if sids is not None:
         upd["stash_ids"] = sids
-    # cover image: only when the scene still uses an auto-generated screenshot (no custom cover).
-    # screenshot ?t= timestamp within 2h of created_at => auto-generated frame (empty cover);
-    # much later timestamp means a custom cover was set => skip. data: URI set directly; http async.
-    shot = ((scene.get("paths") or {}).get("screenshot") or "")
+    # cover image: written in a SEPARATE sceneUpdate, never inside the main payload —
+    # a cover write failing on a Windows blob lock must not take down title/code/
+    # performers/tags etc. The fill-time snapshot only gates whether a cover write is
+    # worth trying; the actual write re-reads the scene (fresh screenshot/created_at)
+    # and skips when the NFO parser has already set a custom cover. Runs BEFORE the
+    # main update: our own main update would move screenshot ?t= and make the re-read
+    # misjudge the scene as already covered.
     sc_image = (sc.get("image") or "").strip()
-    shot_is_auto = False
-    try:
-        if "?t=" in shot:
-            shot_ts = int(shot.split("?t=")[1].split("&")[0])
-            ca = scene.get("created_at") or ""
-            import datetime as _dt
-            created_ts = int(_dt.datetime.fromisoformat(ca.replace("Z","+00:00")).timestamp())
-            shot_is_auto = abs(shot_ts - created_ts) < 7200
-    except Exception:
-        shot_is_auto = False
-    if sc_image and shot_is_auto:
-        if sc_image.startswith("data:"):
-            upd["cover_image"] = sc_image
+    if sc_image:
+        if _shot_is_auto(scene):
+            _apply_cover_with_retry(gql, sid, sc_image)
         else:
-            apply_scene_image_async(scene.get("__conn__"), sid, sc_image)
+            log(f"scene {sid}: cover skipped (custom cover already in place)")
     # drop the id-only payload
     if len(upd) > 1:
         gql("mutation($i:SceneUpdateInput!){ sceneUpdate(input:$i){ id } }", {"i": upd})
@@ -571,17 +621,24 @@ def spawn_fill_later(conn, sid):
     except Exception as e:
         log(f"scene {sid}: delayed fill spawn failed ({e})")
 
-def fill_scene_later_mode(sid, delay=20):
-    """Delayed worker entry: wait for the NFO parser, then re-read and fill."""
+def _scene_fill_delay(settings):
+    try:
+        return max(0, int((settings or {}).get("sceneFillDelay") or 20))
+    except (TypeError, ValueError):
+        return 20
+
+def fill_scene_later_mode(sid):
+    """Delayed worker entry: wait for the NFO parser (sceneFillDelay, default 20s),
+    then re-read and fill."""
     conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
     gql = make_gql(conn)
-    time.sleep(delay)
     settings = get_settings(gql)
     if settings.get("sceneAutoFill") is False:
         log(f"scene {sid}: delayed fill skipped (autofill disabled)"); return
     src = (settings.get("sceneSource") or JAV).strip()
     if not src.startswith("http"):
         log(f"scene {sid}: delayed fill skipped (bad source)"); return
+    time.sleep(_scene_fill_delay(settings))
     scene = get_scene_full(gql, sid)
     if not scene:
         log(f"scene {sid}: delayed fill: scene not found, skip"); return
@@ -589,7 +646,6 @@ def fill_scene_later_mode(sid, delay=20):
     if not rows:
         log(f"scene {sid}: no fingerprint match at {src} -> skip"); return
     sc = rows[0]
-    scene["__conn__"] = conn
     try:
         upd = apply_scene_fill(gql, sid, scene, sc, src,
                                ow_title=settings.get("overwriteSceneTitle") is True)
@@ -613,7 +669,7 @@ def handle_scene_create(payload, conn, gql):
     # immediately would race it; the delayed worker re-reads the scene after a
     # short wait and fills empty-only.
     spawn_fill_later(conn, sid)
-    log_info(f"scene {sid}: queued delayed fill (20s)")
+    log_info(f"scene {sid}: queued delayed fill ({_scene_fill_delay(settings)}s)")
 
 def handle_scene_backfill(payload, conn, gql):
     """Task: scan all scenes missing the configured stash-box endpoint, look them up by file hash and fill."""
@@ -646,7 +702,6 @@ def handle_scene_backfill(payload, conn, gql):
         time.sleep(0.3)  # rate-limit JAVStash (~200/min)
         scene = get_scene_full(gql, sid)
         if not scene: continue
-        scene["__conn__"] = conn
         hits = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
         if not hits: continue
         try:
@@ -784,8 +839,6 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--fill-scene-later":
         fill_scene_later_mode(sys.argv[2])
-    elif len(sys.argv) >= 4 and sys.argv[1] == "--set-scene-image":
-        set_scene_image_mode(sys.argv[2], sys.argv[3])
     elif len(sys.argv) >= 4 and sys.argv[1] == "--set-image":
         set_image_mode(sys.argv[2], sys.argv[3])
     else:

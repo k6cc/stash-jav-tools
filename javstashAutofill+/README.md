@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.1.3：封面与主数据分离提交（Windows blob 文件锁失败不再拖垮整个 sceneUpdate）；写封面前重读场景，NFO 已写封面则不覆盖；瞬时 blob 锁错误 1s/2s/4s 退避重试；新增 sceneFillDelay 设置（默认 20s）。
+> v1.1.4：设置项调整——Name-match threshold 改为文本框（STRING）以支持小数（0-1），越界/非法值回落默认 0.9；Scene auto-add stash IDs 与 Overwrite scene title 描述精简。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

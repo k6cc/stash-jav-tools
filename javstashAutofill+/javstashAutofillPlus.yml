@@ -1,6 +1,6 @@
 name: Javstash Autofill+
 description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
-version: 1.1.3
+version: 1.1.4
 url: https://discourse.stashapp.cc/u/ufousox007/activity/topics
 errLog: info
 exec:
@@ -10,7 +10,7 @@ interface: raw
 settings:
   sceneAutoFill:
     displayName: Scene auto-add stash IDs
-    description: When ON, a newly scanned scene is looked up on the configured stash-box by its file fingerprint (oshash) and the matching stash_id is written into the scene's stash_ids (only when that endpoint is not already set). Default ON.
+    description: When ON, new scenes are looked up on the configured stash-box by file fingerprint (oshash) and missing stash_ids are written. Default ON.
     type: BOOLEAN
   sceneSource:
     displayName: Scraper (scene)
@@ -18,7 +18,7 @@ settings:
     type: STRING
   overwriteSceneTitle:
     displayName: Overwrite scene title
-    description: When ON, write the scraped title even if the scene already has one. OFF = title kept as-is (recommended when NFO import owns the title; the delayed fill runs 20s after creation so NFO has already written it). Default OFF.
+    description: When ON, write the scraped title even if the scene already has one. OFF = title kept as-is. Default OFF.
     type: BOOLEAN
   sceneFillDelay:
     displayName: Scene fill delay (s)
@@ -43,7 +43,7 @@ settings:
   threshold:
     displayName: Name-match threshold (0-1)
     description: Skip when the best name-match score is below this. Default 0.9.
-    type: NUMBER
+    type: STRING
   owBirthdate:
     displayName: "Overwrite: birthdate"
     description: Overwrite even if a value already exists. OFF = fill only when empty.

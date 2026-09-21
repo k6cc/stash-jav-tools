@@ -83,6 +83,7 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 18. **performerDestroy 变量名**：`mutation($id:ID!){ performerDestroy(input:{id:$id}) }`——写成 `$i` 而 mutation 内未用会 422（`Variable "$i" is never used`）。`Performer.Create.Post` 钩子对裸 performers 无 IndexError 问题（坑 ① 只针对 Scene.Create.Post）。
 19. **0.9 匹配用例的前缀陷阱**：E2E 测试演员名带前缀（`TST-AF1-`）会拉低 javstash 搜索分数（0.31-0.50 < 0.9）走不到 0.9 分支——带 stash_id 的用例可带前缀（反查/直抓不搜名），**0.9 用例必须用 javstash 可命中的真实名字**；且按名查询会把「别名含测试名」的本地演员算进结果，断言按 pid 而非名字。
 20. **tagCreate 被别名占用名拒绝**：`tagCreate` 对「已被用作其他 tag 别名」的名称报错（`name X is used as alias for 'Y'`）——库数据状态所致，插件捕获跳过即可，不是插件 bug（场景 tag 填充失败只影响 tag，不影响主数据）。
+21. **删文件不级联 → findImages visual_files 孤儿报错**：测试删除视频文件后（sceneDestroy / 删目录 / db_cleanup），若该视频曾被用作某 image 的 visual_files（如 sceneGallerySync 为场景建的 gallery 视频条目），`files` 行被清但 `images_files`（image→file 关联）、`image_files`（file 格式元数据）、`files_fingerprints` 残留孤儿 → `findImages` 解析 `visual_files` 报 `sql: no rows in result set`，且 Stash 对当页每张图重放同一失败（一页 25 张刷 25 条）。实测：file 455（mjpeg 视频）已删、image 866 无 gallery 归属仍引用它、md5 指纹残留。**Stash 删 file 不级联清这三表**。处置：DB 直写删孤儿（三表中 file 不存在者 + 无文件无 gallery 的 image 行），或删场景前先 destroy 其 gallery。
 
 ## 封面竞态 E2E 方法（javstashAF+ × nfoSceneParser）
 
@@ -123,6 +124,7 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 - 测试场景：`sceneDestroy(input:{id:"..."})`（返回 Boolean，不 selection；被 blob 锁拦时重试 2-3 次）。
 - 测试文件：删测试目录；残留 DB 记录用 `db_cleanup.py --prefix <前缀>`（**prefix 必填且 ≥3 字符**，只删白名单）。
 - 测试新建实体：diff 快照（performer/tag/studio 前后对比）逐个销毁；插件运行时状态：确认 pending 队列空、无残留 worker 进程、日志无报错。
+- 孤儿引用：文件删除后顺带清 `images_files` / `image_files` / `files_fingerprints` 中指向已删 file 的行与「无文件且无 gallery」的 image 行——否则 findImages 解析 visual_files 刷 `sql: no rows in result set`（见已知坑 ㉑）。
 - 破坏性测试前备份（实例数据目录或 DB 文件）。
 
 ## 插件特定测试

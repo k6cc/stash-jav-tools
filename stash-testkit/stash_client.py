@@ -95,6 +95,44 @@ class Stash:
         """销毁测试场景。老版本返回 Boolean，不要 selection。"""
         return self.call("mutation($id: ID!){ sceneDestroy(input:{id:$id}) }", {"id": str(sid)})["sceneDestroy"]
 
+
+    # ── 场景文件/封面辅助（v0.31.1 实测沉淀） ────────────────────────────────
+    def scene_oshash(self, scene):
+        """从 scene.files[].fingerprints[] 取 oshash。
+        v0.31.1 中 oshash 不在 Scene / VideoFile 顶层，只在
+        files { fingerprints { type value } }（type == "oshash"）。"""
+        for f in scene.get("files") or []:
+            for fp in f.get("fingerprints") or []:
+                if fp.get("type") == "oshash":
+                    return fp.get("value")
+        return None
+
+    @staticmethod
+    def scene_shot_ts(scene):
+        """解析 paths.screenshot 的 ?t= 值（= 场景 updated_at epoch，响应缓存令牌）。
+        封面竞态验证：shot_ts == created_at epoch ⇔ 场景创建后无人写入元数据（封面仍为自动帧）；
+        任何写入（nfo 设 title/details/cover 等）都会使二者偏离。解析失败返回 None（保守当非 auto）。"""
+        import datetime as dt
+        p = (scene.get("paths") or {}).get("screenshot") or ""
+        if "?t=" not in p:
+            return None
+        try:
+            return int(p.split("?t=")[1].split("&")[0])
+        except ValueError:
+            return None
+
+    def fetch_scene_image(self, sid):
+        """抓 /scene/{id}/screenshot 端点字节（双认证头）。
+        有自定义封面时返回封面字节，否则返回自动截图帧——封面内容验证用。"""
+        import urllib.request as ur
+        sc = self.call("query($id: ID!){ findScene(id:$id){ paths{ screenshot } } }", {"id": str(sid)})["findScene"]
+        url = sc["paths"]["screenshot"]
+        req = ur.Request(url)
+        req.add_header("ApiKey", self.key)
+        req.add_header("Authorization", "Bearer " + self.key)
+        with ur.urlopen(req, timeout=30) as r:
+            return r.read()
+
     # ── 扫描 ────────────────────────────────────────────────────────────────
     def trigger_scan(self, paths=None):
         """触发 metadataScan。paths 为空 = 全部分注册路径。

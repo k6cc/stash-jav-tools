@@ -673,9 +673,28 @@ def find_or_create_tag(gql, name):
         if nfc(r["name"]) == nfc(name): return str(r["id"])
     try:
         r = gql("mutation($n:String!){ tagCreate(input:{name:$n}){ id } }", {"n": name})
-        return str(r["tagCreate"]["id"])
+        if r and r.get("tagCreate"):
+            return str(r["tagCreate"]["id"])
+        log(f"tag create '{name}' returned no tag (likely merged by a Tag.Create.Post hook), alias lookup fallback")
     except Exception as e:
-        log(f"tag create '{name}' failed: {e}"); return None
+        log(f"tag create '{name}' failed: {e}, alias lookup fallback")
+    # Fallback: a Tag.Create.Post hook (e.g. tagMergeAuto) can merge the brand-new
+    # tag into a canonical one before the tagCreate response is built; the source
+    # name then lives in the destination's aliases. Re-scan all tags and match
+    # name OR alias (old Stash has no names filter — full pull, failure path only).
+    try:
+        rows = gql('{ findTags(filter:{per_page:-1}){ tags{ id name aliases } } }').get("findTags", {}).get("tags", [])
+    except Exception:
+        rows = []
+    for r in rows:
+        if nfc(r.get("name") or "") == nfc(name):
+            return str(r["id"])
+        for a in (r.get("aliases") or []):
+            if nfc(a) == nfc(name):
+                log(f"tag '{name}' resolved to canonical '{r.get('name')}' via alias")
+                return str(r["id"])
+    return None
+
 
 def find_or_create_group(gql, name):
     if not name: return None

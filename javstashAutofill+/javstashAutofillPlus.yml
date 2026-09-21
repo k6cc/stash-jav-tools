@@ -1,6 +1,6 @@
 name: Javstash Autofill+
 description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
-version: 1.2.2
+version: 1.2.3
 url: https://discourse.stashapp.cc/t/javstash-autofill/17003
 errLog: info
 exec:

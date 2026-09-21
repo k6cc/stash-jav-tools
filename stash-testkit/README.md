@@ -82,7 +82,7 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 17. **javstash 限流敏感**：连发请求出现 5 分钟级 read timeout（非 429，是挂起到超时）——探测/直抓必须单请求 + 长 timeout（45s）+ 请求间隙 sleep；E2E 脚本用 `run_in_background` + TaskOutput 读输出，别前台等。
 18. **performerDestroy 变量名**：`mutation($id:ID!){ performerDestroy(input:{id:$id}) }`——写成 `$i` 而 mutation 内未用会 422（`Variable "$i" is never used`）。`Performer.Create.Post` 钩子对裸 performers 无 IndexError 问题（坑 ① 只针对 Scene.Create.Post）。
 19. **0.9 匹配用例的前缀陷阱**：E2E 测试演员名带前缀（`TST-AF1-`）会拉低 javstash 搜索分数（0.31-0.50 < 0.9）走不到 0.9 分支——带 stash_id 的用例可带前缀（反查/直抓不搜名），**0.9 用例必须用 javstash 可命中的真实名字**；且按名查询会把「别名含测试名」的本地演员算进结果，断言按 pid 而非名字。
-20. **tagCreate 被别名占用名拒绝**：`tagCreate` 对「已被用作其他 tag 别名」的名称报错（`name X is used as alias for 'Y'`）——库数据状态所致，插件捕获跳过即可，不是插件 bug（场景 tag 填充失败只影响 tag，不影响主数据）。
+20. **tagCreate 被别名占用名拒绝（与 tagMergeAuto 钩子同源）**：`tagCreate` 对「已被用作其他 tag 别名」的名称报错（`name X is used as alias for 'Y'`），且 `Tag.Create.Post` 钩子（tagMergeAuto）同步合并会令 `tagCreate` 返回 `null`（`'NoneType' object is not subscriptable`）——两种形态同一根因：新 tag 被钩子即时合并，源名进了目标别名。javstashAutofill+ v1.2.3 起 `find_or_create_tag` 对这两种失败做「全量按 name/别名兜底」返回规范 tag（场景 tag 正确写入）；非 tagMergeAuto 环境下的纯别名占用拒绝仍是库数据状态（插件捕获跳过）。
 21. **删文件不级联 → findImages visual_files 孤儿报错**：测试删除视频文件后（sceneDestroy / 删目录 / db_cleanup），若该视频曾被用作某 image 的 visual_files（如 sceneGallerySync 为场景建的 gallery 视频条目），`files` 行被清但 `images_files`（image→file 关联）、`image_files`（file 格式元数据）、`files_fingerprints` 残留孤儿 → `findImages` 解析 `visual_files` 报 `sql: no rows in result set`，且 Stash 对当页每张图重放同一失败（一页 25 张刷 25 条）。实测：file 455（mjpeg 视频）已删、image 866 无 gallery 归属仍引用它、md5 指纹残留。**Stash 删 file 不级联清这三表**。处置：DB 直写删孤儿（三表中 file 不存在者 + 无文件无 gallery 的 image 行），或删场景前先 destroy 其 gallery。
 
 ## 封面竞态 E2E 方法（javstashAF+ × nfoSceneParser）
@@ -139,6 +139,7 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 - `test_unified_resolve.py`：v1.2.0 演员解析单测（反查 / 直抓归一化 / 防重复主名∪别名 / 0.9 三态 / 合并别名 / 保守忽略 / build_update），37 项，纯离线（FakeGQL + 本地 fetch stub）。
 - `test_strip_bd.py`：v1.2.0 场景番号 BD 剥离单测（剥离形态 / 真含 BD 不剥离 / mismatch 丢弃 / fallback 关闭不触发 / oshash 优先 / 本地 code 空保留写入），19 项，纯离线。
 - `test_scrape_retry.py`：v1.2.2 场景刮削网络类失败重试单测（URLError/EOF 文本/request failed 识别、重试仅一次、重试仍失败回退跳过、非网络/空结果不重试、sleep 1.5s、三路径 oshash/fallback/BD-strip），18 项，纯离线。
+- `test_tag_create_null.py`：v1.2.3 tagCreate null/异常兜底单测（null → 全量别名兜底命中规范 tag / 无命中 None / 主名兜底 / 正常创建无兜底 / 已存在名直接复用），7 项，纯离线。
 - `test_e2e.py`：端到端回归（反查合并 / 直抓补全 / 25s 消除 / 0.9 别名合并 / 保守忽略），18 断言，真实 javstash + 测试库（已部署插件，断言前等 8-12s）。
 - `test_e2e_strip.py`：BD 剥离端到端（本地 code 非空保持 / 空则写入 + stash_id/空字段填充 + 快照恢复），真实 javstash。
 - `probe_javstash.py`：javstash 探测工具（`--code` 番号查询命中 / `--performer` 名称刮削 / `--fetch <uuid>` 直抓测试）。

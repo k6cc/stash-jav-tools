@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.2.2：场景刮削网络类失败自动重试一次（javstash keep-alive 瞬断 unexpected EOF / 超时 / 连接重置），批量回填跳过率降低；yml url 指向论坛帖。
+> v1.2.3：tag 创建被 Tag.Create.Post 钩子（如 tagMergeAuto）即时合并时，find_or_create_tag 增加别名兜底查询（源名进目标别名后反查规范 tag），场景 tag 正确写入规范 tag、日志降噪、消除重复创建死循环。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

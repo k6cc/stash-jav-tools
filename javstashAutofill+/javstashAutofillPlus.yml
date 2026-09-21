@@ -1,6 +1,6 @@
 name: Javstash Autofill+
 description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
-version: 1.1.4
+version: 1.2.0
 url: https://discourse.stashapp.cc/u/ufousox007/activity/topics
 errLog: info
 exec:
@@ -24,13 +24,17 @@ settings:
     displayName: Scene fill delay (s)
     description: Seconds the delayed scene fill waits after Scene.Create.Post before re-reading the scene, so the NFO parser writes title/details/cover first. Default 20.
     type: NUMBER
+  performerFillDelay:
+    displayName: Performer fill delay (s)
+    description: Seconds the delayed performer fill waits after Performer.Create.Post before re-reading the performer (the hook always returns immediately; only the fill is deferred). Default 2.
+    type: NUMBER
   identifySource:
     displayName: Scraper (Identify)
-    description: Source for performers auto-created by Identify. A stash-box endpoint URL (e.g. https://javstash.org/graphql) or a scraper_id (e.g. Minnano-AV-JP). Empty = javstash.
+    description: Legacy. Identify-created performers carry a stash_id, so they are now resolved by stash-id reverse lookup / direct fetch and this source is no longer read. Empty = javstash.
     type: STRING
   identifyUseScraperName:
     displayName: Identify - use scraper name as primary
-    description: When ON, Identify-created performers get the scraper's canonical name as primary (created name -> alias; merged if a same-named performer exists). When OFF, keep the created name. Default ON.
+    description: Legacy. Identify-created performers are resolved by stash-id and always keep the created name as primary; this toggle is no longer read. Default OFF.
     type: BOOLEAN
   manualSource:
     displayName: Scraper (manual)

@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Stash plugin: Performer.Create.Post hook.
-When a performer is created, search the configured source (default: the javstash
-stash-box) by name, take the best name-matching candidate and fill only the empty
-fields (skip if the best score is below THRESHOLD).
-
-The primary-name handling depends on the creation origin (Identify vs. manual;
-detected by the presence of stash_ids in the create input):
-  - Identify creation -> prefer the scraper's canonical name as primary; the
-    created name is demoted to an alias. If a performer with that name already
-    exists, the new one is merged into it via performerMerge (scenes re-linked,
-    new one removed, the existing one's empty fields filled, the created name kept
-    as an alias, and the stash-box id carried over).
-  - Manual creation    -> keep the created name as primary; the scraper name is
-    added as an alias.
+Stash plugin: Performer.Create.Post hook + Scene.Create.Post hook.
+Unified performer resolution (scene fill, backfill task and manual creation share it):
+  - stash-id first: reverse-lookup the local performer carrying (endpoint, stash_id);
+    hit -> reuse (created name appended as alias when it differs), miss -> fill
+    directly by stash-id (findPerformerByID, bypassing name matching).
+  - no stash-id: 0.9 name match. A matched local candidate (name or alias) is reused
+    (merged, created name kept as an alias); a candidate whose identity is anchored
+    to another stash-id is conservatively ignored (new one stays blank); otherwise
+    the created name stays primary and the scraper name becomes an alias (unless
+    manualUseScraperName is on).
+The hook spawns a detached worker (performerFillDelay, default 2s) and returns
+immediately, so a manual creation never blocks the UI on the search.
 Existing values, existing images and existing aliases are protected (only empty
 fields are filled / missing entries appended) unless a per-field overwrite toggle
 is enabled. Measurements are normalised from javstash form (91H-56-88) to
@@ -65,6 +63,10 @@ def make_gql(conn):
 def nfc(s):  return unicodedata.normalize("NFC", (s or "").strip())
 def norm(s): return nfc(s).lower().replace(" ", "").replace("　", "")
 def split_aliases(s):
+    # aliases arrive as a list from the direct findPerformer fetch and as a
+    # comma/sep string from the scraper; both are normalised to a list.
+    if isinstance(s, list):
+        return [a.strip() for a in s if a and str(a).strip()]
     if not s: return []
     return [a for a in re.split(r"[,，/、|]", s) if a.strip()]
 def match_score(target_names, cand_names):
@@ -120,16 +122,47 @@ PERF_FIELDS = ("id name alias_list gender birthdate death_date ethnicity country
 def get_performer(gql, pid):
     q = "query($id:ID!){ findPerformer(id:$id){ %s } }" % PERF_FIELDS
     return gql(q, {"id": pid}).get("findPerformer")
+def _fetch_all_performers(gql):
+    """Legacy fallback: older Stash (pre-names-filter) cannot search aliases, so pull
+    all performers and compare client-side. Returns a list, or None on error."""
+    out, page = [], 1
+    while True:
+        try:
+            rows = gql("{ findPerformers(filter:{per_page:500,page:%d}){ performers{ id name alias_list } } }" % page) \
+                .get("findPerformers", {}).get("performers", [])
+        except Exception:
+            return None
+        if not rows: break
+        out.extend(rows)
+        if len(rows) < 500: break
+        page += 1
+    return out
+
 def find_by_name(gql, name, exclude_id):
-    q = ("query($n:String!){ findPerformers(performer_filter:{name:{value:$n,modifier:EQUALS}},"
-         " filter:{per_page:5}){ performers{ id name } } }")
+    """Find a local performer whose NAME or ALIAS equals name (norm-exact), so a
+    candidate never creates a duplicate next to an existing alias (Stash allows a
+    primary name to repeat as another performer's alias). Primary-name hits take
+    priority; otherwise the first alias hit wins. exclude_id is skipped. Uses the
+    names filter when available and falls back to a client-side scan on older
+    Stash versions that only have the primary-name filter."""
+    if not name: return None
+    q = ("query($n:String!){ findPerformers(performer_filter:{names:{value:$n,modifier:EQUALS_NOCASE}},"
+         " filter:{per_page:50}){ performers{ id name alias_list } } }")
     try:
         rows = gql(q, {"n": name}).get("findPerformers", {}).get("performers", [])
     except Exception:
-        return None
+        rows = _fetch_all_performers(gql)
+    if not rows: return None
+    n = norm(name)
     for p in rows:
-        if str(p["id"]) != str(exclude_id) and nfc(p["name"]) == nfc(name):
-            return p["id"]
+        if str(p["id"]) == str(exclude_id): continue
+        if norm(p.get("name") or "") == n:
+            return str(p["id"])
+    for p in rows:
+        if str(p["id"]) == str(exclude_id): continue
+        for a in (p.get("alias_list") or []):
+            if norm(a) == n:
+                return str(p["id"])
     return None
 def performer_update(gql, pid, upd):
     upd = dict(upd); upd["id"] = pid
@@ -208,6 +241,15 @@ def build_update(perf, cand, primary_name, extra_aliases=None, set_name=False, o
     # NB: the image is NOT included here; a slow fetch would fail the whole update, so it is applied separately.
     return upd
 
+# Per-field overwrite toggles (default all OFF = fill empty only).
+OW_MAP = {"gender":"owGender","birthdate":"owBirthdate","death_date":"owDeathDate","ethnicity":"owEthnicity",
+          "country":"owCountry","hair_color":"owHairColor","eye_color":"owEyeColor","fake_tits":"owFakeTits",
+          "career_length":"owCareerLength","tattoos":"owTattoos","piercings":"owPiercings","details":"owDetails",
+          "height_cm":"owHeight","weight":"owWeight","measurements":"owMeasurements",
+          "urls":"owUrls","alias_list":"owAliasList","image":"owImage"}
+def build_ow(settings):
+    return {f: bool(settings.get(k)) for f, k in OW_MAP.items()}
+
 def apply_image_async(conn, target_id, target_perf, cand, overwrite=False):
     """When there is no image (or overwrite is on), download and set it in a detached
     background process, so the hook returns immediately and Stash never blocks on a
@@ -267,7 +309,7 @@ def add_endpoint_stash_id(existing_sids, endpoint, stash_id):
 
 # ---------- scene create: autofill empty fields + stash-box id by file hash ----------
 SCENE_FULL_FIELDS = ("title code details director date urls image remote_site_id duration "
-                     "studio{ stored_id name } performers{ stored_id name } tags{ stored_id name }")
+                     "studio{ stored_id name } performers{ stored_id name remote_site_id } tags{ stored_id name }")
 
 def get_scene_full(gql, sid):
     q = ("query($id:ID!){ findScene(id:$id){ id title code details director date urls "
@@ -311,6 +353,18 @@ def extract_code(scene):
         m = _CODE_RE.match(base)
         if m: return m.group(1)
     return None
+
+def strip_bd_code(code):
+    """Retry lookup code with a trailing 'BD' brand suffix stripped:
+    CWPBD-98 -> CWP-98, LAFBD-21 -> LAF-21. Requires a >=2-letter prefix so a
+    genuine code that itself contains BD (e.g. SBD-123) is never mangled; the
+    result must still look like a code. None when nothing to strip."""
+    c = (code or "").strip().upper()
+    m = re.match(r"^([A-Z]{2,6})BD[-_](\d{2,5})$", c)
+    if not m:
+        return None
+    out = "%s-%s" % (m.group(1), m.group(2))
+    return out if out != c else None
 
 def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
     q = ("query($s:ScraperSourceInput!,$i:ScrapeSingleSceneInput!){"
@@ -361,6 +415,36 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
         except Exception as e:
             log(f"scene {sid}: code fallback error: {e}")
             return []
+        # original code found nothing: retry once with the BD brand suffix
+        # stripped (CWPBD-98 -> CWP-98). Exact code match only, and the returned
+        # row's code is blanked so the local code is never overwritten.
+        if not hits:
+            stripped = strip_bd_code(code)
+            if stripped:
+                try:
+                    hits = gql(q, {"s": {"stash_box_endpoint": source_url},
+                                   "i": {"query": stripped}}).get("scrapeSingleScene") or []
+                except Exception as e:
+                    log(f"scene {sid}: BD-stripped retry error: {e}")
+                    hits = []
+                if hits:
+                    exact = [h for h in hits if codes_match(h.get("code"), stripped)]
+                    if exact:
+                        # blank the code only when the local code FIELD is non-empty
+                        # (title/filename-derived codes are not kept); a truly empty
+                        # local code field may legitimately receive the stripped code.
+                        if ((scene or {}).get("code") or "").strip():
+                            exact[0]["code"] = ""
+                            log(f"scene {sid}: code '{code}' not found, BD-stripped '{stripped}' matched (local code kept)")
+                        else:
+                            log(f"scene {sid}: code '{code}' not found, BD-stripped '{stripped}' matched (local code empty, filled)")
+                        return exact
+                    ret_code = (hits[0].get("code") or "").strip().upper()
+                    if ret_code and not codes_match(ret_code, stripped):
+                        log(f"scene {sid}: BD-stripped '{stripped}' returned '{ret_code}', mismatch, discarding")
+                        return []
+                log(f"scene {sid}: BD-stripped '{stripped}' no match")
+                hits = []
         # fallback found nothing at all (javstash has no entry for this code):
         # adopt the oshash fingerprint candidate as a last resort, loudly, so
         # mismatches stay auditable in the log.
@@ -398,19 +482,168 @@ def find_or_create_studio(gql, name):
 
 def find_or_create_performer(gql, name):
     if not name: return None
-    q = ("query($n:String!){ findPerformers(performer_filter:{name:{value:$n,modifier:EQUALS}},filter:{per_page:5}){ performers{ id name } } }")
-    try:
-        rows = gql(q, {"n": name}).get("findPerformers", {}).get("performers", [])
-    except Exception:
-        rows = []
-    for r in rows:
-        if nfc(r["name"]) == nfc(name): return str(r["id"])
+    dup = find_by_name(gql, name, exclude_id=None)
+    if dup: return dup
     try:
         # creating a performer triggers Performer.Create.Post -> the performer autofill hook fills its fields
         r = gql("mutation($n:String!){ performerCreate(input:{name:$n}){ id } }", {"n": name})
         return str(r["performerCreate"]["id"])
     except Exception as e:
         log(f"performer create '{name}' failed: {e}"); return None
+
+# ---------- stash-id reverse lookup / direct fetch / unified resolution ----------
+def find_by_stash_id(gql, endpoint, stash_id, exclude_id=None):
+    """Reverse lookup: the local performer carrying (endpoint, stash_id). None when
+    absent. The stash_ids_endpoint filter is only a pre-filter; the exact pair is
+    verified client-side (the filter's EQUALS semantics are not relied upon)."""
+    if not endpoint or not stash_id: return None
+    q = ("query($e:String!,$s:[String!]!){ findPerformers(performer_filter:{"
+         "stash_ids_endpoint:{endpoint:$e, stash_ids:$s, modifier:EQUALS}},"
+         " filter:{per_page:10}){ performers{ id stash_ids{ endpoint stash_id } } } }")
+    try:
+        rows = gql(q, {"e": endpoint, "s": [stash_id]}).get("findPerformers", {}).get("performers", [])
+    except Exception as e:
+        log(f"stash-id reverse lookup {stash_id}: {e}")
+        return None
+    for p in rows:
+        if str(p["id"]) == str(exclude_id): continue
+        for s in (p.get("stash_ids") or []):
+            if s.get("endpoint") == endpoint and s.get("stash_id") == stash_id:
+                return str(p["id"])
+    return None
+
+def get_stashbox_api_key(gql, endpoint):
+    """ApiKey of the configured stash-box endpoint. Newer Stash exposes
+    configuration.stashBoxes; older versions keep them under general.stashBoxes."""
+    ep = (endpoint or "").strip().rstrip("/")
+    if not ep: return None
+    def match(boxes):
+        for b in boxes or []:
+            if (b.get("endpoint") or "").strip().rstrip("/") == ep:
+                key = (b.get("api_key") or "").strip()
+                if key: return key
+        return None
+    try:
+        boxes = (gql("{ configuration { stashBoxes { endpoint api_key } } }")
+                 .get("configuration", {}) or {}).get("stashBoxes") or []
+        k = match(boxes)
+        if k: return k
+    except Exception:
+        pass
+    try:
+        boxes = (gql("{ configuration { general { stashBoxes { endpoint api_key } } } }")
+                 .get("configuration", {}) or {}).get("general", {}).get("stashBoxes") or []
+        return match(boxes)
+    except Exception:
+        return None
+    return None
+
+# Enum whitelists for local Stash compatibility (javstash returns e.g. BALD hair,
+# which local Stash may not accept; unknown values are dropped rather than written).
+_STASH_GENDERS = {"MALE","FEMALE","TRANSGENDER_MALE","TRANSGENDER_FEMALE","INTERSEX","NON_BINARY"}
+_STASH_ETHNICITIES = {"CAUCASIAN","BLACK","ASIAN","INDIAN","LATIN","MIDDLE_EASTERN","MIXED","OTHER"}
+_STASH_HAIRS = {"BLONDE","BRUNETTE","BROWN","BLACK","RED","AUBURN","GREY","WHITE","OTHER","VARIOUS"}
+_STASH_EYES = {"BLUE","BROWN","GREY","GREEN","HAZEL","RED"}
+
+def fetch_performer_by_id(gql, endpoint, stash_id):
+    """Fetch a performer's full data from the stash-box by UUID, bypassing name
+    matching. Stash's internal stashbox client has this capability but exposes only
+    name-based scraping to plugins, so the configured ApiKey is used for a direct
+    findPerformer call (mirroring Stash's ApiKey + User-Agent headers — javstash
+    rejects bare urllib requests with 403). Returns data normalised to the scrape
+    candidate shape, or None."""
+    if not endpoint or not stash_id: return None
+    api_key = get_stashbox_api_key(gql, endpoint)
+    if not api_key:
+        log(f"stash-id fetch {stash_id}: no api_key for {endpoint}")
+        return None
+    q = ("query($id:ID!){ findPerformer(id:$id){ name aliases gender birth_date death_date ethnicity country "
+         "hair_color eye_color height band_size cup_size waist_size hip_size career_start_year career_end_year "
+         "breast_type tattoos{ location description } piercings{ location description } urls{ url } images{ url } } }")
+    data = json.dumps({"query": q, "variables": {"id": stash_id}}).encode()
+    headers = {"Content-Type": "application/json", "ApiKey": api_key, "User-Agent": "stash/1.0.0"}
+    sslctx = ssl.create_default_context()
+    sslctx.check_hostname = False
+    sslctx.verify_mode = ssl.CERT_NONE  # some Python builds lack CA certs
+    try:
+        req = urllib.request.Request(endpoint, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=30, context=sslctx) as r:
+            j = json.loads(r.read())
+        if j.get("errors"):
+            log(f"stash-id fetch {stash_id}: {j['errors']}")
+            return None
+        p = (j.get("data") or {}).get("findPerformer")
+    except Exception as e:
+        log(f"stash-id fetch {stash_id}: {e}")
+        return None
+    if not p: return None
+    # ---- normalise javstash flat schema to the scrape-candidate shape ----
+    p["birthdate"] = p.pop("birth_date", None) or ""
+    def year_str(v):
+        return str(v) if v is not None else ""
+    p["career_start"] = year_str(p.pop("career_start_year", None))
+    p["career_end"] = year_str(p.pop("career_end_year", None))
+    h = p.get("height")
+    p["height"] = str(h) if h is not None else ""
+    band, cup, waist, hip = p.get("band_size"), p.get("cup_size"), p.get("waist_size"), p.get("hip_size")
+    if all(v is not None for v in (band, cup, waist, hip)):
+        p["measurements"] = "%s%s-%s-%s" % (band, cup, waist, hip)
+    else:
+        p["measurements"] = ""
+    bt = p.pop("breast_type", None)
+    p["fake_tits"] = bt if bt in ("NATURAL", "FAKE") else ""
+    def bmod_str(items):
+        out = []
+        for it in items or []:
+            loc = (it.get("location") or "").strip()
+            desc = (it.get("description") or "").strip()
+            if loc and desc: out.append(loc + ": " + desc)
+            elif loc: out.append(loc)
+            elif desc: out.append(desc)
+        return ", ".join(out)
+    p["tattoos"] = bmod_str(p.get("tattoos"))
+    p["piercings"] = bmod_str(p.get("piercings"))
+    for f, ok in (("gender", _STASH_GENDERS), ("ethnicity", _STASH_ETHNICITIES),
+                  ("hair_color", _STASH_HAIRS), ("eye_color", _STASH_EYES)):
+        v = p.get(f)
+        if v is not None and v not in ok:
+            p[f] = ""
+    p["urls"] = [u.get("url") for u in (p.get("urls") or []) if u.get("url")]
+    p["images"] = [im.get("url") for im in (p.get("images") or []) if im.get("url")]
+    p["remote_site_id"] = stash_id
+    return p
+def create_performer(gql, name, stash_ids=None, cand=None, ow=None):
+    """Create a performer carrying name + (optionally) stash_ids and fields from cand.
+    The created name stays primary; cand name/aliases land in the alias list."""
+    inp = {"name": name}
+    if stash_ids:
+        inp["stash_ids"] = [{"endpoint": ep, "stash_id": sid} for ep, sid in stash_ids]
+    if cand:
+        upd = build_update({}, cand, primary_name=name, extra_aliases=[], set_name=False, ow=ow or {})
+        for k, v in upd.items():
+            if k not in inp:
+                inp[k] = v
+    try:
+        r = gql("mutation($i:PerformerCreateInput!){ performerCreate(input:$i){ id } }", {"i": inp})
+        return str(r["performerCreate"]["id"])
+    except Exception as e:
+        log(f"performer create '{name}' failed: {e}")
+        return None
+
+def resolve_performer(gql, name, rid, src):
+    """Unified performer resolution for scene fill (hook and backfill share this):
+    stash-id reverse lookup first -> reuse; else create with the stash_id attached
+    (details are filled afterwards by the async performer hook); no stash-id ->
+    name/alias reuse (dedup) or create blank. Returns a performer id or None."""
+    name = (name or "").strip()
+    if not name: return None
+    rid = (rid or "").strip()
+    ep = (src or JAV).strip()
+    if rid and ep.startswith("http"):
+        pid = find_by_stash_id(gql, ep, rid)
+        if pid: return str(pid)
+        return create_performer(gql, name, stash_ids=[(ep, rid)])
+    return find_or_create_performer(gql, name)
 
 def find_or_create_tag(gql, name):
     if not name: return None
@@ -562,11 +795,14 @@ def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
         st = sc.get("studio") or {}
         sid_studio = st.get("stored_id") or find_or_create_studio(gql, st.get("name"))
         if sid_studio: upd["studio_id"] = sid_studio
-    # performers: merge de-dup (stored_id preferred, else find-or-create by name)
+    # performers: merge de-dup via the unified resolution (stash-id reverse lookup
+    # first -> reuse; else create carrying the stash_id; no stash-id -> name/alias
+    # reuse or create blank). stored_id is deliberately not used: it is a name-derived
+    # guess, and the reverse lookup / name-alias dedup are both stricter.
     existing_pids = {str(p["id"]) for p in (scene.get("performers") or [])}
     want_pids = set(existing_pids)
     for p in (sc.get("performers") or []):
-        pid = p.get("stored_id") or find_or_create_performer(gql, p.get("name"))
+        pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
         if pid: want_pids.add(str(pid))
     if want_pids != existing_pids:
         upd["performer_ids"] = sorted(want_pids, key=int)
@@ -719,6 +955,173 @@ def handle_scene_backfill(payload, conn, gql):
     log_info(out)
     log_progress(1.0)
 
+# ---------- performer create: async fill (stash-id reverse lookup first) ----------
+def _performer_fill_delay(settings):
+    try:
+        return max(0, int((settings or {}).get("performerFillDelay") or 2))
+    except (TypeError, ValueError):
+        return 2
+
+def handle_performer_create(payload, conn, gql):
+    """Performer.Create.Post hook: spawn a detached worker and return immediately.
+    The worker waits a short delay (performerFillDelay, default 2s) then re-reads
+    the performer and fills it — the previous synchronous hook made a manual
+    creation without a stash-id block the UI for ~25s on an unmatched JAVStash
+    search, so the delay/fill must never run inside the hook itself."""
+    ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
+    pid = ctx.get("id")
+    if not pid:
+        log_info("performer hook: no performer id"); return
+    try:
+        env = dict(os.environ, JAVSTASH_CONN=json.dumps(conn))
+        subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                          "--fill-performer-later", str(pid)],
+                         env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        log_info(f"performer {pid}: queued delayed fill")
+    except Exception as e:
+        log_info(f"performer {pid}: delayed fill spawn failed ({e})")
+
+def fill_performer_later_mode(pid):
+    """Delayed worker entry: wait performerFillDelay, re-read the performer and fill."""
+    conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
+    gql = make_gql(conn)
+    settings = get_settings(gql)
+    time.sleep(_performer_fill_delay(settings))
+    try:
+        fill_performer(gql, conn, pid)
+    except Exception as e:
+        log(f"performer {pid}: delayed fill error: {e}")
+
+def fill_performer(gql, conn, pid):
+    """Unified performer fill (async worker). Origin is decided by the performer's
+    actual stash_ids (the create input is not available in the worker):
+      - with stash_ids: reverse-lookup the local performer (reuse/merge, created
+        name appended as alias) or fill directly by id — bypasses name matching;
+      - without stash_ids: 0.9 name match; a matched local candidate is reused
+        (merged), an identity-anchored candidate is conservatively ignored, else
+        the created name stays primary and the scraper name becomes an alias."""
+    try:
+        perf = get_performer(gql, pid)
+    except Exception as e:
+        log(f"get_performer error {pid}: {e}"); log_info(f"performer {pid}: fetch error, skip"); return
+    if not perf or not perf.get("name"):
+        log_info(f"performer {pid}: no name, skip"); return
+    name = perf["name"]
+    targets = [name] + list(perf.get("alias_list") or [])
+    settings = get_settings(gql)
+    ow = build_ow(settings)
+    try:
+        threshold = float(settings.get("threshold"))
+        if not (0 < threshold <= 1): threshold = THRESHOLD
+    except (TypeError, ValueError):
+        threshold = THRESHOLD
+
+    sids = perf.get("stash_ids") or []
+    if sids:
+        ep = (sids[0].get("endpoint") or "").strip()
+        rid = (sids[0].get("stash_id") or "").strip()
+        if not ep or not rid:
+            log(f"performer {pid} '{name}': bad stash_ids, skip"); return
+        # ① reverse lookup: the same stash-id already lives on another local performer
+        dup = find_by_stash_id(gql, ep, rid, exclude_id=pid)
+        if dup:
+            dest = get_performer(gql, dup)
+            if not dest:
+                log(f"performer {pid} '{name}': reverse-hit {dup} unreadable, skip"); return
+            extra = [name] + list(perf.get("alias_list") or [])
+            cand = fetch_performer_by_id(gql, ep, rid)
+            if cand:
+                values = build_update(dest, cand, primary_name=dest["name"],
+                                      extra_aliases=extra, set_name=False, ow=ow)
+            else:
+                values = {}
+            sids2 = union_stash_ids(dest, perf)
+            if sids2 is not None: values["stash_ids"] = sids2
+            values["id"] = dup
+            performer_merge(gql, [pid], dup, values)
+            if cand:
+                apply_image_async(conn, dup, dest, cand, overwrite=ow.get("image"))
+            log(f"performer {pid} '{name}': MERGED into {dup} (stash-id match, fields={sorted(values.keys())})")
+            log_info(f"performer {pid} '{name}': merged into {dup} (stash-id match)")
+            return
+        # ② no local reverse-hit -> fill directly by stash-id (bypasses name matching)
+        cand = fetch_performer_by_id(gql, ep, rid)
+        if not cand:
+            log(f"performer {pid} '{name}': stash-id fetch failed ({ep}/{rid}), skip")
+            log_info(f"performer {pid} '{name}': stash-id fetch failed, skip"); return
+        values = build_update(perf, cand, primary_name=name, extra_aliases=[], set_name=False, ow=ow)
+        if values:
+            performer_update(gql, pid, values)
+        apply_image_async(conn, pid, perf, cand, overwrite=ow.get("image"))
+        log(f"performer {pid} '{name}': filled by stash-id {rid} ({sorted(values.keys())})")
+        log_info(f"performer {pid} '{name}': filled by stash-id")
+        return
+
+    # ---------- no stash-id: 0.9 name match on the manual source ----------
+    src = settings.get("manualSource")
+    source_input = build_source(src)
+    cands = scrape_source(gql, name, source_input)
+    if not cands:
+        log(f"performer {pid} '{name}': no candidate ({source_input}), keep blank")
+        log_info(f"performer {pid} '{name}': no candidate, skip"); return
+    scored = sorted(((match_score(targets, [c.get("name")] + split_aliases(c.get("aliases"))), c)
+                     for c in cands), key=lambda x: x[0], reverse=True)
+    top_score, top = scored[0]
+    if top_score < threshold:
+        log(f"performer {pid} '{name}': best score {top_score:.2f} < {threshold}, keep blank")
+        log_info(f"performer {pid} '{name}': score {top_score:.2f} too low, skip"); return
+    cand_name = (top.get("name") or "").strip()
+    cand_ep = (source_input.get("stash_box_endpoint") or "").strip()
+    cand_rid = (top.get("remote_site_id") or "").strip()
+    # reuse/dedup: a local performer already carrying the candidate name (name or alias)
+    dup = find_by_name(gql, cand_name, exclude_id=pid)
+    if dup:
+        dup_perf = get_performer(gql, dup)
+        if not dup_perf:
+            log(f"performer {pid} '{name}': candidate-name hit {dup} unreadable, keep blank"); return
+        dup_sids = {s.get("stash_id") for s in (dup_perf.get("stash_ids") or []) if s.get("stash_id")}
+        if dup_sids and cand_rid not in dup_sids:
+            # the candidate identity is anchored to another performer -> conservative:
+            # never merge (irreversible) nor attach the id; keep the new one blank.
+            log(f"performer {pid} '{name}': '{cand_name}' exists as {dup} with other stash ids, keep blank (conservative)")
+            log_info(f"performer {pid} '{name}': candidate identity conflict, keep blank"); return
+        extra = [name] + list(perf.get("alias_list") or [])
+        values = build_update(dup_perf, top, primary_name=dup_perf["name"],
+                              extra_aliases=extra, set_name=False, ow=ow)
+        sids2 = union_stash_ids(dup_perf, perf)
+        if cand_ep and cand_rid:
+            cur = sids2 if sids2 is not None else list(dup_perf.get("stash_ids") or [])
+            merged = add_endpoint_stash_id(cur, cand_ep, cand_rid)
+            if merged is not None: sids2 = merged
+        if sids2 is not None: values["stash_ids"] = sids2
+        values["id"] = dup
+        performer_merge(gql, [pid], dup, values)
+        apply_image_async(conn, dup, dup_perf, top, overwrite=ow.get("image"))
+        log(f"performer {pid} '{name}': MERGED into {dup} '{dup_perf['name']}' "
+            f"(name/alias match, fields={sorted(values.keys())}, score={top_score:.2f})")
+        log_info(f"performer {pid} '{name}': merged into {dup}"); return
+    # no duplicate: created name stays primary (default); scraper name becomes an alias
+    use_scraper_name = settings.get("manualUseScraperName")
+    if use_scraper_name is None: use_scraper_name = False
+    prefer_scraper = bool(use_scraper_name) and bool(cand_name) and norm(cand_name) != norm(name)
+    if prefer_scraper:
+        values = build_update(perf, top, primary_name=cand_name, extra_aliases=[name], set_name=True, ow=ow)
+        mode = "rename"
+    else:
+        values = build_update(perf, top, primary_name=name, extra_aliases=[], set_name=False, ow=ow)
+        mode = "keep-name"
+    if cand_ep and cand_rid:
+        new_sids = add_endpoint_stash_id(perf.get("stash_ids"), cand_ep, cand_rid)
+        if new_sids is not None:
+            values["stash_ids"] = new_sids
+    if values:
+        performer_update(gql, pid, values)
+    apply_image_async(conn, pid, perf, top, overwrite=ow.get("image"))
+    log(f"performer {pid} '{name}' [{mode}]: filled {sorted(values.keys())} (score={top_score:.2f})")
+    log_info(f"performer {pid} '{name}': filled {sorted(values.keys())}")
+
 # ---------- main ----------
 def main():
     try:
@@ -727,7 +1130,6 @@ def main():
         log_info("no input from stdin"); return
     conn = payload.get("server_connection", {})
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
-    pid = ctx.get("id")
     htype = ctx.get("type", "")
 
     gql = make_gql(conn)
@@ -738,107 +1140,15 @@ def main():
 
     if "Scene.Create" in htype:
         handle_scene_create(payload, conn, gql); return
-    if not pid or "Performer.Create" not in htype:
-        log_info("skip: not performer/scene create"); return
-    create_input = ctx.get("input") or {}
-    from_identify = bool(create_input.get("stash_ids"))
-
-    try:
-        perf = get_performer(gql, pid)
-    except Exception as e:
-        log(f"get_performer error {pid}: {e}"); log_info(f"performer {pid}: fetch error, skip"); return
-    if not perf or not perf.get("name"):
-        log_info(f"performer {pid}: no name, skip"); return
-    name = perf["name"]
-    targets = [name] + list(perf.get("alias_list") or [])
-
-    # Settings: per-origin (Identify/manual) source and primary-name policy; match threshold.
-    settings = get_settings(gql)
-    if from_identify:
-        src = settings.get("identifySource")
-        use_scraper_name = settings.get("identifyUseScraperName")
-        if use_scraper_name is None: use_scraper_name = True   # default: Identify prefers the scraper name
-    else:
-        src = settings.get("manualSource")
-        use_scraper_name = settings.get("manualUseScraperName")
-        if use_scraper_name is None: use_scraper_name = False  # default: manual keeps the created name
-    source_input = build_source(src)
-    try:
-        threshold = float(settings.get("threshold"))
-        if not (0 < threshold <= 1): threshold = THRESHOLD
-    except (TypeError, ValueError):
-        threshold = THRESHOLD
-    # Per-field overwrite toggles (default all OFF = fill empty only).
-    OW_MAP = {"gender":"owGender","birthdate":"owBirthdate","death_date":"owDeathDate","ethnicity":"owEthnicity",
-              "country":"owCountry","hair_color":"owHairColor","eye_color":"owEyeColor","fake_tits":"owFakeTits",
-              "career_length":"owCareerLength","tattoos":"owTattoos","piercings":"owPiercings","details":"owDetails",
-              "height_cm":"owHeight","weight":"owWeight","measurements":"owMeasurements",
-              "urls":"owUrls","alias_list":"owAliasList","image":"owImage"}
-    ow = {f: bool(settings.get(k)) for f, k in OW_MAP.items()}
-
-    cands = scrape_source(gql, name, source_input)
-    if not cands:
-        log(f"{pid} '{name}': no candidate ({source_input}) -> skip")
-        log_info(f"performer {pid} '{name}': no candidate, skip"); return
-    scored = sorted(((match_score(targets, [c.get("name")] + split_aliases(c.get("aliases"))), c)
-                     for c in cands), key=lambda x: x[0], reverse=True)
-    top_score, top = scored[0]
-    if top_score < threshold:
-        log(f"{pid} '{name}': best score {top_score:.2f} < {threshold} -> skip")
-        log_info(f"performer {pid} '{name}': score {top_score:.2f} too low, skip"); return
-
-    cand_name = (top.get("name") or "").strip()
-    prefer_scraper = bool(use_scraper_name) and bool(cand_name) and norm(cand_name) != norm(name)
-    ctx_label = "identify" if from_identify else "manual"
-    # stash-box endpoint + remote id from the matched candidate (only when source is a stash-box URL)
-    cand_ep = (source_input.get("stash_box_endpoint") or "").strip()
-    cand_rid = (top.get("remote_site_id") or "").strip()
-
-    try:
-        if prefer_scraper:
-            dup_id = find_by_name(gql, cand_name, exclude_id=pid)
-            if dup_id:
-                # duplicate -> merge the new one (pid) into the existing one (dup_id)
-                dest = get_performer(gql, dup_id)
-                extra = [perf["name"]] + list(perf.get("alias_list") or [])   # carry created name + aliases over
-                values = build_update(dest, top, primary_name=dest["name"], extra_aliases=extra, set_name=False, ow=ow)
-                sids = union_stash_ids(dest, perf)
-                # also carry the matched stash-box id onto the merge destination
-                if cand_ep and cand_rid:
-                    cur = sids if sids is not None else list(dest.get("stash_ids") or [])
-                    merged = add_endpoint_stash_id(cur, cand_ep, cand_rid)
-                    if merged is not None: sids = merged
-                if sids is not None: values["stash_ids"] = sids
-                values["id"] = dup_id   # PerformerUpdateInput requires id (the merge destination)
-                performer_merge(gql, [pid], dup_id, values)
-                apply_image_async(conn, dup_id, dest, top, overwrite=ow.get("image"))
-                log(f"{pid} '{name}' [{ctx_label}]: MERGED into {dup_id} '{dest['name']}' "
-                    f"(fields={sorted(values.keys())}, score={top_score:.2f})")
-                log_info(f"performer {pid}: merged into {dup_id}"); return
-            # no duplicate -> rename to the scraper name (created name kept as alias)
-            values = build_update(perf, top, primary_name=cand_name, extra_aliases=[perf["name"]], set_name=True, ow=ow)
-            mode = f"{ctx_label}(rename)"
-        else:
-            # keep the created name as primary; the scraper name becomes an alias
-            values = build_update(perf, top, primary_name=name, extra_aliases=[], set_name=False, ow=ow)
-            mode = ctx_label
-        # carry the matched stash-box id onto this performer if not already set
-        if cand_ep and cand_rid:
-            new_sids = add_endpoint_stash_id(perf.get("stash_ids"), cand_ep, cand_rid)
-            if new_sids is not None:
-                values["stash_ids"] = new_sids
-        if values:
-            performer_update(gql, pid, values)
-        apply_image_async(conn, pid, perf, top, overwrite=ow.get("image"))
-        log(f"{pid} '{name}' [{mode}]: filled {sorted(values.keys())} (score={top_score:.2f})")
-        log_info(f"performer {pid} '{name}': filled {sorted(values.keys())}")
-    except Exception as e:
-        log(f"{pid} '{name}': apply error {e}")
-        log_info(f"performer {pid} '{name}': apply error: {e}")
+    if "Performer.Create" in htype:
+        handle_performer_create(payload, conn, gql); return
+    log_info("skip: not performer/scene create")
 
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "--fill-scene-later":
         fill_scene_later_mode(sys.argv[2])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "--fill-performer-later":
+        fill_performer_later_mode(sys.argv[2])
     elif len(sys.argv) >= 4 and sys.argv[1] == "--set-image":
         set_image_mode(sys.argv[2], sys.argv[3])
     else:

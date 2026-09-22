@@ -13,7 +13,7 @@
   if (window.__jsmLoaded) return;
   window.__jsmLoaded = true;
 
-  var PLUGIN_VERSION = "1.5.8";
+  var PLUGIN_VERSION = "1.5.9";
 
   var STASHDB_ENDPOINT = "https://stashdb.org/graphql";
   var JAVSTASH_ENDPOINT = "https://javstash.org/graphql";
@@ -2698,11 +2698,17 @@
       setTimeout(injectNavButton, 200);
     });
 
-    // MutationObserver as fallback
+    // MutationObserver 兜底：导航栏已存在则同帧注入，未出现才走防抖
     var target = document.querySelector(".main-content") || document.querySelector("#root") || document.body;
     if (target) {
       var timer = null;
       new MutationObserver(function () {
+        if (document.querySelector(".jsm-nav-btn")) return;
+        var nav = document.querySelector(".navbar-buttons.flex-row.ml-auto.order-xl-2.navbar-nav")
+               || document.querySelector(".navbar-buttons.navbar-nav")
+               || document.querySelector(".navbar-nav.ml-auto")
+               || document.querySelector(".navbar-nav");
+        if (nav) { injectNavButton(); return; }
         clearTimeout(timer);
         timer = setTimeout(injectNavButton, 300);
       }).observe(target, { childList: true, subtree: true });
@@ -2738,6 +2744,14 @@
     });
 
     nav.appendChild(container);
+    // 若本按钮是导航栏中最左侧的插件按钮，在登出一侧补一点间距（插件按钮之间不加）
+    var isLeftmost = true;
+    for (var i = 0; i < nav.children.length; i++) {
+      if (nav.children[i] === container) break;
+      var cls = nav.children[i].className;
+      if (typeof cls === "string" && cls.indexOf("-nav-btn") !== -1) { isLeftmost = false; break; }
+    }
+    if (isLeftmost) container.classList.add("ml-2");
     injectRefractTile();
   }
 

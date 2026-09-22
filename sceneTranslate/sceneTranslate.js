@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.9.2
+ * Scene Translate Plugin v2.9.3
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout/proxyPort) are stored in
@@ -474,6 +474,11 @@ try {
       if (!hasMeaningfulChange) return;
 
       clearTimeout(_observerTimer);
+      // 快路径：编辑表单锚点已渲染 → 立即注入（幂等守卫防重复），不等 300ms 防抖窗口
+      if (document.querySelector('[data-field="title"]') || document.querySelector('[data-field="details"]')) {
+        if (getSceneIdFromUrl() !== injectedSceneId) injectTranslateButtons();
+        return;
+      }
       _observerTimer = setTimeout(function () {
         if (getSceneIdFromUrl() !== injectedSceneId) injectTranslateButtons();
       }, 300);

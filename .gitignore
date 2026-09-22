@@ -14,6 +14,9 @@ tag_merge_map_*.custom.json
 # 插件运行时状态目录（pending 队列 / 缓存 / 进度 / dead-letter）
 auto_state/
 
+# oStatsI18n 运行时观看数据（插件目录生成，不随仓库发布）
+oStatsI18n/watch_data.json
+
 # 备份/临时文件
 *_original.js
 *_v*.js

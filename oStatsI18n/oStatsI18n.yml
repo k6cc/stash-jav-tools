@@ -1,0 +1,23 @@
+name: O Stats I18n
+description: Adds O stats to the stats page with bilingual (中文/EN) UI following the Stash interface language
+version: 1.0.0
+url: https://discourse.stashapp.cc/t/o-stats/4766/7
+ui:
+  javascript:
+    - oStatsI18n.js
+  assets:
+    /: .
+
+exec:
+  - python
+  - '{pluginDir}/save_watch_data.py'
+interface: raw
+tasks:
+  - name: saveWatchData
+    description: Save watch history to JSON file
+    defaultArgs:
+      mode: save
+  - name: loadWatchData
+    description: Load watch history from JSON file
+    defaultArgs:
+      mode: load

@@ -324,6 +324,11 @@
       if (!hasMeaningfulChange) return;
 
       clearTimeout(_observerTimer);
+      // 快路径：图库字段标签已渲染 → 立即注入（幂等守卫防重复），不等 300ms 防抖窗口
+      if (document.querySelector('label[for="gallery_ids"]') || document.querySelector('[data-field="gallery_ids"] label')) {
+        if (getSceneIdFromUrl() !== injectedSceneId) injectButton();
+        return;
+      }
       _observerTimer = setTimeout(function () {
         if (getSceneIdFromUrl() !== injectedSceneId) injectButton();
       }, 300);

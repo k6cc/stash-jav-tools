@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.5
+ * Studio Tools v1.5.6
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -169,11 +169,11 @@ try {
     if (autoTag && autoTag.parentElement) {
       return { parent: autoTag.parentElement, before: null };
     }
-    // 2) 编辑栏自身：.save/.delete 类名与语言无关，插到其后面（不挤动原生按钮位置）
+    // 2) 编辑栏自身：.save/.delete 类名与语言无关，插到其前面（delete 保持按钮组末尾的原设计）
     var navbar = document.querySelector("#studio-page .details-edit");
     if (navbar) {
-      var ref = navbar.querySelector("button.delete") || navbar.querySelector("button.save");
-      if (ref) return { parent: navbar, before: ref.nextSibling };
+      var ref = navbar.querySelector("button.save") || navbar.querySelector("button.delete");
+      if (ref) return { parent: navbar, before: ref };
     }
     // 3) 文本兜底：按界面文本匹配 Auto Tag（去空格后比较，兼容 "Auto Tag…" 等变体）
     var allButtons = document.querySelectorAll("button");

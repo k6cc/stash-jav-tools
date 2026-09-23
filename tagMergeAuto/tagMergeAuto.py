@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.2.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.2.1: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。

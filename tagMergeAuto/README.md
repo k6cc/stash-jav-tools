@@ -1,6 +1,6 @@
 # tagMergeAuto
 
-> v1.2.0：新增 Fill Stash IDs 任务 + 钩子合并后自动补 stash_id（复用 tagMerge 填充ID 规则，stash-box 实例名默认 javstash）
+> v1.2.1：新增 Fill Stash IDs 任务 + 钩子合并后自动补 stash_id（复用 tagMerge 填充ID 规则，插件页可配开关与 box 实例，任务带进度条）
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：按优先级链读取插件目录的映射库（`tag_merge_map_<界面语言>.custom.json` → `tag_merge_map.custom.json` → `tag_merge_map_<界面语言>.json` → `tag_merge_map.json`），把名称相似的 tags（英文/日文/中文变体）自动合并为规范中文 tag。
 

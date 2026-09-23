@@ -13,7 +13,8 @@ stash-testkit/
 ├── db_cleanup.py            # 测试后 DB 孤儿清理（白名单前缀；停实例→SQL→重启）
 └── tests/
     ├── sceneTranslateAuto/  # 插件特定验证脚本（单测 / 回归 / 端到端）
-    └── javstashAutofill/    # v1.1.3 封面竞态 + v1.2.0 演员解析/BD 剥离单测、E2E 与 javstash 探测工具
+    ├── javstashAutofill/    # v1.1.3 封面竞态 + v1.2.0 演员解析/BD 剥离单测、E2E 与 javstash 探测工具
+    └── nfoSceneParser/      # tagCreate 失败兜底单测 + 幽灵 id 边界探测 + 与 javstashAutofill+ 交叉无循环验证
 ```
 
 ## 快速开始
@@ -146,4 +147,14 @@ s.fetch_scene_image(sid)              # 抓 screenshot 端点字节（有自定�
 - `probe_javstash.py`：javstash 探测工具（`--code` 番号查询命中 / `--performer` 名称刮削 / `--fetch <uuid>` 直抓测试）。
 - `FINAL_RESULT.md`：v1.2.0 验证结论存档（单测/E2E 矩阵 + 过程修复记录）。
 
-单测直接运行：`python tests/sceneTranslateAuto/test_guard_lang_delay.py`、`python tests/javstashAutofill/test_cover_race.py`（相对仓库定位插件源码，可整体搬移）。
+`tests/nfoSceneParser/`：
+- `test_tag_create_fallback.py`：tagCreate 失败「立即再查」兜底单测（已合并名 T0 miss→None→兜底命中规范 id / 全新名成功且仅 1 次 findTags / 真不存在静默跳过 / 双 pass 命中回归 / dry_mode 拦截）+ 真库正常路径，`offline`/`live` 双模式。
+- `test_tag_create_fallback_live.py`：真库兜底端到端（自动挑选「映射表有、name/alias 均无」的源名触发真实钩子合并 → None → 兜底命中规范 id），无残留。
+- `test_tag_create_success_regression.py`：真库成功路径回归（findTags 计数=1、tagCreate 成功）+ 自动清理测试 tag。
+- `probe_ghost_id.py`：幽灵 id 边界实验（直发原始 tagCreate：被钩子合并的 tagCreate 一律 null/errors、不带已删 tag 的 id）。
+- `test_cross_plugin_no_loop.py`：与 javstashAutofill+ 交叉幂等/无循环验证（3 轮交替处理同一源名 → 收敛同一规范 tag、无独立残留 tag）。
+- `FINAL_RESULT.md`：v1.7.0 兜底验证结论存档（验证矩阵 + 幽灵 id 边界 + 与 javstashAutofill+ 交叉冲突评估）。
+
+真库脚本依赖测试库在线（config.json）+ Tag Merge Auto 启用 + `tag_merge_map.json` 存在；插件目录默认 `E:\stashAPP\plugins\k6cc\nfoSceneParser`，可传仓库目录验证。
+
+单测直接运行：`python tests/sceneTranslateAuto/test_guard_lang_delay.py`、`python tests/javstashAutofill/test_cover_race.py`、`python tests/nfoSceneParser/test_tag_create_fallback.py offline <插件目录>`（相对仓库定位插件源码，可整体搬移）。

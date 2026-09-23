@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.4
+ * Studio Tools v1.5.5
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -169,11 +169,11 @@ try {
     if (autoTag && autoTag.parentElement) {
       return { parent: autoTag.parentElement, before: null };
     }
-    // 2) 编辑栏自身：.save/.delete 类名与语言无关，插到其前面
+    // 2) 编辑栏自身：.save/.delete 类名与语言无关，插到其后面（不挤动原生按钮位置）
     var navbar = document.querySelector("#studio-page .details-edit");
     if (navbar) {
-      var ref = navbar.querySelector("button.save") || navbar.querySelector("button.delete");
-      if (ref) return { parent: navbar, before: ref };
+      var ref = navbar.querySelector("button.delete") || navbar.querySelector("button.save");
+      if (ref) return { parent: navbar, before: ref.nextSibling };
     }
     // 3) 文本兜底：按界面文本匹配 Auto Tag（去空格后比较，兼容 "Auto Tag…" 等变体）
     var allButtons = document.querySelectorAll("button");
@@ -1444,7 +1444,7 @@ try {
 
     function inject() {
       if (!isStudioDetailPage()) { _mergeBtnInjected = false; return; }
-      if (_mergeBtnInjected || document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
+      if (document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
 
       fetchCurrentStudio().then(function (studio) {
         if (!studio || document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
@@ -1549,7 +1549,7 @@ try {
 
     function inject() {
       if (!isStudioDetailPage()) { _searchBtnInjected = false; return; }
-      if (_searchBtnInjected || document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
+      if (document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
 
       fetchCurrentStudio().then(function (studio) {
         if (!studio || document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
@@ -1998,7 +1998,7 @@ try {
     var target = document.querySelector(".main-content") || document.querySelector("#root") || document.body;
     var obs = new MutationObserver(function (mutations) {
       if (!isStudioDetailPage()) return;
-      if (_mergeBtnInjected && _searchBtnInjected) return;
+      if (document.querySelector(".sm-btn") && document.querySelector(".ss-search-btn")) return;
       for (var i = 0; i < mutations.length; i++) {
         if (mutations[i].type === "childList" && mutations[i].addedNodes.length > 0) {
           clearTimeout(_observerTimer);
@@ -2033,12 +2033,19 @@ try {
     var searchBtn = document.querySelector(".ss-search-btn");
     if (searchBtn) searchBtn.remove();
     if (_searchPanel) { _searchPanel.remove(); _searchPanel = null; }
-    if (isStudioDetailPage()) setTimeout(injectButtons, 300);
+    if (isStudioDetailPage()) {
+      fetchCurrentStudio();
+      setTimeout(injectButtons, 300);
+    }
   }
 
   function initPlugin() {
     setupObservers();
-    if (isStudioDetailPage()) setTimeout(injectButtons, 500);
+    if (isStudioDetailPage()) {
+      // 预热工作室数据：按钮注入不再等 fetch 返回，点击时缓存命中即时弹窗
+      fetchCurrentStudio();
+      setTimeout(injectButtons, 500);
+    }
   }
 
   if (document.readyState === "loading") {

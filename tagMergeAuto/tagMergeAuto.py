@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.1.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.2.0: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
 - 任务 "Full Scan & Merge"（任务列表页手动触发）：全库扫描，把存量源 tag
   合并进目标（首次安装后处理映射发布前已存在的源 tag，之后日常靠钩子闭环）。
+- 任务 "Fill Stash IDs"：按候选词（主名+别名）从 stash-box 为存量 tag 批量补 stash_id
+  （复用 tagMerge UI 版填充ID 规则：fillNorm 不删分隔符、命中实体 1=写入 ≥2=冲突跳过）。
+- 钩子合并新 tag 后，若 autoFillStashId 开（默认），自动给目标 tag 补 stash_id。
 
 与 tagMerge UI 版解析/执行逻辑一致：归一化精确匹配、防链式、幂等、
 源 tag 合并后名称补写进目标别名（数据不丢失，仍可按原名搜索）。
 映射库键 = 目标 tag 名，值 = 源 tag 名列表；"_" 开头的键（说明/被忽略的映射）跳过。
 标准库 only。
 """
-import sys, json, re, unicodedata, os, datetime
+import sys, json, re, unicodedata, os, datetime, time
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -64,6 +67,13 @@ Q_TAG_BY_NAME = ("query($n:String!){ findTags(tag_filter:{name:{value:$n,modifie
 M_TAG_CREATE = "mutation($i: TagCreateInput!){ tagCreate(input:$i){ id name } }"
 M_TAGS_MERGE = "mutation($i: TagsMergeInput!){ tagsMerge(input:$i){ id name aliases } }"
 M_TAG_UPDATE = "mutation($i: TagUpdateInput!){ tagUpdate(input:$i){ id } }"
+# 填充 stash_id：全库 tag（含现有 stash_ids）+ stash-box 配置 + 单 tag 刮削
+Q_TAGS_FILL = "query { findTags(filter:{per_page:-1}){ tags{ id name aliases stash_ids{ endpoint stash_id } } } }"
+Q_BOXES = "query { configuration { general { stashBoxes { name endpoint } } } }"
+Q_SCRAPE = ("query($source: ScraperSourceInput!, $input: ScrapeSingleTagInput!){"
+            " scrapeSingleTag(source:$source, input:$input){ name alias_list remote_site_id } }")
+Q_TAG_FILL_ONE = "query($id: ID!){ findTag(id:$id){ id name aliases stash_ids{ endpoint stash_id } } }"
+FILL_QUERY_DELAY = 0.25  # 每词查询间隔（≈240 次/分，公共 box 限速）
 
 # ---------- 归一化 / 映射库 ----------
 def nfc(s): return unicodedata.normalize("NFKC", (s or "").strip())
@@ -200,7 +210,7 @@ def run_group(gql, g, consumed):
             "sources": [s["name"] for s in sources]}
 
 # ---------- 钩子：Tag.Create.Post ----------
-def handle_hook(gql, lang):
+def handle_hook(gql, lang, args):
     payload = _PAYLOAD
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     tid = ctx.get("id")
@@ -253,12 +263,138 @@ def handle_hook(gql, lang):
         r = run_group(gql, g, consumed)
         if r:
             log("hook merged '%s' -> '%s' (dest %s, created=%s)" % (name, r["target"], r["dest_id"], r["created"]))
+            # 合并成功后自动补 stash_id（autoFillStashId 默认开；失败不影响合并结果）
+            if args.get("autoFillStashId", True):
+                try:
+                    box = resolve_box(gql, args.get("stashBox") or "javstash")
+                    if box:
+                        dt = ((gql(Q_TAG_FILL_ONE, {"id": r["dest_id"]}) or {}).get("findTag") or {})
+                        if dt:
+                            ok, why = fill_one_tag(gql, dt, box, bool(args.get("ignorePrimary", False)))
+                            if ok:
+                                log("hook auto-filled stash_id '%s' <- %s (%s)" % (dt.get("name"), box["name"], why))
+                except Exception as e:
+                    log("hook auto-fill stash_id error: %s" % e)
             print(json.dumps({"output": "merged '%s' into '%s'" % (name, r["target"])}))
         else:
             print(json.dumps({"output": "skip (no effective sources)"}))
     except Exception as e:
         log("hook merge error: %s" % e)
         print(json.dumps({"output": "merge error", "error": str(e)}))
+
+# ---------- 填充 stash_id（与 tagMerge.js 填充ID Tab 规则一致） ----------
+def fill_norm(s):
+    """fillNorm：NFKC + 小写 + 连续空格归一 + trim；不删分隔符（3P/ 与 3P·4P 是不同实体）。"""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", (s or "")).lower()).strip()
+
+
+def resolve_box(gql, want):
+    """按用户输入名匹配 stash-box（小写包含匹配）；匹配不到按品牌优先级 JAVStash→StashDB→ThePornDB 选第一个。"""
+    boxes = (((gql(Q_BOXES) or {}).get("configuration") or {}).get("general") or {}).get("stashBoxes") or []
+    if not boxes:
+        return None
+    want = (want or "").strip().lower()
+    if want:
+        for b in boxes:
+            if want in (b.get("name") or "").lower():
+                return b
+    def rank(b):
+        n = (b.get("name") or "").lower()
+        if "javstash" in n: return 0
+        if "stashdb" in n: return 1
+        if "porndb" in n: return 2
+        return 3
+    return sorted(boxes, key=rank)[0]
+
+
+def candidate_words(t, ignore_primary):
+    """候选词：忽略主名开=只别名（无别名以主名兜底）；关（默认）=主名+别名。fillNorm 去重。"""
+    names = list(t.get("aliases") or []) if ignore_primary else list(t.get("aliases") or []) + [t.get("name")]
+    if ignore_primary and not names:
+        names = [t.get("name")]
+    seen, out = set(), []
+    for w in names:
+        if not w: continue
+        n = fill_norm(w)
+        if n and n not in seen:
+            seen.add(n); out.append(w)
+    return out
+
+
+def query_box_word(gql, endpoint, word):
+    """查 stash-box 单词，返回命中实体 [{id,name}]（按 remote_site_id 去重；name/alias_list 精确 fillNorm 匹配）。"""
+    try:
+        res = gql(Q_SCRAPE, {"source": {"stash_box_endpoint": endpoint}, "input": {"query": word}}, timeout=30)
+    except Exception as e:
+        log("fill scrape error (%s / '%s'): %s" % (endpoint, word, e))
+        return []
+    rows = ((res or {}).get("scrapeSingleTag")) or []
+    word_n = fill_norm(word)
+    hits = {}
+    for r in rows:
+        if not r or not r.get("remote_site_id"): continue
+        aliases = [fill_norm(a) for a in (r.get("alias_list") or [])]
+        if fill_norm(r.get("name")) == word_n or word_n in aliases:
+            hits[r["remote_site_id"]] = {"id": r["remote_site_id"], "name": r.get("name")}
+    return list(hits.values())
+
+
+def fill_one_tag(gql, tag, box, ignore_primary):
+    """给单个 tag 补 stash_id。返回 (wrote, reason)：reason=has_id/miss/conflict:N/<stash_id>。"""
+    ep = box["endpoint"]
+    existing = tag.get("stash_ids") or []
+    if any(s.get("endpoint") == ep for s in existing):
+        return False, "has_id"
+    entities = {}
+    for w in candidate_words(tag, ignore_primary):
+        for e in query_box_word(gql, ep, w):
+            entities.setdefault(e["id"], e)
+        time.sleep(FILL_QUERY_DELAY)
+    ids = list(entities.keys())
+    if not ids:
+        return False, "miss"
+    if len(ids) > 1:
+        return False, "conflict:%d" % len(ids)
+    sid = ids[0]
+    next_ids = [{"endpoint": s["endpoint"], "stash_id": s["stash_id"]} for s in existing]
+    next_ids.append({"endpoint": ep, "stash_id": sid})
+    gql(M_TAG_UPDATE, {"i": {"id": tag["id"], "stash_ids": next_ids}})
+    tag["stash_ids"] = next_ids
+    return True, sid
+
+
+def fill_all(gql, box_name, ignore_primary):
+    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）。"""
+    box = resolve_box(gql, box_name)
+    if not box:
+        return {"wrote": 0, "failed": 0, "note": "no stash-box configured"}
+    tags = (((gql(Q_TAGS_FILL) or {}).get("findTags") or {}).get("tags")) or []
+    total = len(tags)
+    wrote = failed = conflicts = missed = skipped = 0
+    log_info("fill_id start: %d tags, box=%s" % (total, box["name"]))
+    for done, t in enumerate(tags, 1):
+        log_progress(done / float(total) if total else 1.0)
+        try:
+            ok, why = fill_one_tag(gql, t, box, ignore_primary)
+            if ok:
+                wrote += 1
+                log("fill_id wrote '%s' <- %s (%s)" % (t.get("name"), box["name"], why))
+            elif why == "has_id":
+                skipped += 1
+            elif why.startswith("conflict"):
+                conflicts += 1
+            else:
+                missed += 1
+        except Exception as e:
+            failed += 1
+            log("fill_id tag '%s' error: %s" % (t.get("name"), e))
+        if done % 20 == 0 or done == total:
+            log_info("fill_id: %d/%d (wrote %d, conflicts %d, missed %d, failed %d)"
+                     % (done, total, wrote, conflicts, missed, failed))
+    log_progress(1.0)
+    return {"box": box["name"], "wrote": wrote, "skipped": skipped,
+            "conflicts": conflicts, "missed": missed, "failed": failed}
+
 
 # ---------- 任务：全量扫描合并 ----------
 def scan_all(gql, lang):
@@ -282,6 +418,20 @@ def scan_all(gql, lang):
 
 # ---------- 入口 ----------
 _PAYLOAD = {}
+
+# Stash 任务进度协议：stderr 输出 \x01p\x02<0~1> 渲染进度条、\x01i\x02<msg> 任务页显示消息
+def _proto(level, msg):
+    try:
+        sys.stderr.write("\x01%s\x02%s\n" % (level, msg))
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+def log_progress(p):
+    _proto("p", "%.3f" % max(0.0, min(1.0, float(p))))
+
+def log_info(msg):
+    _proto("i", str(msg))
 
 def log(msg):
     line = "%s [tgm-backend] %s" % (datetime.datetime.now().isoformat(), msg)
@@ -323,9 +473,17 @@ def main():
         except Exception as e:
             log("scan_all error: %s" % e)
             print(json.dumps({"output": "error", "error": str(e)}))
+    elif mode == "fill_id":
+        try:
+            r = fill_all(gql, args.get("stashBox") or "javstash", bool(args.get("ignorePrimary", False)))
+            log("fill_id done: %s" % r)
+            print(json.dumps({"output": r}))
+        except Exception as e:
+            log("fill_id error: %s" % e)
+            print(json.dumps({"output": "error", "error": str(e)}))
     else:
         try:
-            handle_hook(gql, lang)
+            handle_hook(gql, lang, args)
         except Exception as e:
             log("hook error: %s" % e)
             print(json.dumps({"output": "hook error", "error": str(e)}))

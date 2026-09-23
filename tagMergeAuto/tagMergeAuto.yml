@@ -1,6 +1,6 @@
 name: Tag Merge Auto
-description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus a manual full-scan task. No network, no settings.
-version: 1.1.0
+description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus manual full-scan and stash_id fill tasks.
+version: 1.2.0
 url: https://discourse.stashapp.cc/t/tag-merge-auto/16130
 errLog: info
 exec:
@@ -9,11 +9,20 @@ exec:
 interface: raw
 hooks:
   - name: tag_create_auto
-    description: Merge a newly created tag immediately if it matches the mapping
+    description: Merge a newly created tag immediately if it matches the mapping, then auto-fill its stash_id from stash-box
     triggeredBy:
       - Tag.Create.Post
+    defaultArgs:
+      autoFillStashId: true
+      stashBox: javstash
 tasks:
   - name: "Full Scan & Merge"
     description: "Scan all tags against tag_merge_map.json and merge matches (for pre-existing tags)"
     defaultArgs:
       mode: scan_all
+  - name: "Fill Stash IDs"
+    description: "Batch-fill stash_id for existing tags from stash-box (match by name + aliases, skip existing, auto-skip conflicts)"
+    defaultArgs:
+      mode: fill_id
+      stashBox: javstash
+      ignorePrimary: false

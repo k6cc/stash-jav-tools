@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.8
+ * Studio Tools v1.5.9
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -164,8 +164,9 @@ try {
   // 结构锚点与界面语言无关；文本匹配仅作旧版本兜底。
   // 返回 { parent: 容器, before: 参考节点或 null }，按钮通过 parent.insertBefore(btn, before) 插入。
   function getInjectSpot() {
-    // 1) Auto Tag 按钮：.details-edit 中唯一被 <div> 包裹的直接子按钮（Stash DetailsEditNavbar 结构）
-    var autoTag = document.querySelector("#studio-page .details-edit > div > button");
+    // 1) Auto Tag 按钮：.details-edit 中唯一被 <div> 包裹的 btn-secondary 直接子按钮（Stash DetailsEditNavbar 结构）
+    //    限定 btn-secondary：编辑模式的清除图片按钮也在 <div> 内（btn-danger），若命中会把按钮组塞进嵌套 div 撑高整行
+    var autoTag = document.querySelector("#studio-page .details-edit > div > button.btn-secondary");
     if (autoTag && autoTag.parentElement) {
       return { parent: autoTag.parentElement, before: null };
     }

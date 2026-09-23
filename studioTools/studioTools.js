@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.3
+ * Studio Tools v1.5.4
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -2002,6 +2002,11 @@ try {
       for (var i = 0; i < mutations.length; i++) {
         if (mutations[i].type === "childList" && mutations[i].addedNodes.length > 0) {
           clearTimeout(_observerTimer);
+          // 快路径：工作室详情页编辑栏已渲染 → 立即注入（幂等守卫防重复），不等 300ms 防抖窗口
+          if (document.querySelector("#studio-page .details-edit")) {
+            injectButtons();
+            return;
+          }
           _observerTimer = setTimeout(injectButtons, 300);
           break;
         }

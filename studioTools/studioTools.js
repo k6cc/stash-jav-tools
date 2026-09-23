@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.6
+ * Studio Tools v1.5.7
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -1442,25 +1442,22 @@ try {
         });
     }
 
-    function inject() {
-      if (!isStudioDetailPage()) { _mergeBtnInjected = false; return; }
-      if (document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
-
-      fetchCurrentStudio().then(function (studio) {
-        if (!studio || document.querySelector(".sm-btn")) { _mergeBtnInjected = true; return; }
-        var spot = getInjectSpot();
-        if (!spot) return;
-        var btn = document.createElement("button");
-        btn.className = "st-inject-btn sm-btn st-blue";
-        btn.innerHTML = INJECT_ICONS.merge;
-        btn.title = tc("将此工作室与另一个合并", "Merge this studio with another");
-        btn.addEventListener("click", function () { showSelectDialog(studio); });
-        spot.parent.insertBefore(btn, spot.before);
-        _mergeBtnInjected = true;
+    // 构建按钮节点（不插入）：由 injectButtons 统一合并进按钮组一次插入，点击时再取工作室数据
+    function buildButton() {
+      if (document.querySelector(".sm-btn")) return null;
+      var btn = document.createElement("button");
+      btn.className = "st-inject-btn sm-btn st-blue";
+      btn.innerHTML = INJECT_ICONS.merge;
+      btn.title = tc("将此工作室与另一个合并", "Merge this studio with another");
+      btn.addEventListener("click", function () {
+        fetchCurrentStudio().then(function (studio) {
+          if (studio) showSelectDialog(studio);
+        });
       });
+      return btn;
     }
 
-    return { inject: inject };
+    return { buildButton: buildButton };
   })();
 
   // ====================================================================
@@ -1547,28 +1544,22 @@ try {
       });
     }
 
-    function inject() {
-      if (!isStudioDetailPage()) { _searchBtnInjected = false; return; }
-      if (document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
-
-      fetchCurrentStudio().then(function (studio) {
-        if (!studio || document.querySelector(".ss-search-btn")) { _searchBtnInjected = true; return; }
-        var spot = getInjectSpot();
-        if (!spot) return;
-
-        var btn = document.createElement("button");
-        btn.className = "st-inject-btn ss-search-btn st-green";
-        btn.type = "button";
-        btn.innerHTML = INJECT_ICONS.update;
-        btn.title = tc("从 StashDB/ThePornDB/JAVStash 搜索并更新工作室信息", "Search StashDB/ThePornDB/JAVStash and update studio info");
-        btn.addEventListener("click", function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          showSearchPanel(btn, studio);
+    // 构建按钮节点（不插入）：由 injectButtons 统一合并进按钮组一次插入，点击时再取工作室数据
+    function buildButton() {
+      if (document.querySelector(".ss-search-btn")) return null;
+      var btn = document.createElement("button");
+      btn.className = "st-inject-btn ss-search-btn st-green";
+      btn.type = "button";
+      btn.innerHTML = INJECT_ICONS.update;
+      btn.title = tc("从 StashDB/ThePornDB/JAVStash 搜索并更新工作室信息", "Search StashDB/ThePornDB/JAVStash and update studio info");
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        fetchCurrentStudio().then(function (studio) {
+          if (studio) showSearchPanel(btn, studio);
         });
-        spot.parent.insertBefore(btn, spot.before);
-        _searchBtnInjected = true;
       });
+      return btn;
     }
 
     function closeSearchPanel() {
@@ -1978,7 +1969,7 @@ try {
       if (existing) existing.remove();
     }
 
-    return { inject: inject };
+    return { buildButton: buildButton };
   })();
 
   // ====================================================================
@@ -1990,8 +1981,25 @@ try {
       _searchBtnInjected = false;
       return;
     }
-    Merge.inject();
-    Search.inject();
+    if (document.querySelector(".sm-btn") && document.querySelector(".ss-search-btn")) return;
+
+    // 两个按钮合并为按钮组容器一次插入：逐个 insertBefore 会让同行按钮（delete）被推两次产生跳动
+    var spot = getInjectSpot();
+    if (!spot) return;
+
+    var group = document.createElement("div");
+    group.className = "st-btn-group";
+    group.style.cssText = "display:inline-flex;align-items:center;gap:0.25rem;";
+
+    var mergeBtn = Merge.buildButton();
+    var searchBtn = Search.buildButton();
+    if (mergeBtn) group.appendChild(mergeBtn);
+    if (searchBtn) group.appendChild(searchBtn);
+    if (!group.children.length) return;
+
+    spot.parent.insertBefore(group, spot.before);
+    if (mergeBtn) _mergeBtnInjected = true;
+    if (searchBtn) _searchBtnInjected = true;
   }
 
   function setupObservers() {
@@ -2028,6 +2036,8 @@ try {
     _currentStudioPromise = null;
     _mergeBtnInjected = false;
     _searchBtnInjected = false;
+    // 按钮组容器一并清理：按钮已包进 .st-btn-group，只拔按钮会留下空壳（路由切换 onUrlChange 触发）
+    document.querySelectorAll(".st-btn-group").forEach(function (g) { g.remove(); });
     var mergeBtn = document.querySelector(".sm-btn");
     if (mergeBtn) mergeBtn.remove();
     var searchBtn = document.querySelector(".ss-search-btn");

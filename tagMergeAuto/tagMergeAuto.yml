@@ -7,14 +7,20 @@ exec:
   - python
   - "{pluginDir}/tagMergeAuto.py"
 interface: raw
+settings:
+  autoFillStashId:
+    displayName: Auto-fill stash_id after tag merge
+    description: When ON, after a newly created tag is merged into the target, its stash_id is auto-filled from the configured stash-box. Default ON.
+    type: BOOLEAN
+  stashBox:
+    displayName: Stash-box instance
+    description: Stash-box instance name used for filling stash_id (e.g. javstash). Matched by name; falls back to JAVStash -> StashDB -> ThePornDB order. Default javstash.
+    type: STRING
 hooks:
   - name: tag_create_auto
     description: Merge a newly created tag immediately if it matches the mapping, then auto-fill its stash_id from stash-box
     triggeredBy:
       - Tag.Create.Post
-    defaultArgs:
-      autoFillStashId: true
-      stashBox: javstash
 tasks:
   - name: "Full Scan & Merge"
     description: "Scan all tags against tag_merge_map.json and merge matches (for pre-existing tags)"

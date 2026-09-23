@@ -59,7 +59,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 - **写入**：保留其他 endpoint 已有 stash_id，追加本 box 命中 ID；该 box 已有 ID 的 tag 直接跳过
 - **stash-box 选择**：任务参数 `stashBox` 默认 `javstash`，按实例名小写包含匹配；匹配不到按品牌优先级 JAVStash → StashDB → ThePornDB 选第一个
 - **限速**：每词查询间隔 0.25s（≈240 次/分，公共 box 限流）；可重复执行（已写/冲突/未命中不重复写）
-- **钩子自动化**：`autoFillStashId=true`（默认开）控制钩子合并后是否自动补 stash_id，在 Stash 钩子配置页调整；新 tag 合并后只查一次、失败不阻塞合并
+- **钩子自动化**：插件页「设置 → 插件 → Tag Merge Auto」中 `auto-fill stash_id` 开关（默认开）控制钩子合并后是否自动补 stash_id；新 tag 合并后只查一次、失败不阻塞合并
 
 ## 日志
 

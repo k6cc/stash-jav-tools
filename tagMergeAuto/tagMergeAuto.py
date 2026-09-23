@@ -60,6 +60,14 @@ def stash_language(gql):
     except Exception:
         return ""
 
+def get_settings(gql):
+    """读取插件页设置（yml settings 段渲染到 Settings → 插件），键为 yml 文件名派生的插件 id。"""
+    try:
+        plugins = ((gql("query { configuration { plugins } }") or {}).get("configuration") or {}).get("plugins") or {}
+        return plugins.get("tagMergeAuto") or {}
+    except Exception:
+        return {}
+
 Q_TAG = "query($id: ID!){ findTag(id:$id){ id name aliases } }"
 Q_TAGS = "query { findTags(filter:{per_page:-1}){ tags{ id name } } }"
 Q_TAG_BY_NAME = ("query($n:String!){ findTags(tag_filter:{name:{value:$n,modifier:EQUALS}},"
@@ -210,7 +218,7 @@ def run_group(gql, g, consumed):
             "sources": [s["name"] for s in sources]}
 
 # ---------- 钩子：Tag.Create.Post ----------
-def handle_hook(gql, lang, args):
+def handle_hook(gql, lang, args, settings):
     payload = _PAYLOAD
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     tid = ctx.get("id")
@@ -263,10 +271,10 @@ def handle_hook(gql, lang, args):
         r = run_group(gql, g, consumed)
         if r:
             log("hook merged '%s' -> '%s' (dest %s, created=%s)" % (name, r["target"], r["dest_id"], r["created"]))
-            # 合并成功后自动补 stash_id（autoFillStashId 默认开；失败不影响合并结果）
-            if args.get("autoFillStashId", True):
+            # 合并成功后自动补 stash_id（插件页设置 autoFillStashId 默认开；显式 False 才关）
+            if settings.get("autoFillStashId") is not False:
                 try:
-                    box = resolve_box(gql, args.get("stashBox") or "javstash")
+                    box = resolve_box(gql, args.get("stashBox") or settings.get("stashBox") or "javstash")
                     if box:
                         dt = ((gql(Q_TAG_FILL_ONE, {"id": r["dest_id"]}) or {}).get("findTag") or {})
                         if dt:
@@ -465,6 +473,7 @@ def main():
     mode = args.get("mode") or _PAYLOAD.get("mode") or "hook"
     gql = make_gql(conn)
     lang = stash_language(gql)
+    settings = get_settings(gql)
     if mode == "scan_all":
         try:
             r = scan_all(gql, lang)
@@ -475,7 +484,9 @@ def main():
             print(json.dumps({"output": "error", "error": str(e)}))
     elif mode == "fill_id":
         try:
-            r = fill_all(gql, args.get("stashBox") or "javstash", bool(args.get("ignorePrimary", False)))
+            # stashBox：任务参数优先，其次插件页设置，默认 javstash
+            box_name = args.get("stashBox") or settings.get("stashBox") or "javstash"
+            r = fill_all(gql, box_name, bool(args.get("ignorePrimary", False)))
             log("fill_id done: %s" % r)
             print(json.dumps({"output": r}))
         except Exception as e:
@@ -483,7 +494,7 @@ def main():
             print(json.dumps({"output": "error", "error": str(e)}))
     else:
         try:
-            handle_hook(gql, lang, args)
+            handle_hook(gql, lang, args, settings)
         except Exception as e:
             log("hook error: %s" % e)
             print(json.dumps({"output": "hook error", "error": str(e)}))

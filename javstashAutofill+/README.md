@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.2.4：find_or_create_tag 创建前先做 name/别名预查——已合并进规范 tag 别名的名称直接返回规范 tag，不再发起必然失败的 tagCreate（Stash 日志零噪音）；保留创建失败/竞态窗口的别名兜底。
+> v1.3.0：设置大幅精简（28→16 项）——抓取器统一（场景/演员公用）、演员字段覆盖合并为「演员其他详情」组开关、场景字段覆盖单独开关（标题/简介/tag/url/图像/其他详情）、新增「补全演员」总开关（OFF=仅复用/新建并关联，详情交给其他插件）、演员主名开关吸收原 manualUseScraperName；场景 stash_id 始终写入（原 sceneAutoFill 开关移除）。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

@@ -10,7 +10,7 @@ Unified performer resolution (scene fill, backfill task and manual creation shar
     (merged, created name kept as an alias); a candidate whose identity is anchored
     to another stash-id is conservatively ignored (new one stays blank); otherwise
     the created name stays primary and the scraper name becomes an alias (unless
-    manualUseScraperName is on).
+    owPerformerName is on).
 The hook spawns a detached worker (performerFillDelay, default 2s) and returns
 immediately, so a manual creation never blocks the UI on the search.
 Existing values, existing images and existing aliases are protected (only empty
@@ -241,14 +241,21 @@ def build_update(perf, cand, primary_name, extra_aliases=None, set_name=False, o
     # NB: the image is NOT included here; a slow fetch would fail the whole update, so it is applied separately.
     return upd
 
-# Per-field overwrite toggles (default all OFF = fill empty only).
-OW_MAP = {"gender":"owGender","birthdate":"owBirthdate","death_date":"owDeathDate","ethnicity":"owEthnicity",
-          "country":"owCountry","hair_color":"owHairColor","eye_color":"owEyeColor","fake_tits":"owFakeTits",
-          "career_length":"owCareerLength","tattoos":"owTattoos","piercings":"owPiercings","details":"owDetails",
-          "height_cm":"owHeight","weight":"owWeight","measurements":"owMeasurements",
-          "urls":"owUrls","alias_list":"owAliasList","image":"owImage"}
+# Per-field overwrite toggles (default all OFF = fill empty only). All "other"
+# performer fields share one group toggle (owPerformerOther); urls/alias_list/image
+# keep their own single toggles.
+PERF_OTHER_FIELDS = ("gender birthdate death_date ethnicity country hair_color eye_color "
+                     "fake_tits career_length tattoos piercings details height_cm weight measurements")
+OW_MAP = {f: "owPerformerOther" for f in PERF_OTHER_FIELDS.split()}
+OW_MAP.update({"urls": "owUrls", "alias_list": "owAliasList", "image": "owImage"})
 def build_ow(settings):
     return {f: bool(settings.get(k)) for f, k in OW_MAP.items()}
+
+# Scene overwrite toggles (default all OFF = fill empty only).
+SCENE_OW_MAP = {"title":"owSceneTitle","details":"owSceneDetails","tags":"owSceneTags",
+                "urls":"owSceneUrls","image":"owSceneImage","other":"owSceneOther"}
+def build_scene_ow(settings):
+    return {f: bool(settings.get(k)) for f, k in SCENE_OW_MAP.items()}
 
 def apply_image_async(conn, target_id, target_perf, cand, overwrite=False):
     """When there is no image (or overwrite is on), download and set it in a detached
@@ -813,51 +820,74 @@ def _apply_cover_with_retry(gql, sid, image):
     log(f"scene {sid}: cover update gave up after 3 retries")
     return False
 
-def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
-    """Build & run sceneUpdate for one scraped match. Empty-only for scalars; merge-dedup for urls/performers/tags; studio only when unset; stash_ids appended."""
+def apply_scene_fill(gql, sid, scene, sc, src, ow=None):
+    """Build & run sceneUpdate for one scraped match. Empty-only by default (ow off);
+    ow toggles per field group; urls/tags replace when their ow is on, else merge-dedup;
+    studio only when unset unless ow["other"]; stash_ids always appended."""
+    ow = ow or {}
     upd = {"id": str(sid)}
     def empty(f):
         v = scene.get(f)
         return v is None or (isinstance(v, str) and v.strip() == "") or (isinstance(v, list) and len(v) == 0)
-    # Scalars empty-only. The scene hook fills from a delayed worker (sceneFillDelay,
-    # default 20s after creation) so the NFO parser has already written title/details/date;
-    # non-empty values are kept. Title is also skipped unless overwriteSceneTitle
-    # is on (setups without NFO import).
-    if (empty("title") or ow_title) and sc.get("title"):
+    def writable(f, owkey=None):  # write when empty; also write a non-empty field if the toggle is on.
+        return empty(f) or bool(ow.get(owkey or f))
+    # Scalars: the delayed worker (sceneFillDelay, default 20s after creation) runs
+    # after the NFO parser has written title/details/date, so non-empty values are
+    # kept; ow["title"]/ow["other"] override that (setups without NFO import).
+    if writable("title") and sc.get("title"):
         upd["title"] = sc["title"]
     for f in ("code", "details", "director", "date"):
-        if empty(f) and sc.get(f):
+        if writable(f, "other") and sc.get(f):
             upd[f] = sc[f]
-    # urls: merge de-dup
+    # urls: ow on -> replace with the scraper's; off -> merge de-dup
     existing_urls = [u.strip() for u in (scene.get("urls") or []) if u and u.strip()]
     new_urls = [u.strip() for u in (sc.get("urls") or []) if u and u.strip()]
-    merged_urls = list(dict.fromkeys(existing_urls + new_urls))
-    if merged_urls != existing_urls:
-        upd["urls"] = merged_urls
-    # studio: only when scene has none
-    if not scene.get("studio"):
+    if ow.get("urls"):
+        if new_urls and new_urls != existing_urls:
+            upd["urls"] = new_urls
+    else:
+        merged_urls = list(dict.fromkeys(existing_urls + new_urls))
+        if merged_urls != existing_urls:
+            upd["urls"] = merged_urls
+    # studio: only when scene has none (ow["other"] allows replacing an existing one)
+    if (not scene.get("studio")) or ow.get("other"):
         st = sc.get("studio") or {}
         sid_studio = st.get("stored_id") or find_or_create_studio(gql, st.get("name"))
         if sid_studio: upd["studio_id"] = sid_studio
-    # performers: merge de-dup via the unified resolution (stash-id reverse lookup
-    # first -> reuse; else create carrying the stash_id; no stash-id -> name/alias
-    # reuse or create blank). stored_id is deliberately not used: it is a name-derived
-    # guess, and the reverse lookup / name-alias dedup are both stricter.
+    # performers: unified resolution (stash-id reverse lookup first -> reuse; else
+    # create carrying the stash_id; no stash-id -> name/alias reuse or create blank).
+    # Merge-dedup by default; ow["other"] replaces the scene's set with the scraper's.
     existing_pids = {str(p["id"]) for p in (scene.get("performers") or [])}
-    want_pids = set(existing_pids)
-    for p in (sc.get("performers") or []):
-        pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
-        if pid: want_pids.add(str(pid))
-    if want_pids != existing_pids:
-        upd["performer_ids"] = sorted(want_pids, key=int)
-    # tags: merge de-dup
+    if ow.get("other"):
+        want_pids = set()
+        for p in (sc.get("performers") or []):
+            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
+            if pid: want_pids.add(str(pid))
+        if want_pids and want_pids != existing_pids:
+            upd["performer_ids"] = sorted(want_pids, key=int)
+    else:
+        want_pids = set(existing_pids)
+        for p in (sc.get("performers") or []):
+            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
+            if pid: want_pids.add(str(pid))
+        if want_pids != existing_pids:
+            upd["performer_ids"] = sorted(want_pids, key=int)
+    # tags: ow on -> replace with the scraper's; off -> merge de-dup
     existing_tids = {str(t["id"]) for t in (scene.get("tags") or [])}
-    want_tids = set(existing_tids)
-    for t in (sc.get("tags") or []):
-        tid = t.get("stored_id") or find_or_create_tag(gql, t.get("name"))
-        if tid: want_tids.add(str(tid))
-    if want_tids != existing_tids:
-        upd["tag_ids"] = sorted(want_tids, key=int)
+    if ow.get("tags"):
+        want_tids = set()
+        for t in (sc.get("tags") or []):
+            tid = t.get("stored_id") or find_or_create_tag(gql, t.get("name"))
+            if tid: want_tids.add(str(tid))
+        if want_tids and want_tids != existing_tids:
+            upd["tag_ids"] = sorted(want_tids, key=int)
+    else:
+        want_tids = set(existing_tids)
+        for t in (sc.get("tags") or []):
+            tid = t.get("stored_id") or find_or_create_tag(gql, t.get("name"))
+            if tid: want_tids.add(str(tid))
+        if want_tids != existing_tids:
+            upd["tag_ids"] = sorted(want_tids, key=int)
     # groups: find-or-create by name
     existing_gids = {str(g["group"]["id"] if g.get("group") else None) for g in (scene.get("groups") or [])}
     want_groups = []
@@ -880,7 +910,7 @@ def apply_scene_fill(gql, sid, scene, sc, src, ow_title=False):
     # misjudge the scene as already covered.
     sc_image = (sc.get("image") or "").strip()
     if sc_image:
-        if _shot_is_auto(scene):
+        if ow.get("image") or _shot_is_auto(scene):
             _apply_cover_with_retry(gql, sid, sc_image)
         else:
             log(f"scene {sid}: cover skipped (custom cover already in place)")
@@ -913,9 +943,7 @@ def fill_scene_later_mode(sid):
     conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
     gql = make_gql(conn)
     settings = get_settings(gql)
-    if settings.get("sceneAutoFill") is False:
-        log(f"scene {sid}: delayed fill skipped (autofill disabled)"); return
-    src = (settings.get("sceneSource") or JAV).strip()
+    src = (settings.get("scraper") or JAV).strip()
     if not src.startswith("http"):
         log(f"scene {sid}: delayed fill skipped (bad source)"); return
     time.sleep(_scene_fill_delay(settings))
@@ -927,8 +955,7 @@ def fill_scene_later_mode(sid):
         log(f"scene {sid}: no fingerprint match at {src} -> skip"); return
     sc = rows[0]
     try:
-        upd = apply_scene_fill(gql, sid, scene, sc, src,
-                               ow_title=settings.get("overwriteSceneTitle") is True)
+        upd = apply_scene_fill(gql, sid, scene, sc, src, ow=build_scene_ow(settings))
         log(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
     except Exception as e:
         log(f"scene {sid}: delayed fill error: {e}")
@@ -939,11 +966,9 @@ def handle_scene_create(payload, conn, gql):
     if not sid:
         log_info("scene hook: no scene id"); return
     settings = get_settings(gql)
-    if settings.get("sceneAutoFill") is False:   # default ON
-        log_info("scene hook: autofill disabled"); return
-    src = (settings.get("sceneSource") or JAV).strip()
+    src = (settings.get("scraper") or JAV).strip()
     if not src.startswith("http"):
-        log_info("scene hook: sceneSource must be a stash-box URL"); return
+        log_info("scene hook: scraper must be a stash-box URL"); return
     # Spawn a delayed worker instead of filling now: the NFO parser may still
     # be writing title/details/date seconds after scene creation. Filling
     # immediately would race it; the delayed worker re-reads the scene after a
@@ -954,9 +979,9 @@ def handle_scene_create(payload, conn, gql):
 def handle_scene_backfill(payload, conn, gql):
     """Task: scan all scenes missing the configured stash-box endpoint, look them up by file hash and fill."""
     settings = get_settings(gql)
-    src = (settings.get("sceneSource") or JAV).strip()
+    src = (settings.get("scraper") or JAV).strip()
     if not src.startswith("http"):
-        log_info("sceneSource must be a stash-box URL"); return
+        log_info("scraper must be a stash-box URL"); return
     # First pass: collect all scenes needing fill (missing endpoint + has files)
     todo = []
     page = 1
@@ -985,8 +1010,7 @@ def handle_scene_backfill(payload, conn, gql):
         hits = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
         if not hits: continue
         try:
-            apply_scene_fill(gql, sid, scene, hits[0], src,
-                              ow_title=settings.get("overwriteSceneTitle") is True)
+            apply_scene_fill(gql, sid, scene, hits[0], src, ow=build_scene_ow(settings))
             matched += 1
             if (hits[0].get("remote_site_id") or "").strip():
                 filled += 1
@@ -1032,6 +1056,8 @@ def fill_performer_later_mode(pid):
     conn = json.loads(os.environ.get("JAVSTASH_CONN", "{}"))
     gql = make_gql(conn)
     settings = get_settings(gql)
+    if settings.get("performerFill") is False:
+        log_info(f"performer {pid}: performer fill disabled"); return
     time.sleep(_performer_fill_delay(settings))
     try:
         fill_performer(gql, conn, pid)
@@ -1045,7 +1071,8 @@ def fill_performer(gql, conn, pid):
         name appended as alias) or fill directly by id — bypasses name matching;
       - without stash_ids: 0.9 name match; a matched local candidate is reused
         (merged), an identity-anchored candidate is conservatively ignored, else
-        the created name stays primary and the scraper name becomes an alias."""
+        the created name stays primary and the scraper name becomes an alias (unless
+        owPerformerName is on)."""
     try:
         perf = get_performer(gql, pid)
     except Exception as e:
@@ -1104,7 +1131,7 @@ def fill_performer(gql, conn, pid):
         return
 
     # ---------- no stash-id: 0.9 name match on the manual source ----------
-    src = settings.get("manualSource")
+    src = settings.get("scraper")
     source_input = build_source(src)
     cands = scrape_source(gql, name, source_input)
     if not cands:
@@ -1147,7 +1174,7 @@ def fill_performer(gql, conn, pid):
             f"(name/alias match, fields={sorted(values.keys())}, score={top_score:.2f})")
         log_info(f"performer {pid} '{name}': merged into {dup}"); return
     # no duplicate: created name stays primary (default); scraper name becomes an alias
-    use_scraper_name = settings.get("manualUseScraperName")
+    use_scraper_name = settings.get("owPerformerName")
     if use_scraper_name is None: use_scraper_name = False
     prefer_scraper = bool(use_scraper_name) and bool(cand_name) and norm(cand_name) != norm(name)
     if prefer_scraper:

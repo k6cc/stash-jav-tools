@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.6.4";
+  var PLUGIN_VERSION = "1.6.5";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -639,11 +639,15 @@
       var pa = performers[e.owners[0]], pb = performers[e.owners[1]];
       var pkey = Math.min(Number(pa.id), Number(pb.id)) + "|" + Math.max(Number(pa.id), Number(pb.id));
       if (!pairMap[pkey]) {
-        pairMap[pkey] = { members: [pa, pb], displays: [], norms: {}, conflicts: [], conflictSigs: {}, byMember: {} };
+        pairMap[pkey] = { members: [pa, pb], displays: [], norms: {}, urlKeys: {}, conflicts: [], conflictSigs: {}, byMember: {} };
       }
       var pm = pairMap[pkey];
-      if (pm.displays.indexOf(e.display) === -1) pm.displays.push(e.display);
-      if (e.kind === "name") pm.norms[e.key] = true;
+      if (e.kind === "name") {
+        if (pm.displays.indexOf(e.display) === -1) pm.displays.push(e.display);
+        pm.norms[e.key] = true;
+      } else if (e.kind === "url") {
+        pm.urlKeys[e.key] = true;
+      }
       e.conflicts.forEach(function (c) {
         var sig = c.kind + "|" + c.key + "|" + c.va + "|" + c.vb;
         if (pm.conflictSigs[sig]) return;
@@ -663,7 +667,9 @@
       blockedPairs.push(bp);
     }
     blockedPairs.sort(function (a, b) {
-      return String(a.displays[0]).localeCompare(String(b.displays[0]));
+      var an = String(a.displays[0] || Object.keys(a.urlKeys || {})[0] || (a.members[0] && a.members[0].name) || "");
+      var bn = String(b.displays[0] || Object.keys(b.urlKeys || {})[0] || (b.members[0] && b.members[0].name) || "");
+      return an.localeCompare(bn);
     });
     // 补齐与 group 同构的字段，复用目标选择/合并/行渲染
     blockedPairs.forEach(function (bp, i) {
@@ -672,7 +678,7 @@
       bp.sharedNorms = bp.norms;
       bp.sharedStashIds = [];
       bp.sharedSidKeys = {};
-      bp.sharedUrlKeys = {};
+      bp.sharedUrlKeys = bp.urlKeys || {};
     });
 
     return { groups: groups, blockedPairs: blockedPairs };
@@ -1946,6 +1952,12 @@
 
     var names = pair.sharedNames.slice(0, 2).join(" / ");
     if (pair.sharedNames.length > 2) names += " +" + (pair.sharedNames.length - 2);
+    var urlKeyList = Object.keys(pair.sharedUrlKeys || {});
+    if (!names && urlKeyList.length) {
+      names = urlKeyList.slice(0, 2).join(" / ");
+      if (urlKeyList.length > 2) names += " +" + (urlKeyList.length - 2);
+    }
+    if (!names) names = (pair.members[0] && pair.members[0].name) || "";
 
     var headerRight = el("div", "pdm-card-actions");
     if (isMerged) {
@@ -1990,6 +2002,10 @@
         hasUrlC ? el("span", "pdm-badge pdm-badge-conflict", tc("URL 冲突", "URL Conflict"), {
           title: conflictTip(pair),
         }) : null,
+        (!pair.sharedNames.length && urlKeyList.length)
+          ? el("span", "pdm-badge pdm-badge-stash", tc("URL 匹配", "URL match"), {
+              title: tc("名字不同但共享 URL", "Different names but share a URL"),
+            }) : null,
       ]),
       headerRight,
     ]));
@@ -2007,6 +2023,7 @@
 
   function fmMatches(pair, q) {
     if (pair.sharedNames.join(" ").toLowerCase().indexOf(q) !== -1) return true;
+    if (Object.keys(pair.sharedUrlKeys || {}).join(" ").toLowerCase().indexOf(q) !== -1) return true;
     for (var i = 0; i < pair.members.length; i++) {
       var p = pair.members[i];
       if ((p.name || "").toLowerCase().indexOf(q) !== -1) return true;
@@ -2102,6 +2119,12 @@
       var sidMatched = (p.stash_ids || []).filter(function (s) { return g.sharedSidKeys[s.endpoint + "|" + s.stash_id]; })
         .map(function (s) { return endpointShort(s.endpoint) + ": " + s.stash_id; });
       if (sidMatched.length) tipRows.push({ label: tc("同 stash_id", "Same stash_id"), value: sidMatched.join(", ") });
+    }
+    if (g.sharedUrlKeys) {
+      var urlMatched = (p.urls || []).filter(function (u) {
+        return g.sharedUrlKeys[urlNormKey(u)];
+      }).map(function (u) { return urlNormKey(u); });
+      if (urlMatched.length) tipRows.push({ label: tc("共享 URL", "Shared URL"), value: urlMatched.join(", ") });
     }
     if (flags && flags.urlWarn) {
       tipRows.push({ label: tc("URL 冲突", "URL Conflict"),

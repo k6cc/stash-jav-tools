@@ -10,7 +10,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.5 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.9 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash |
 | [JavStashLinker](./JavStashLinker/) | 1.5.9 | Python + UI | 批量匹配 JAVStash 演员 ID：场景反推 + 名称搜索 + 手动搜索（证据评级，自动补图补信息） |
-| [performerMerge](./performerMerge/) | 1.6.4 | 纯 UI | 重名演员检测与合并（证据分级连组 + 树级冲突检查），附带短名清理与别名修复 |
+| [performerMerge](./performerMerge/) | 1.6.5 | 纯 UI | 重名演员检测与合并（证据分级连组 + 树级冲突检查），附带短名清理与别名修复 |
 | [tagMerge](./tagMerge/) | 2.6.0 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出）；填充ID 分页批量从 stash-box 补写存量 tags 的 stash_id |
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.2 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
 | [tagMergeAuto](./tagMergeAuto/) | 1.2.1 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描；新增 Fill Stash IDs 任务与钩子自动补 stash_id（复用 tagMerge 填充ID 规则） |

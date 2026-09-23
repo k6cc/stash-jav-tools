@@ -130,6 +130,9 @@
   font-weight: 600 !important;
   font-family: inherit !important;
   flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   transition: background 0.15s, opacity 0.15s !important;
 }
 
@@ -894,5 +897,177 @@
     border-radius: 0 !important;
     max-width: 100% !important;
     max-height: 100vh !important;
+  }
+}
+
+/* ==================== 填充ID ==================== */
+
+.tgm-fill {
+  min-width: 0 !important;
+}
+
+/* 按钮内图标行：SVG + 文字水平居中（tgm-btn 内嵌使用）；不设 line-height:1 —
+   文字继承按钮自然行高，保证与纯文字按钮（填充/中止）同高 */
+.tgm-btn-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+.tgm-btn-icon svg {
+  display: block !important;
+  flex-shrink: 0 !important;
+}
+
+.tgm-fill-status {
+  font-size: 12px !important;
+  color: #8f8f8f !important;
+  margin-bottom: 10px !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+  min-width: 0 !important;
+}
+
+.tgm-fill-config {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important; /* 与「开始扫描」左侧对齐 */
+  gap: 10px !important;
+  margin-bottom: 12px !important;
+  min-width: 0 !important;
+}
+
+.tgm-fill-boxrow {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  flex-wrap: wrap !important;
+}
+
+.tgm-fill-select {
+  background: #1a1a1a !important;
+  border: 1px solid #444 !important;
+  border-radius: 4px !important;
+  color: #e0e0e0 !important;
+  font-size: 13px !important;
+  font-family: inherit !important;
+  padding: 5px 8px !important;
+  max-width: 320px !important;
+  min-width: 110px !important;
+}
+
+.tgm-fill-select:focus {
+  outline: none !important;
+  border-color: #2f9e44 !important;
+}
+
+.tgm-fill-select:disabled {
+  opacity: 0.6 !important;
+}
+
+.tgm-fill-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: wrap !important;
+  margin-left: auto !important; /* 右对齐；窄屏换行占满一行 */
+}
+
+/* 预览区：查询统计 + 按组匹配结果（卡片复用 tgm-edit-item 结构） */
+.tgm-fill-preview {
+  margin-top: 12px !important;
+  min-width: 0 !important;
+}
+
+.tgm-fill-preview-stats {
+  font-size: 12px !important;
+  color: #8f8f8f !important;
+  margin-bottom: 8px !important;
+}
+
+.tgm-fill-preview-hint {
+  font-size: 12px !important;
+  color: #666 !important;
+  margin-bottom: 8px !important;
+}
+
+/* 圆角长条滑块开关（JavStashLinker 样式，绿主题）— 滑块在文字左侧，点击切换；
+   滑块靠右 = 开启，开启时滑轨显示主题绿；窄屏时随 .tgm-fill-actions 换行 */
+.tgm-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: 12px !important;
+  color: #ccc !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  white-space: nowrap !important;
+}
+
+.tgm-toggle-track {
+  width: 28px !important;
+  height: 14px !important;
+  border-radius: 7px !important;
+  background: #555 !important;
+  position: relative !important;
+  display: inline-block !important;
+  flex-shrink: 0 !important;
+  transition: background 0.15s !important;
+}
+
+.tgm-toggle-knob {
+  position: absolute !important;
+  top: 2px !important;
+  left: 2px !important;
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50% !important;
+  background: #fff !important;
+  transition: left 0.15s !important;
+}
+
+.tgm-toggle.on .tgm-toggle-track {
+  background: #2f9e44 !important;
+}
+
+.tgm-toggle.on .tgm-toggle-knob {
+  left: 16px !important;
+}
+
+.tgm-toggle-disabled {
+  opacity: 0.5 !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 640px) {
+  /* 下拉不内部换行 */
+  .tgm-fill-boxrow {
+    flex-wrap: nowrap !important;
+  }
+}
+
+/* 极窄屏：按钮组占满一行（靠右），内部 4 项（两开关+查询+填充）自然换行，防横排撑破 */
+@media (max-width: 480px) {
+  .tgm-fill-actions {
+    flex-basis: 100% !important;
+    margin-left: 0 !important;
+    justify-content: flex-end !important;
+  }
+}
+
+/* 更窄时下拉才换行（保持紧凑单行） */
+@media (max-width: 400px) {
+  .tgm-fill-boxrow {
+    flex-wrap: wrap !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+
+  .tgm-fill-select {
+    max-width: 100% !important;
+    width: 100% !important;
   }
 }

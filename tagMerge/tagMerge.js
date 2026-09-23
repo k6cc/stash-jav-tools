@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.5.2";
+  var PLUGIN_VERSION = "2.6.0";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -69,6 +69,10 @@
   var M_TAG_CREATE = "mutation($i: TagCreateInput!) { tagCreate(input: $i) { id name } }";
   var M_TAGS_MERGE = "mutation($i: TagsMergeInput!) { tagsMerge(input: $i) { id name aliases } }";
   var M_TAG_UPDATE = "mutation($i: TagUpdateInput!) { tagUpdate(input: $i) { id } }";
+  // 填充ID：存量 tag 按别名批量补 stash_id（含 stash_ids 的 tag 查询 + stash-box 配置 + 单 tag 刮削）
+  var Q_TAGS_FILL = "query { findTags(filter: {per_page: -1}) { count tags { id name aliases stash_ids { endpoint stash_id } } } }";
+  var Q_CONFIG_STASHBOXES = "query { configuration { general { stashBoxes { name endpoint } } } }";
+  var Q_SCRAPE_TAG = "query($source: ScraperSourceInput!, $input: ScrapeSingleTagInput!) { scrapeSingleTag(source: $source, input: $input) { name alias_list remote_site_id } }";
 
   // ==================== State ====================
 
@@ -90,6 +94,27 @@
     activeTab: "groups",
     log: [],
     editor: null,         // 映射编辑器（见 createEditorState）
+    fill: {               // 填充ID（stash-box 批量补 stash_id）
+      loaded: false, loading: false, error: null, // stash-box 配置加载状态
+      boxes: null,                                 // [{name, endpoint}]
+      boxIndex: 0,                                 // 下拉选中的 box 下标
+      allBoxes: false,                             // 全部 box 模式（开关）
+      ignorePrimary: false,                        // 忽略主名（默认关 = 主名+别名都查；开 = 只按别名，无别名以主名兜底）
+      busy: false,                                 // 查询或填充进行中（开关/下拉禁用）
+      querying: false,                             // 查询任务运行中（含暂停等待）
+      queryPaused: false,                          // 查询暂停
+      queryDone: false,                            // 查询已完成（预览结果可信，填充可点）
+      filling: false,                              // 填充写入中
+      abortFlag: false,
+      phase: null,                                 // "query" | "write"
+      progress: null,                              // {current,total,title}
+      plans: null,                                 // 当前执行计划（查询阶段构建）
+      totalCandidates: 0,                          // 参与 tag 总数（未命中统计用）
+      preview: [],                                 // 预览：命中实体 >=1 的 tag 组 {box,tag,matchWords,count,entity}
+      previewIndex: {},                            // tagId -> 预览条目（增量更新定位）
+      previewStats: null,                          // 预览统计文本
+      lastRun: null,                               // 上次填充摘要（状态行展示）
+    },
   };
 
   function createEditorState(list, meta) {
@@ -166,6 +191,16 @@
 
   function normalize(s) {
     return String(s || "").normalize("NFKC").toLowerCase().replace(SEP_RE, "");
+  }
+
+  // 填充ID 专用归一化：NFKC（全角→半角）+ 小写 + 连续空格归一并 trim。
+  // 不删分隔符（·、，/ 等保留）——"3P" 与 "3P/4P" 是不同实体，删分隔符会归一成同词导致误配。
+  function fillNorm(s) {
+    return String(s || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
   // ==================== 映射库 ====================
@@ -618,6 +653,7 @@
         else if (k === "title") node.title = attrs[k];
         else if (k === "value") node.value = attrs[k] == null ? "" : attrs[k];
         else if (k === "oninput") node.addEventListener("input", attrs[k]);
+        else if (k === "onchange") node.addEventListener("change", attrs[k]);
         else node.setAttribute(k, attrs[k]);
       }
     }
@@ -725,6 +761,7 @@
     // Tabs（始终显示 — 映射编辑不依赖扫描，参考 JavStashLinker）
     var tabs = [
       { id: "groups", label: _state.groups ? tc("分组", "Groups") + " (" + _state.groups.length + ")" : tc("分组", "Groups") },
+      { id: "fill", label: tc("填充ID", "Fill IDs") },
       { id: "map", label: tc("查看映射", "Mapping") },
       { id: "log", label: tc("日志", "Log") },
     ];
@@ -734,6 +771,7 @@
         onclick: function () {
           setState({ activeTab: t.id });
           if (t.id === "map") ensureEditorLoaded();
+          if (t.id === "fill") ensureFillConfigLoaded();
         },
       }));
     });
@@ -741,7 +779,9 @@
 
     // Tab 内容
     var content = el("div", "tgm-content");
-    if (_state.activeTab === "map") {
+    if (_state.activeTab === "fill") {
+      content.appendChild(buildFillTab());
+    } else if (_state.activeTab === "map") {
       content.appendChild(buildEditorTab());
     } else if (_state.activeTab === "log") {
       if (_state.log.length === 0) {
@@ -883,6 +923,571 @@
     if (cardActions.childNodes.length) card.appendChild(cardActions);
 
     return card;
+  }
+
+  // ==================== 填充ID（stash-box 批量补 stash_id） ====================
+
+  var FILL_CACHE_PREFIX = "tgm.fillCache.v1.";
+  var FILL_QUERY_DELAY = 250; // 每词查询间隔（ms）——每个 box 独立限速（一般 240 次/分钟 → 250ms/词）
+
+  function fillCacheKey(endpoint) { return FILL_CACHE_PREFIX + endpoint; }
+
+  // 只持久化命中词（未命中词跨会话重查，能捕捉 stash-box 新增实体）
+  function loadFillCache(endpoint) {
+    try {
+      var raw = localStorage.getItem(fillCacheKey(endpoint));
+      var obj = raw ? JSON.parse(raw) : {};
+      var out = {};
+      for (var k in obj) {
+        var v = obj[k];
+        if (v && Array.isArray(v.entities) && v.entities.length && v.entities[0] && v.entities[0].id) {
+          out[k] = { entities: v.entities, ts: v.ts || 0 };
+        }
+      }
+      return out;
+    } catch (e) { return {}; }
+  }
+
+  function saveFillCache(endpoint, cache) {
+    try { localStorage.setItem(fillCacheKey(endpoint), JSON.stringify(cache)); } catch (e) {}
+  }
+
+  function ensureFillConfigLoaded() {
+    var f = _state.fill;
+    if (f.loaded || f.loading) return;
+    f.loading = true;
+    render();
+    callGQL(Q_CONFIG_STASHBOXES).then(function (d) {
+      f.loading = false;
+      f.loaded = true;
+      f.error = null;
+      var raw = ((d.configuration && d.configuration.general && d.configuration.general.stashBoxes) || []);
+      // 品牌优先级稳定排序：JAVStash → StashDB → ThePornDB → 其余保持配置原序（boxIndex=0 即默认 JAVStash）
+      var rank = function (name) {
+        var n = String(name || "").toLowerCase();
+        if (n.indexOf("javstash") !== -1) return 0;
+        if (n.indexOf("stashdb") !== -1) return 1;
+        if (n.indexOf("porndb") !== -1) return 2;
+        return 3;
+      };
+      f.boxes = raw.map(function (b, i) { return { b: b, i: i, r: rank(b.name) }; })
+        .sort(function (a, c) { return a.r - c.r || a.i - c.i; })
+        .map(function (x) { return x.b; });
+      render();
+    }).catch(function (e) {
+      f.loading = false;
+      f.error = e.message || String(e);
+      render();
+    });
+  }
+
+  // 候选词：忽略主名开启 → 只取别名（无别名以主名兜底）；关闭（默认）→ 主名 + 别名。组内按归一化去重
+  function candidateWords(t, ignorePrimary) {
+    var aliases = (t.aliases || []).map(fillNorm).filter(Boolean);
+    var ws;
+    if (ignorePrimary) {
+      ws = aliases.slice();
+      if (!ws.length) {
+        var n = fillNorm(t.name);
+        if (n) ws.push(n);
+      }
+    } else {
+      ws = [];
+      var name = fillNorm(t.name);
+      if (name) ws.push(name);
+      ws = ws.concat(aliases);
+    }
+    var seen = {}, out = [];
+    ws.forEach(function (w) { if (!seen[w]) { seen[w] = true; out.push(w); } });
+    return out;
+  }
+
+  // 双向精确匹配：词命中实体 name 或 aliases（均归一化后比较）；按实体去重
+  function filterTagHits(results, word) {
+    var hits = [];
+    (results || []).forEach(function (r) {
+      if (!r || !r.remote_site_id) return;
+      var name = fillNorm(r.name);
+      var aliases = (r.alias_list || []).map(fillNorm);
+      if (name === word || aliases.indexOf(word) >= 0) {
+        hits.push({ id: r.remote_site_id, name: r.name, aliases: r.alias_list || [] });
+      }
+    });
+    var seen = {}, out = [];
+    hits.forEach(function (h) { if (!seen[h.id]) { seen[h.id] = true; out.push(h); } });
+    return out;
+  }
+
+  // 构建单 box 执行计划：参与 tag（该 box 无 stash_id）、候选词反向索引、需查询词、预判冲突 tag
+  function buildBoxFillPlan(tags, box, ignorePrimary) {
+    var cache = loadFillCache(box.endpoint);
+    var candidates = tags.filter(function (t) {
+      return !(t.stash_ids || []).some(function (s) { return s.endpoint === box.endpoint; });
+    });
+    var wordTags = {};
+    candidates.forEach(function (t) {
+      candidateWords(t, ignorePrimary).forEach(function (w) {
+        (wordTags[w] = wordTags[w] || []).push(t);
+      });
+    });
+    var queryWords = {};
+    var preSkip = 0;
+    candidates.forEach(function (t) {
+      var ws = candidateWords(t, ignorePrimary);
+      // 查询前剪枝：持久缓存中该 tag 候选词的命中实体集合（去重）≥2 → 预判冲突，未缓存词不再查询
+      var entities = {};
+      ws.forEach(function (w) {
+        var c = cache[w];
+        if (c) c.entities.forEach(function (e) { if (!entities[e.id]) entities[e.id] = e; });
+      });
+      if (Object.keys(entities).length >= 2) { preSkip++; return; }
+      ws.forEach(function (w) { if (!cache[w]) queryWords[w] = true; });
+    });
+    return {
+      box: box,
+      cache: cache,
+      candidates: candidates,
+      wordTags: wordTags,
+      queryWords: Object.keys(queryWords),
+      preSkip: preSkip,
+      sessionHits: {}, // 词 -> [实体]（本次查询命中）
+    };
+  }
+
+  // 收敛判定：候选词全部命中实体集合 0（未命中）/ 1（待写）/ ≥2（冲突跳过）
+  function convergeTag(words, resolveWord) {
+    var entities = {};
+    words.forEach(function (w) {
+      (resolveWord(w) || []).forEach(function (e) { if (!entities[e.id]) entities[e.id] = e; });
+    });
+    var ids = Object.keys(entities);
+    return { count: ids.length, entity: ids.length === 1 ? entities[ids[0]] : null };
+  }
+
+  async function queryBoxWord(box, word) {
+    var res = await callGQL(Q_SCRAPE_TAG, {
+      source: { stash_box_endpoint: box.endpoint },
+      input: { query: word },
+    });
+    return filterTagHits(res && res.scrapeSingleTag, word);
+  }
+
+  // 读现有 stash_ids（保留其他 endpoint），追加本 box 命中 ID，整体写（Set 语义，复刻官方 mergeTagStashIDs）
+  async function writeTagStashId(tag, box, stashId) {
+    var existing = (tag.stash_ids || []).filter(function (s) { return s.endpoint !== box.endpoint; });
+    var has = {};
+    existing.forEach(function (s) { has[s.endpoint + "\u0000" + s.stash_id] = true; });
+    if (has[box.endpoint + "\u0000" + stashId]) return; // 已存在（理论不会：参与集已排除）
+    var next = existing.concat([{ endpoint: box.endpoint, stash_id: stashId }]);
+    await callGQL(M_TAG_UPDATE, { i: { id: tag.id, stash_ids: next } });
+    tag.stash_ids = next; // 更新本地对象：全部 box 模式下后续 box 写入必须保留本 box 新 ID
+  }
+
+  // 词结果解析：持久缓存优先，其次本次会话查询命中（未命中词返回空）
+  function resolvePlanWord(plan, word) {
+    var c = plan.cache[word];
+    if (c) return c.entities;
+    return plan.sessionHits[word] || [];
+  }
+
+  // 预览条目增量更新：查询完成一个词后，只重算该词涉及的 tag 的收敛结果。
+  // 命中实体集合 0 = 不进预览（结果只会增加，无需删除）；>=1 = 加入/更新预览组
+  function updatePreviewForTag(plan, tag, f) {
+    var ws = candidateWords(tag, f.ignorePrimary);
+    var cv = convergeTag(ws, function (w) { return resolvePlanWord(plan, w); });
+    if (cv.count === 0) return;
+    var matchWords = ws.filter(function (w) { return resolvePlanWord(plan, w).length; });
+    var idx = f.previewIndex || (f.previewIndex = {});
+    var item = idx[tag.id];
+    if (!item) {
+      item = { box: plan.box, tag: tag, matchWords: matchWords, count: cv.count, entity: cv.entity };
+      idx[tag.id] = item;
+      f.preview.push(item);
+    } else {
+      item.matchWords = matchWords;
+      item.count = cv.count;
+      item.entity = cv.entity;
+    }
+  }
+
+  function fillPreviewStatsText() {
+    var f = _state.fill;
+    var shown = (f.preview || []).length;
+    var writable = 0, conflict = 0;
+    (f.preview || []).forEach(function (p) { if (p.count === 1) writable++; else conflict++; });
+    var miss = Math.max(0, (f.totalCandidates || 0) - shown);
+    return tc("匹配 " + shown + " 组 · 可写 " + writable + " · 冲突 " + conflict + " · 未命中 " + miss,
+      shown + " matched · " + writable + " writable · " + conflict + " conflict · " + miss + " miss");
+  }
+
+  function computeFillPreviewStats() {
+    _state.fill.previewStats = fillPreviewStatsText();
+  }
+
+  // 查询进行中局部刷新统计文本（避免每词全量 render）
+  function updateFillPreviewStatsDOM() {
+    var elStats = document.querySelector("#tgm-panel-root .tgm-fill-preview-stats");
+    if (elStats) elStats.textContent = fillPreviewStatsText();
+  }
+
+  // 阶段一：查询（只读）——所有 box 并发查询、每 box 独立限速（250ms/词，240 次/分钟）；
+  // 支持暂停/继续；查询中增量维护预览，暂停或完成时按组列出匹配结果
+  async function handleQuery() {
+    var f = _state.fill;
+    if (f.querying || f.filling || !f.loaded || !f.boxes.length) return;
+
+    addLog(tc("正在获取库内 tags...", "Fetching tags..."));
+    var tags;
+    try {
+      tags = ((await callGQL(Q_TAGS_FILL)).findTags || {}).tags || [];
+    } catch (e) {
+      addLog(tc("获取 tags 失败", "Failed to fetch tags") + ": " + (e.message || String(e)));
+      return;
+    }
+
+    var boxes;
+    if (f.allBoxes) boxes = f.boxes.slice();
+    else {
+      if (f.boxIndex >= f.boxes.length) f.boxIndex = 0;
+      var single = f.boxes[f.boxIndex];
+      if (!single) return;
+      boxes = [single];
+    }
+
+    var plans = boxes.map(function (box) { return buildBoxFillPlan(tags, box, f.ignorePrimary); });
+    f.plans = plans;
+    f.totalCandidates = 0;
+    var totalWords = 0;
+    plans.forEach(function (p) {
+      f.totalCandidates += p.candidates.length;
+      totalWords += p.queryWords.length;
+      addLog(tc("=== box ", "=== box ") + p.box.name + tc("：参与 ", ": ") + p.candidates.length
+        + tc(" 个 tag / 唯一词 ", " tags / ") + p.queryWords.length + tc(" 个 ===", " unique words ==="));
+    });
+
+    // 预收敛：持久缓存已可判定的 tag 先进预览（暂定，查询中随词结果更新）
+    f.previewIndex = {};
+    f.preview = [];
+    plans.forEach(function (plan) {
+      plan.candidates.forEach(function (t) { updatePreviewForTag(plan, t, f); });
+    });
+
+    f.querying = true;
+    f.queryPaused = false;
+    f.queryDone = false;
+    f.busy = true;
+    f.abortFlag = false;
+    f.phase = "query";
+    f.progress = { current: 0, total: totalWords, title: tc("查询", "Querying") };
+    render();
+
+    var run = { hitWords: 0, failWords: 0, queried: 0 };
+    var doneCount = 0;
+    // 所有 box 并发查询；每 box 词循环独立（各 box 各自限速）
+    var queryTasks = plans.map(function (plan) {
+      return (async function () {
+        var box = plan.box;
+        var fail = 0, qi;
+        for (qi = 0; qi < plan.queryWords.length; qi++) {
+          if (f.abortFlag) break;
+          // 暂停：等待用户点击「继续」（或中止）
+          while (f.queryPaused && !f.abortFlag) { await sleep(150); }
+          if (f.abortFlag) break;
+          var word = plan.queryWords[qi];
+          doneCount++;
+          updateProgressDOM(doneCount, totalWords, box.name + " · " + word);
+          try {
+            var hits = await queryBoxWord(box, word);
+            if (hits.length) {
+              plan.sessionHits[word] = hits;
+              run.hitWords++;
+              (plan.wordTags[word] || []).forEach(function (t) { updatePreviewForTag(plan, t, f); });
+            }
+          } catch (e) {
+            fail++;
+            addLog(tc("查询失败", "Query failed") + ": " + word + " — " + (e.message || String(e)));
+          }
+          updateFillPreviewStatsDOM();
+          await sleep(FILL_QUERY_DELAY); // 每 box 独立限速
+        }
+        return { plan: plan, fail: fail, queried: qi };
+      })();
+    });
+
+    var results = await Promise.all(queryTasks);
+    results.forEach(function (r) {
+      var plan = r.plan;
+      run.failWords += r.fail;
+      run.queried += r.queried;
+      // 持久化命中词缓存（未命中词跨会话重查）
+      for (var w in plan.sessionHits) plan.cache[w] = { entities: plan.sessionHits[w], ts: Date.now() };
+      saveFillCache(plan.box.endpoint, plan.cache);
+    });
+
+    var aborted = f.abortFlag;
+    f.querying = false;
+    f.queryPaused = false;
+    f.busy = false;
+    f.abortFlag = false;
+    f.phase = null;
+    f.progress = null;
+    f.queryDone = !aborted;
+    computeFillPreviewStats();
+    addLog(tc("=== 查询完成: ", "=== Query complete: ") + run.hitWords + tc(" 词命中 / ", " hit / ")
+      + run.failWords + tc(" 失败 / ", " fail / ") + run.queried + tc(" 词已查", " queried")
+      + (aborted ? tc("（已中止）", " (aborted)") : "") + " ===");
+    render();
+  }
+
+  // 阶段二：填充（写入）——只写预览中收敛为 1 实体的 tag
+  async function handleFill() {
+    var f = _state.fill;
+    if (f.filling || f.querying || !f.queryDone) return;
+    var writable = (f.preview || []).filter(function (p) { return p.count === 1; });
+    if (!writable.length) return;
+    if (!confirm(tc("将写入 " + writable.length + " 个 tag 的 stash_id（匹配 " + f.preview.length + " 组）\n继续？",
+      "Write stash_id for " + writable.length + " tags (of " + f.preview.length + " matched groups)?\nContinue?"))) return;
+
+    f.filling = true;
+    f.abortFlag = false;
+    f.busy = true;
+    f.phase = "write";
+    f.progress = { current: 0, total: writable.length, title: tc("写入", "Writing") };
+    render();
+
+    var wrote = 0, fail = 0;
+    for (var i = 0; i < writable.length; i++) {
+      if (f.abortFlag) break;
+      var item = writable[i];
+      updateProgressDOM(i, writable.length, item.box.name + " · " + item.tag.name);
+      try {
+        await writeTagStashId(item.tag, item.box, item.entity.id);
+        wrote++;
+        item.done = true; // 已写入：预览卡片变灰 + 徽章「已完成」；填充按钮随可写组清零变灰
+        addLog(tc("[写入] ", "[WRITE] ") + item.tag.name + " ← " + item.box.name + " (" + item.entity.id + ")");
+      } catch (e) {
+        fail++;
+        addLog(tc("[写入失败] ", "[WRITE FAIL] ") + item.tag.name + " — " + (e.message || String(e)));
+      }
+      await sleep(60);
+    }
+    var aborted = f.abortFlag;
+    f.filling = false;
+    f.abortFlag = false;
+    f.busy = false;
+    f.phase = null;
+    f.progress = null;
+    f.lastRun = {
+      boxes: f.allBoxes
+        ? tc("全部 box（" + (f.boxes || []).length + " 个）", "All boxes (" + (f.boxes || []).length + ")")
+        : ((f.boxes[f.boxIndex] || {}).name || ""),
+      wrote: wrote, fail: fail, aborted: aborted,
+    };
+    addLog(tc("=== 填充完成: ", "=== Fill complete: ") + wrote + tc(" 写入 / ", " written / ")
+      + fail + tc(" 失败", " failed") + (aborted ? tc("（已中止）", " (aborted)") : "") + " ===");
+    render();
+  }
+
+  // 圆角长条滑块开关 — 滑块在文字左侧；点击切换（滑块+文字整块可点）；
+  // 滑块靠右 = 开启，开启时滑轨显示主题绿
+  function buildToggle(label, checked, tooltip, onchange, disabled) {
+    var on = !!checked;
+    var toggle = el("div", "tgm-toggle" + (on ? " on" : ""), [
+      el("span", "tgm-toggle-track", [el("span", "tgm-toggle-knob")]),
+      el("span", "tgm-toggle-label", label),
+    ]);
+    if (tooltip) toggle.title = tooltip;
+    if (disabled) {
+      toggle.classList.add("tgm-toggle-disabled");
+    } else {
+      toggle.onclick = function () {
+        on = !on;
+        toggle.classList.toggle("on", on);
+        onchange(on);
+      };
+    }
+    return toggle;
+  }
+
+  // 纯色 SVG 图标（按钮内联，语义相近即可）：search=放大镜 / pause=暂停 / play=播放
+  function svgIcon(name) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    if (name === "search") {
+      svg.innerHTML = '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>';
+    } else if (name === "pause") {
+      svg.innerHTML = '<rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/>';
+    } else if (name === "play") {
+      svg.innerHTML = '<path d="M7 5v14l12-7z"/>';
+    }
+    return svg;
+  }
+
+  // 按钮图标行：SVG + 文字
+  function iconBtn(label, iconName) {
+    return el("span", "tgm-btn-icon", [svgIcon(iconName), el("span", null, label)]);
+  }
+
+  // 预览条目卡片：主名 + 命中词 chips + 结果徽章（已完成=绿 / 可写入=绿 / 冲突 N 实体=黄）
+  function buildFillPreviewItem(p) {
+    var badge;
+    if (p.done) {
+      badge = el("span", "tgm-badge tgm-badge-done", tc("已完成", "Done"));
+    } else if (p.count === 1) {
+      badge = el("span", "tgm-badge tgm-badge-done", tc("可写入", "Writable"));
+    } else {
+      badge = el("span", "tgm-badge tgm-badge-new", tc("冲突 " + p.count + " 实体", "Conflict " + p.count + " entities"));
+    }
+    var card = el("div", "tgm-edit-item" + (p.done ? " tgm-group-done" : ""), [
+      el("div", "tgm-edit-item-head", [
+        el("span", "tgm-edit-item-target", p.tag.name, { title: p.tag.name }),
+        el("div", "tgm-edit-item-side", [badge]),
+      ]),
+    ]);
+    var srcWrap = el("div", "tgm-edit-item-sources");
+    (p.matchWords || []).forEach(function (w) {
+      srcWrap.appendChild(el("span", "tgm-edit-src", w, { title: w }));
+    });
+    card.appendChild(srcWrap);
+    return card;
+  }
+
+  function buildFillTab() {
+    var f = _state.fill;
+    var wrap = el("div", "tgm-fill");
+
+    if (!f.loaded) {
+      wrap.appendChild(el("div", "tgm-empty",
+        f.error ? tc("stash-box 配置读取失败: ", "Failed to load stash-box config: ") + f.error
+          : tc("正在读取 stash-box 配置...", "Loading stash-box config...")));
+      return wrap;
+    }
+    if (!f.boxes.length) {
+      wrap.appendChild(el("div", "tgm-empty",
+        tc("未配置 stash-box — 请先在「设置 → 元数据提供方」中添加",
+           "No stash-box configured — add one in Settings → Metadata Providers")));
+      return wrap;
+    }
+    if (f.boxIndex >= f.boxes.length) f.boxIndex = 0;
+
+    // 状态行：上次填充摘要 / 功能说明（与「开始扫描」同 tgm-config 容器，左对齐）
+    var cfg = el("div", "tgm-config");
+    var status = el("div", "tgm-fill-status");
+    if (f.busy) {
+      status.textContent = f.filling
+        ? tc("填充中...", "Filling...")
+        : tc(f.queryPaused ? "查询已暂停" : "查询中...", f.queryPaused ? "Query paused" : "Querying...");
+    } else if (f.lastRun) {
+      var r = f.lastRun;
+      status.textContent = tc("上次填充（" + r.boxes + "）: 写入 " + r.wrote + " · 失败 " + r.fail
+        + (r.aborted ? " · 已中止" : ""),
+        "Last fill (" + r.boxes + "): wrote " + r.wrote + " · failed " + r.fail
+        + (r.aborted ? " · aborted" : ""));
+    } else {
+      status.textContent = tc("按别名批量从 stash-box 填充存量 tag 的 stash_id",
+        "Batch-fill stash_id for existing tags from stash-box by aliases");
+    }
+    cfg.appendChild(status);
+
+    // 控件：box 下拉 + 全部 box 开关 + 忽略主名开关 + 查询/暂停/继续 + 填充
+    var select = el("select", "tgm-fill-select", null, {
+      onchange: function (e) { f.boxIndex = parseInt(e.target.value, 10) || 0; render(); },
+      disabled: f.busy || f.allBoxes, // 全部 box 开启时下拉变灰不可选
+    });
+    f.boxes.forEach(function (b, i) {
+      var opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = b.name;
+      if (i === f.boxIndex) opt.selected = true;
+      select.appendChild(opt);
+    });
+
+    var actions = el("div", "tgm-fill-actions");
+    actions.appendChild(buildToggle(tc("全部 box", "All Boxes"), f.allBoxes,
+      tc("对所有配置的 stash-box 分别匹配填充（查询量随 box 数线性增长）",
+        "Match and fill against every configured stash-box (queries scale linearly with box count)"),
+      function (on) { f.allBoxes = on; render(); }, f.busy));
+    actions.appendChild(buildToggle(tc("忽略主名", "Ignore Primary"), f.ignorePrimary,
+      tc("默认关：主名 + 别名都查；开启后只按别名匹配（无别名 tag 以主名兜底）",
+        "Off by default: query primary name + aliases; when on, match by aliases only (tags without aliases fall back to the primary name)"),
+      function (on) { f.ignorePrimary = on; render(); }, f.busy));
+
+    // 查询按钮状态机：空闲 查询（绿） → 查询中 暂停（黄+激活白条） → 暂停 继续（绿）
+    var queryBtn;
+    if (f.filling) {
+      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询", "Query"), "search")], { disabled: true });
+    } else if (f.querying && !f.queryPaused) {
+      queryBtn = el("button", "tgm-btn tgm-btn-warn tgm-btn-warn-on", [iconBtn(tc("暂停", "Pause"), "pause")], {
+        onclick: function () { f.queryPaused = true; render(); },
+        title: tc("暂停查询，下方按组列出已匹配结果", "Pause querying and list matches by group"),
+      });
+    } else if (f.querying && f.queryPaused) {
+      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("继续", "Resume"), "play")], {
+        onclick: function () { f.queryPaused = false; render(); },
+        title: tc("继续查询", "Resume querying"),
+      });
+    } else {
+      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询", "Query"), "search")], {
+        onclick: function () { handleQuery(); },
+        title: tc("按候选词查询所选 stash-box，下方列出匹配结果", "Query the selected stash-box by candidate words and list matches below"),
+      });
+    }
+    actions.appendChild(queryBtn);
+
+    // 填充按钮：查询进行中不可点；暂停/完成且有未写入的可写结果才可点（否则灰色）
+    var hasWritable = (f.preview || []).some(function (p) { return p.count === 1 && !p.done; });
+    var fillDisabled = (f.querying && !f.queryPaused) || !hasWritable;
+    var fillTitle = f.filling ? tc("写入中", "Writing...")
+      : (f.querying && !f.queryPaused) ? tc("查询进行中", "Query in progress")
+      : !hasWritable ? tc("无唯一可写入结果", "No uniquely matchable result")
+      : tc("写入查询结果中可唯一确定的 stash_id", "Write stash_id for uniquely matched tags");
+    actions.appendChild(el("button", "tgm-btn tgm-btn-primary", tc("填充", "Fill"), {
+      onclick: function () { handleFill(); },
+      disabled: fillDisabled,
+      title: fillTitle,
+    }));
+
+    cfg.appendChild(el("div", "tgm-fill-config", [
+      el("div", "tgm-fill-boxrow", [select]),
+      actions,
+    ]));
+
+    // 进度
+    if (f.progress) {
+      var prog = f.progress;
+      var pct = prog.total ? Math.round((prog.current / prog.total) * 100) : 0;
+      cfg.appendChild(el("div", "tgm-progress", [
+        el("div", "tgm-progress-bar", prog.current + " / " + prog.total, { style: "width:" + pct + "%" }),
+        el("div", "tgm-progress-title", prog.title || ""),
+      ]));
+    }
+
+    // 预览区：查询中实时统计（不重建列表，避免每词全量重绘）；暂停或完成时按组列出匹配结果
+    if (f.querying || f.queryPaused || f.queryDone || (f.preview && f.preview.length)) {
+      var previewWrap = el("div", "tgm-fill-preview");
+      previewWrap.appendChild(el("div", "tgm-fill-preview-stats",
+        f.querying && !f.queryPaused ? tc("查询中... ", "Querying... ") + fillPreviewStatsText()
+          : fillPreviewStatsText()));
+      if (f.querying && !f.queryPaused) {
+        previewWrap.appendChild(el("div", "tgm-fill-preview-hint",
+          tc("查询中——暂停后按组列出匹配结果", "Querying — pause to list matches by group")));
+      } else if (f.preview.length) {
+        previewWrap.appendChild(buildChunkedList(f.preview, buildFillPreviewItem));
+      } else if (f.queryDone) {
+        previewWrap.appendChild(el("div", "tgm-empty", tc("无匹配结果", "No matches")));
+      }
+      cfg.appendChild(previewWrap);
+    }
+
+    wrap.appendChild(cfg);
+    return wrap;
   }
 
   // ==================== 映射编辑器 ====================

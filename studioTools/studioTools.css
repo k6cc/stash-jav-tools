@@ -9,6 +9,11 @@
   border-radius: 3px !important; cursor: pointer !important; vertical-align: middle !important;
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease !important;
 }
+/* 按钮组容器：与行内原生按钮同基线中线对齐（防包装后顶部挂起造成整行错位），左缘间距与单按钮一致 */
+.st-btn-group {
+  vertical-align: middle !important;
+  margin-left: 4px !important;
+}
 /* 相邻注入按钮间距收敛为 4px（避免 4+4 双边距） */
 .st-inject-btn + .st-inject-btn { margin-left: 0 !important; }
 .st-inject-btn svg { width: 18px !important; height: 18px !important; display: block !important; }

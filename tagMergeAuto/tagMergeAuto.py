@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.2.4: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.2.5: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -11,6 +11,8 @@ Tag Merge Auto v1.2.4: 后台自动合并 tag（tagMerge 的无 UI 版本，零�
   （复用 tagMerge UI 版填充ID 规则：fillNorm 不删分隔符、每词精准实体全收集、append 多写）。
 - 填充查询缓存：命中词写入插件目录 fill_cache.json（按 box 隔离），任务/钩子下次跳过已命中词；
   未命中词跨会话重查（可捕捉 stash-box 新增实体）。
+- 词级跳过：候选词已写入该 box（词缓存实体全部已存在）不查询；新词/未命中词必查询；
+  「全量重查」开关（插件页设置 Force re-query，默认关）开启时全部词重查、绕过词缓存（仅追加未写入实体）。
 - 钩子合并新 tag 后，若 autoFillStashId 开（默认），自动给目标 tag 补 stash_id。
 
 与 tagMerge UI 版解析/执行逻辑一致：归一化精确匹配、防链式、幂等、
@@ -288,6 +290,8 @@ def handle_hook(gql, lang, args, settings):
                                 save_fill_cache(cache)
                             if ok:
                                 log("hook auto-filled stash_id '%s' <- %s (%s)" % (dt.get("name"), box["name"], why))
+                            elif why == "skip":
+                                log("hook fill skipped '%s' <- %s (already written)" % (dt.get("name"), box["name"]))
                 except Exception as e:
                     log("hook auto-fill stash_id error: %s" % e)
             print(json.dumps({"output": "merged '%s' into '%s'" % (name, r["target"])}))
@@ -392,22 +396,22 @@ def query_box_word(gql, endpoint, word):
 def fill_one_tag(gql, tag, box, force=False, cache=None):
     """给单个 tag 补 stash_id（与 tagMerge.js 填充ID Tab 规则一致）：每词精准实体全收集、
     排除已存在 id（endpoint+id）、append 全部写入（同 box 可多条）。
-    全量重查 force=True：该 box 已写过 id 也查询（只追加未写入实体），词缓存也绕过重查
-    （可捕捉 stash-box 新增实体/别名），查询命中仍写回缓存。
-    查询缓存：候选词命中缓存（按 box + fillNorm 词）→ 直接用实体免查询；未命中才查
-    stash-box（查询后限速），命中词并入缓存由调用方统一持久化。
-    返回 (wrote, reason)：reason=has_id（该 box 已有任意 id，force 时跳过此判定）/miss（无新增）/<写入条数>。"""
+    词级跳过：候选词在缓存且缓存实体全部已写入该 box → 该词不查询（已查写例外）；
+    词不在缓存 → 必查询（新词/未命中词都查），命中入缓存。
+    全量重查 force=True：全部词重新查询（绕过词缓存，可捕捉 stash-box 新增实体/别名），
+    查询命中仍写回缓存。
+    返回 (wrote, reason)：reason=<写入条数>/miss（有词查询但无新增）/skip（全部词已查写，无查询）。"""
     ep = box["endpoint"]
     cache = cache if cache is not None else {}
     existing = tag.get("stash_ids") or []
-    if not force and any(s.get("endpoint") == ep for s in existing):
-        return False, "has_id"
     has = {(s.get("endpoint"), s.get("stash_id")) for s in existing}
     new = []
+    queried = False
     for w in candidate_words(tag):
         key = fill_norm(w)
-        ent = cache.get(ep, {}).get(key)
-        if force or ent is None:
+        ent = None if force else cache.get(ep, {}).get(key)
+        if ent is None:
+            queried = True
             hits = query_box_word(gql, ep, w)
             time.sleep(FILL_QUERY_DELAY)
             if hits:
@@ -425,7 +429,7 @@ def fill_one_tag(gql, tag, box, force=False, cache=None):
         seen.add(e["id"])
         uniq.append(e)
     if not uniq:
-        return False, "miss"
+        return False, "miss" if queried else "skip"
     next_ids = [{"endpoint": s["endpoint"], "stash_id": s["stash_id"]} for s in existing]
     for e in uniq:
         next_ids.append({"endpoint": ep, "stash_id": e["id"]})
@@ -435,8 +439,8 @@ def fill_one_tag(gql, tag, box, force=False, cache=None):
 
 
 def fill_all(gql, box_name, force=False):
-    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）；
-    force=True 时已写过 id 的 tag 也处理（只追加未写入实体）。
+    """全量任务：全部 tag 逐个填充（进度经 Stash 任务协议上报）；已写入词的 tag
+    词级跳过（已查写/缓存例外），force=True 时全部词重查（只追加未写入实体）。
     任务级查询缓存：开始 load_fill_cache，结束时原子写回（含本次命中词）。"""
     box = resolve_box(gql, box_name)
     if not box:
@@ -455,7 +459,7 @@ def fill_all(gql, box_name, force=False):
                     wrote += 1
                     ids += int(why)
                     log("fill_id wrote '%s' <- %s (%s ids)" % (t.get("name"), box["name"], why))
-                elif why == "has_id":
+                elif why == "skip":
                     skipped += 1
                 else:
                     missed += 1

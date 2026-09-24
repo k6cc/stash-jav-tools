@@ -32,6 +32,7 @@
 - 同步硬规则：`tagMerge/tag_merge_map.json` 与 `tagMergeAuto/tag_merge_map.json` 必须逐字节一致（写入后 Copy-Item + SHA256 核对）。
 - 日文词判定示例：まんぐり返し/マングリ返し = piledriver 体位 → 并入"折体"（其源已有 `Piledriver`）；デジモ = デジタルモザイク（数字马赛克，SOD 2000 年开发）→ "有码"；屈曲位/座位为独立体位词，无干净合并目标时保留不映射。
 - 结果口径：备份 956 tag → 映射覆盖后 unmapped 455（片商码/系列标题/个人库标记按规则跳过），映射 427 条目（426 键 + 1 `_说明`）。
+- **box tag 网页 URL（2026-09 实测）**：`endpoint 去 /graphql 尾缀 + "/tags/" + remote_site_id`，三 box 同构——stashdb.org/graphql→stashdb.org/tags/<uuid>、theporndb.net/graphql→theporndb.net/tags/<uuid>（200）、javstash.org/graphql→javstash.org/tags/<数字id>（200）；stashdb 从本机直连可能超时（网络问题，非 URL 格式问题）。UI 填充ID 预览卡片的外链按钮即用此规则（`boxTagUrl`）。
 
 ## 可复用工具（tools/）
 

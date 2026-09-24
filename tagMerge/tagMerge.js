@@ -1,4 +1,4 @@
-/**
+﻿/**
  * tagMerge
  *
  * 读取插件目录下的映射库 tag_merge_map.json（经 /plugin/tagMerge/assets/ 提供），
@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.6.0";
+  var PLUGIN_VERSION = "2.7.0";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 

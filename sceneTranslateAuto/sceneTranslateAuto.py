@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.2.3: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.2.4: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
@@ -169,6 +169,15 @@ def log(msg):
         pass
     try:
         sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+def log_progress(p):
+    # Stash 任务进度协议：stderr 输出 \x01p\x02<0~1>，任务页渲染进度条
+    try:
+        p = max(0.0, min(1.0, float(p)))
+        sys.stderr.write("\x01p\x02%s\n" % ("%.3f" % p))
         sys.stderr.flush()
     except Exception:
         pass
@@ -1137,6 +1146,7 @@ def scan_all(payload):
         finally:
             with _prog_lock:
                 n = done_count[0]
+            log_progress(n / len(needed) if needed else 1.0)
             if n % 50 == 0 or n == len(needed):
                 save_cache(cache)
                 log("scan_all progress: %d/%d (ok=%d failed=%d)" % (n, len(needed), ok, failed))
@@ -1147,6 +1157,7 @@ def scan_all(payload):
         pool.submit(work_batch, b)
     pool.shutdown()
     save_cache(cache)
+    log_progress(1.0)
     log("scan_all done: needed=%d ok=%d failed=%d" % (len(needed), ok, failed))
     return {"needed": len(needed), "done": ok, "failed": failed}
 

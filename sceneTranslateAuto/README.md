@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.2.3：入队记录 title/details 快照——无关更新（如只写 stash_id）命中同快照跳过重入队，不再把翻译顺延到 ~45s；google_free 逐 q 翻译，title+details 同时翻译都能写回；目标 zh 时汉字占优（汉字数 > 假名数 且 ≥ 2）的混合标题视为已译跳过
+> v1.2.4："Full Scan & Translate" 批量任务按已处理场景数上报进度，任务页显示进度条
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 

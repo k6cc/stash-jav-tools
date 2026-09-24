@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.7.0";
+  var PLUGIN_VERSION = "2.7.1";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -110,7 +110,7 @@
       progress: null,                              // {current,total,title}
       plans: null,                                 // 当前执行计划（查询阶段构建）
       totalCandidates: 0,                          // 参与 tag 总数（未命中统计用）
-      preview: [],                                 // 预览：命中实体 >=1 的 tag 组 {box,tag,matchWords,count,entity}
+      preview: [],                                 // 预览：有精准实体的 tag 组 {tag, entities:[{id,name,box}], done, ignored}
       previewIndex: {},                            // tagId -> 预览条目（增量更新定位）
       previewStats: null,                          // 预览统计文本
       lastRun: null,                               // 上次填充摘要（状态行展示）
@@ -928,7 +928,7 @@
   // ==================== 填充ID（stash-box 批量补 stash_id） ====================
 
   var FILL_CACHE_PREFIX = "tgm.fillCache.v1.";
-  var FILL_QUERY_DELAY = 250; // 每词查询间隔（ms）——每个 box 独立限速（一般 240 次/分钟 → 250ms/词）
+  var FILL_QUERY_DELAY = 500; // 每词查询间隔（ms）——每个 box 独立限速，保守配置（120 次/分钟 → 500ms/词）
 
   function fillCacheKey(endpoint) { return FILL_CACHE_PREFIX + endpoint; }
 
@@ -1018,7 +1018,7 @@
     return out;
   }
 
-  // 构建单 box 执行计划：参与 tag（该 box 无 stash_id）、候选词反向索引、需查询词、预判冲突 tag
+  // 构建单 box 执行计划：参与 tag（该 box 无 stash_id）、候选词反向索引、需查询词、全缓存 tag 剪枝
   function buildBoxFillPlan(tags, box, ignorePrimary) {
     var cache = loadFillCache(box.endpoint);
     var candidates = tags.filter(function (t) {
@@ -1034,13 +1034,9 @@
     var preSkip = 0;
     candidates.forEach(function (t) {
       var ws = candidateWords(t, ignorePrimary);
-      // 查询前剪枝：持久缓存中该 tag 候选词的命中实体集合（去重）≥2 → 预判冲突，未缓存词不再查询
-      var entities = {};
-      ws.forEach(function (w) {
-        var c = cache[w];
-        if (c) c.entities.forEach(function (e) { if (!entities[e.id]) entities[e.id] = e; });
-      });
-      if (Object.keys(entities).length >= 2) { preSkip++; return; }
+      // 查询前剪枝：所有候选词均有持久缓存 → 该 tag 无需查询（词结果已确定）；否则只收集缺词
+      var allCached = ws.every(function (w) { return !!cache[w]; });
+      if (allCached) { preSkip++; return; }
       ws.forEach(function (w) { if (!cache[w]) queryWords[w] = true; });
     });
     return {
@@ -1054,16 +1050,6 @@
     };
   }
 
-  // 收敛判定：候选词全部命中实体集合 0（未命中）/ 1（待写）/ ≥2（冲突跳过）
-  function convergeTag(words, resolveWord) {
-    var entities = {};
-    words.forEach(function (w) {
-      (resolveWord(w) || []).forEach(function (e) { if (!entities[e.id]) entities[e.id] = e; });
-    });
-    var ids = Object.keys(entities);
-    return { count: ids.length, entity: ids.length === 1 ? entities[ids[0]] : null };
-  }
-
   async function queryBoxWord(box, word) {
     var res = await callGQL(Q_SCRAPE_TAG, {
       source: { stash_box_endpoint: box.endpoint },
@@ -1072,15 +1058,14 @@
     return filterTagHits(res && res.scrapeSingleTag, word);
   }
 
-  // 读现有 stash_ids（保留其他 endpoint），追加本 box 命中 ID，整体写（Set 语义，复刻官方 mergeTagStashIDs）
+  // 追加写入 stash_id：保留全部现有条目（同 box 可多条），endpoint+id 去重，整体写回
   async function writeTagStashId(tag, box, stashId) {
-    var existing = (tag.stash_ids || []).filter(function (s) { return s.endpoint !== box.endpoint; });
     var has = {};
-    existing.forEach(function (s) { has[s.endpoint + "\u0000" + s.stash_id] = true; });
-    if (has[box.endpoint + "\u0000" + stashId]) return; // 已存在（理论不会：参与集已排除）
-    var next = existing.concat([{ endpoint: box.endpoint, stash_id: stashId }]);
+    (tag.stash_ids || []).forEach(function (s) { has[s.endpoint + "\u0000" + s.stash_id] = true; });
+    if (has[box.endpoint + "\u0000" + stashId]) return; // 已存在
+    var next = (tag.stash_ids || []).concat([{ endpoint: box.endpoint, stash_id: stashId }]);
     await callGQL(M_TAG_UPDATE, { i: { id: tag.id, stash_ids: next } });
-    tag.stash_ids = next; // 更新本地对象：全部 box 模式下后续 box 写入必须保留本 box 新 ID
+    tag.stash_ids = next; // 更新本地对象：后续 box / 重查写入必须保留已写条目
   }
 
   // 词结果解析：持久缓存优先，其次本次会话查询命中（未命中词返回空）
@@ -1090,34 +1075,45 @@
     return plan.sessionHits[word] || [];
   }
 
-  // 预览条目增量更新：查询完成一个词后，只重算该词涉及的 tag 的收敛结果。
-  // 命中实体集合 0 = 不进预览（结果只会增加，无需删除）；>=1 = 加入/更新预览组
+  // 预览条目增量更新：查询完成一个词后，只重算该词涉及的 tag。
+  // 每词独立收集精准实体（resolvePlanWord 已由 filterTagHits 保证 name/aliases 精确匹配）；
+  // 已存在于该 tag stash_ids 的 id 视为已写入，排除；可新增 0 条 → 整组不进预览（隐藏）；
+  // 跨 box 结果按 box+id 去重并入（全部 box 模式多 plan 累加）
   function updatePreviewForTag(plan, tag, f) {
     var ws = candidateWords(tag, f.ignorePrimary);
-    var cv = convergeTag(ws, function (w) { return resolvePlanWord(plan, w); });
-    if (cv.count === 0) return;
-    var matchWords = ws.filter(function (w) { return resolvePlanWord(plan, w).length; });
+    var has = {};
+    (tag.stash_ids || []).forEach(function (s) { has[s.endpoint + "\u0000" + s.stash_id] = true; });
+    var ents = [];
+    ws.forEach(function (w) {
+      (resolvePlanWord(plan, w) || []).forEach(function (e) {
+        if (!has[plan.box.endpoint + "\u0000" + e.id]) ents.push(e);
+      });
+    });
+    if (!ents.length) return;
     var idx = f.previewIndex || (f.previewIndex = {});
     var item = idx[tag.id];
     if (!item) {
-      item = { box: plan.box, tag: tag, matchWords: matchWords, count: cv.count, entity: cv.entity };
+      item = { tag: tag, entities: [], _entIdx: {} };
       idx[tag.id] = item;
       f.preview.push(item);
-    } else {
-      item.matchWords = matchWords;
-      item.count = cv.count;
-      item.entity = cv.entity;
     }
+    ents.forEach(function (e) {
+      var k = plan.box.endpoint + "\u0000" + e.id;
+      if (!item._entIdx[k]) {
+        item._entIdx[k] = true;
+        item.entities.push({ id: e.id, name: e.name, box: plan.box });
+      }
+    });
   }
 
   function fillPreviewStatsText() {
     var f = _state.fill;
     var shown = (f.preview || []).length;
-    var writable = 0, conflict = 0;
-    (f.preview || []).forEach(function (p) { if (p.count === 1) writable++; else conflict++; });
+    var pending = 0;
+    (f.preview || []).forEach(function (p) { if (!p.ignored && !p.done) pending += (p.entities || []).length; });
     var miss = Math.max(0, (f.totalCandidates || 0) - shown);
-    return tc("匹配 " + shown + " 组 · 可写 " + writable + " · 冲突 " + conflict + " · 未命中 " + miss,
-      shown + " matched · " + writable + " writable · " + conflict + " conflict · " + miss + " miss");
+    return tc("匹配 " + shown + " 组 · 待写 " + pending + " 条 · 未命中 " + miss,
+      shown + " matched · " + pending + " to write · " + miss + " miss");
   }
 
   function computeFillPreviewStats() {
@@ -1243,33 +1239,40 @@
   async function handleFill() {
     var f = _state.fill;
     if (f.filling || f.querying || !f.queryDone) return;
-    var writable = (f.preview || []).filter(function (p) { return p.count === 1; });
-    if (!writable.length) return;
-    if (!confirm(tc("将写入 " + writable.length + " 个 tag 的 stash_id（匹配 " + f.preview.length + " 组）\n继续？",
-      "Write stash_id for " + writable.length + " tags (of " + f.preview.length + " matched groups)?\nContinue?"))) return;
+    var writable = (f.preview || []).filter(function (p) { return !p.done && !p.ignored; });
+    var total = writable.reduce(function (n, p) { return n + (p.entities || []).length; }, 0);
+    if (!total) return;
+    if (!confirm(tc("将写入 " + writable.length + " 个 tag 的 " + total + " 条 stash_id（匹配 " + f.preview.length + " 组）\n继续？",
+      "Write " + total + " stash_id(s) for " + writable.length + " tags (of " + f.preview.length + " matched groups)?\nContinue?"))) return;
 
     f.filling = true;
     f.abortFlag = false;
     f.busy = true;
     f.phase = "write";
-    f.progress = { current: 0, total: writable.length, title: tc("写入", "Writing") };
+    f.progress = { current: 0, total: total, title: tc("写入", "Writing") };
     render();
 
     var wrote = 0, fail = 0;
     for (var i = 0; i < writable.length; i++) {
       if (f.abortFlag) break;
       var item = writable[i];
-      updateProgressDOM(i, writable.length, item.box.name + " · " + item.tag.name);
-      try {
-        await writeTagStashId(item.tag, item.box, item.entity.id);
-        wrote++;
-        item.done = true; // 已写入：预览卡片变灰 + 徽章「已完成」；填充按钮随可写组清零变灰
-        addLog(tc("[写入] ", "[WRITE] ") + item.tag.name + " ← " + item.box.name + " (" + item.entity.id + ")");
-      } catch (e) {
-        fail++;
-        addLog(tc("[写入失败] ", "[WRITE FAIL] ") + item.tag.name + " — " + (e.message || String(e)));
+      var groupOk = true;
+      for (var j = 0; j < (item.entities || []).length; j++) {
+        if (f.abortFlag) { groupOk = false; break; }
+        var e = item.entities[j];
+        updateProgressDOM(wrote, total, e.box.name + " · " + item.tag.name);
+        try {
+          await writeTagStashId(item.tag, e.box, e.id);
+          wrote++;
+          addLog(tc("[写入] ", "[WRITE] ") + item.tag.name + " ← " + e.box.name + " (" + e.id + ")");
+        } catch (err) {
+          groupOk = false;
+          fail++;
+          addLog(tc("[写入失败] ", "[WRITE FAIL] ") + item.tag.name + " — " + (err.message || String(err)));
+        }
+        await sleep(60);
       }
-      await sleep(60);
+      if (groupOk) item.done = true; // 组内全部写入成功：卡片变灰 + 徽章「已完成」
     }
     var aborted = f.abortFlag;
     f.filling = false;
@@ -1326,6 +1329,10 @@
       svg.innerHTML = '<rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/>';
     } else if (name === "play") {
       svg.innerHTML = '<path d="M7 5v14l12-7z"/>';
+    } else if (name === "fill") {
+      svg.innerHTML = '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>';
+    } else if (name === "extlink") {
+      svg.innerHTML = '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/>';
     }
     return svg;
   }
@@ -1335,27 +1342,101 @@
     return el("span", "tgm-btn-icon", [svgIcon(iconName), el("span", null, label)]);
   }
 
-  // 预览条目卡片：主名 + 命中词 chips + 结果徽章（已完成=绿 / 可写入=绿 / 冲突 N 实体=黄）
-  function buildFillPreviewItem(p) {
-    var badge;
-    if (p.done) {
-      badge = el("span", "tgm-badge tgm-badge-done", tc("已完成", "Done"));
-    } else if (p.count === 1) {
-      badge = el("span", "tgm-badge tgm-badge-done", tc("可写入", "Writable"));
-    } else {
-      badge = el("span", "tgm-badge tgm-badge-new", tc("冲突 " + p.count + " 实体", "Conflict " + p.count + " entities"));
+  // box 网页链接：endpoint 去 /graphql 尾缀 + /tags/<id>（stashdb/theporndb/javstash 实测同构）
+  function boxTagUrl(box, id) {
+    var base = (box.endpoint || "").replace(/\/graphql\/?$/, "");
+    return base + "/tags/" + encodeURIComponent(id);
+  }
+
+  // 组级填充（卡片级）：写本组全部精准实体（每实体一条 stash_id，同 box 多条 append）
+  async function fillGroup(p) {
+    var f = _state.fill;
+    if (f.filling || p.done || p.ignored) return;
+    var ok = 0, fail = 0;
+    for (var i = 0; i < (p.entities || []).length; i++) {
+      var e = p.entities[i];
+      try {
+        await writeTagStashId(p.tag, e.box, e.id);
+        ok++;
+      } catch (err) {
+        fail++;
+        addLog(tc("[写入失败] ", "[WRITE FAIL] ") + p.tag.name + " — " + (err.message || String(err)));
+      }
     }
-    var card = el("div", "tgm-edit-item" + (p.done ? " tgm-group-done" : ""), [
-      el("div", "tgm-edit-item-head", [
-        el("span", "tgm-edit-item-target", p.tag.name, { title: p.tag.name }),
-        el("div", "tgm-edit-item-side", [badge]),
-      ]),
-    ]);
-    var srcWrap = el("div", "tgm-edit-item-sources");
-    (p.matchWords || []).forEach(function (w) {
-      srcWrap.appendChild(el("span", "tgm-edit-src", w, { title: w }));
+    if (ok) {
+      p.done = true;
+      addLog(tc("[填充] ", "[FILL] ") + p.tag.name + " ← " + ok + tc(" 条", " id(s)")
+        + (fail ? "（" + fail + tc(" 条失败", " failed") + "）" : ""));
+    }
+    render();
+  }
+
+  // 忽略该组：不参与填充统计与「填充全部」，卡片淡化（单次会话有效，重查即恢复）
+  function ignoreFillItem(p) {
+    p.ignored = true;
+    render();
+  }
+
+  // 恢复已忽略组：重新参与填充
+  function restoreFillItem(p) {
+    p.ignored = false;
+    render();
+  }
+
+  // 预览条目卡片：head（组名 + ·N 个别称 + 徽章 + 填充 + 忽略/恢复）+ 实体按钮行
+  // 徽章「新增 N 条」= 该组可新增实体数（已存在 id 已排除）；实体按钮按 box 分组
+  // （javstash / stashdb / theporndb，固定顺序），组间 "/"、组内空格间隔；
+  // 深灰实心按钮只包实体名（无图标），点击新窗口跳该实体页；窄屏自动换行
+  // 已完成/已忽略只留徽章（已忽略 + 恢复按钮），实体行隐藏
+  function buildFillPreviewItem(p) {
+    var head = el("div", "tgm-edit-item-head");
+    var aliasN = (p.tag.aliases || []).length;
+    head.appendChild(el("span", "tgm-edit-item-target",
+      [p.tag.name, aliasN ? el("span", "tgm-fill-alias-n", " · " + aliasN + tc(" 个别称", " aliases")) : null],
+      { title: p.tag.name }));
+    var badge = null, actions = [];
+    if (p.ignored) {
+      badge = el("span", "tgm-badge tgm-badge-state", tc("已忽略", "Ignored"));
+      actions.push(el("button", "tgm-btn tgm-btn-muted tgm-btn-sm", tc("恢复", "Restore"), {
+        onclick: function () { restoreFillItem(p); },
+        title: tc("恢复该组，重新参与填充", "Restore this group to the fill pool"),
+      }));
+    } else if (p.done) {
+      badge = el("span", "tgm-badge tgm-badge-done", tc("已完成", "Done"));
+    } else {
+      // 徽章 = 该 tag 现有 stash_id 总数（跨 endpoint；可新增条数由实体按钮一眼可数，不重复显示）
+      var existN = (p.tag.stash_ids || []).length;
+      if (existN > 0) badge = el("span", "tgm-badge tgm-badge-done", tc("现有 " + existN + " 个 ID", existN + " IDs"));
+      actions.push(el("button", "tgm-btn tgm-btn-primary tgm-btn-sm", tc("填充", "Fill"), {
+        onclick: function () { fillGroup(p); },
+        disabled: !!_state.fill.filling,
+        title: tc("写入本组全部精准实体", "Write all precisely matched entities of this group"),
+      }));
+      actions.push(el("button", "tgm-btn tgm-btn-muted tgm-btn-sm", tc("忽略", "Ignore"), {
+        onclick: function () { ignoreFillItem(p); },
+        title: tc("忽略该组，不参与填充", "Ignore this group; skip when filling"),
+      }));
+    }
+    head.appendChild(el("div", "tgm-edit-item-side", [badge].concat(actions)));
+    var card = el("div", "tgm-edit-item" + ((p.done || p.ignored) ? " tgm-group-done" : ""), [head]);
+    if (p.done || p.ignored) return card;
+    var eb = el("div", "tgm-fill-entbar");
+    var groups = [];
+    (_state.fill.boxes || []).forEach(function (box) {
+      var es = (p.entities || []).filter(function (e) { return e.box === box; });
+      if (es.length) groups.push(es);
     });
-    card.appendChild(srcWrap);
+    groups.forEach(function (es, gi) {
+      if (gi) eb.appendChild(el("span", "tgm-fill-sep", "/"));
+      es.forEach(function (e) {
+        eb.appendChild(el("a", "tgm-btn tgm-btn-muted tgm-btn-sm tgm-btn-link tgm-fill-ent", e.name, {
+          href: boxTagUrl(e.box, e.id), target: "_blank", rel: "noopener noreferrer",
+          title: tc("在 " + e.box.name + " 查看「" + e.name + "」",
+            "View \"" + e.name + "\" on " + e.box.name),
+        }));
+      });
+    });
+    card.appendChild(eb);
     return card;
   }
 
@@ -1419,40 +1500,34 @@
         "Off by default: query primary name + aliases; when on, match by aliases only (tags without aliases fall back to the primary name)"),
       function (on) { f.ignorePrimary = on; render(); }, f.busy));
 
-    // 查询按钮状态机：空闲 查询（绿） → 查询中 暂停（黄+激活白条） → 暂停 继续（绿）
-    var queryBtn;
+    // 主按钮 4 态：空闲 查询ID（绿）→ 查询中 暂停（黄+激活白条）→ 暂停 继续查询（绿）→ 完成 填充全部（绿）
+    // 暂停态不提供「填充全部」——想先填已匹配的单组用卡片「填充」按钮
+    var hasWritable = (f.preview || []).some(function (p) { return !p.done && !p.ignored; });
+    var mainBtn;
     if (f.filling) {
-      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询", "Query"), "search")], { disabled: true });
+      mainBtn = el("button", "tgm-btn tgm-btn-primary", tc("填充中...", "Filling..."), { disabled: true });
     } else if (f.querying && !f.queryPaused) {
-      queryBtn = el("button", "tgm-btn tgm-btn-warn tgm-btn-warn-on", [iconBtn(tc("暂停", "Pause"), "pause")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-warn tgm-btn-warn-on", [iconBtn(tc("暂停", "Pause"), "pause")], {
         onclick: function () { f.queryPaused = true; render(); },
         title: tc("暂停查询，下方按组列出已匹配结果", "Pause querying and list matches by group"),
       });
     } else if (f.querying && f.queryPaused) {
-      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("继续", "Resume"), "play")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("继续查询", "Resume Query"), "play")], {
         onclick: function () { f.queryPaused = false; render(); },
         title: tc("继续查询", "Resume querying"),
       });
+    } else if (f.queryDone && hasWritable) {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("填充全部", "Fill All"), "fill")], {
+        onclick: function () { handleFill(); },
+        title: tc("写入全部待新增实体的 stash_id", "Write stash_id for all pending entities"),
+      });
     } else {
-      queryBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询", "Query"), "search")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询ID", "Query IDs"), "search")], {
         onclick: function () { handleQuery(); },
         title: tc("按候选词查询所选 stash-box，下方列出匹配结果", "Query the selected stash-box by candidate words and list matches below"),
       });
     }
-    actions.appendChild(queryBtn);
-
-    // 填充按钮：查询进行中不可点；暂停/完成且有未写入的可写结果才可点（否则灰色）
-    var hasWritable = (f.preview || []).some(function (p) { return p.count === 1 && !p.done; });
-    var fillDisabled = (f.querying && !f.queryPaused) || !hasWritable;
-    var fillTitle = f.filling ? tc("写入中", "Writing...")
-      : (f.querying && !f.queryPaused) ? tc("查询进行中", "Query in progress")
-      : !hasWritable ? tc("无唯一可写入结果", "No uniquely matchable result")
-      : tc("写入查询结果中可唯一确定的 stash_id", "Write stash_id for uniquely matched tags");
-    actions.appendChild(el("button", "tgm-btn tgm-btn-primary", tc("填充", "Fill"), {
-      onclick: function () { handleFill(); },
-      disabled: fillDisabled,
-      title: fillTitle,
-    }));
+    actions.appendChild(mainBtn);
 
     cfg.appendChild(el("div", "tgm-fill-config", [
       el("div", "tgm-fill-boxrow", [select]),

@@ -906,6 +906,42 @@
   min-width: 0 !important;
 }
 
+/* box 链接按钮（a 标签复用 tgm-btn 系实心灰小号）：去除默认下划线 */
+.tgm-btn-link {
+  text-decoration: none !important;
+}
+
+/* 实体跳转 chip 行：深灰实心按钮（实体名 + ↗），跨 box 结果用 "/" 分隔，窄屏自动换行 */
+/* 组名后的辅助小字（别名数）：performerMerge 小号灰字风格，弱化不抢主名 */
+.tgm-fill-alias-n {
+  font-size: 11px !important;
+  font-weight: normal !important;
+  color: #999 !important;
+}
+
+.tgm-fill-entbar {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 4px 6px !important;
+  margin-top: 8px !important;
+  min-width: 0 !important;
+}
+
+.tgm-fill-sep {
+  color: #888 !important;
+  font-size: 11px !important;
+  flex-shrink: 0 !important;
+}
+
+.tgm-fill-ent {
+  max-width: 240px !important;
+  flex-shrink: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
 /* 按钮内图标行：SVG + 文字水平居中（tgm-btn 内嵌使用）；不设 line-height:1 —
    文字继承按钮自然行高，保证与纯文字按钮（填充/中止）同高 */
 .tgm-btn-icon {

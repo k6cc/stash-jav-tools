@@ -14,7 +14,11 @@ stash-testkit/
 └── tests/
     ├── sceneTranslateAuto/  # 插件特定验证脚本（单测 / 回归 / 端到端）
     ├── javstashAutofill/    # v1.1.3 封面竞态 + v1.2.0 演员解析/BD 剥离单测、E2E 与 javstash 探测工具
-    └── nfoSceneParser/      # tagCreate 失败兜底单测 + 幽灵 id 边界探测 + 与 javstashAutofill+ 交叉无循环验证
+    ├── nfoSceneParser/      # tagCreate 失败兜底单测 + 幽灵 id 边界探测 + 与 javstashAutofill+ 交叉无循环验证
+    └── tagMerge/            # tagMerge 映射维护：经验注意 + 可复用工具 + 审计数据
+        ├── NOTES.md         # 经验注意：本地实例接入/认证、外部刮削源状态、tagMerge 映射专项经验
+        ├── tools/           # 可复用工具：tagmap_norm（归一化）/ tagmap_verify（校验）/ tagmap_scrape_defs（刮定义）
+        └── audit/           # 审计数据（532 定义抓取 / 分类 / 各轮 unmapped 清单）
 ```
 
 ## 快速开始

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.2.3: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.2.4: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -283,7 +283,7 @@ def handle_hook(gql, lang, args, settings):
                         if dt:
                             cache = load_fill_cache()
                             try:
-                                ok, why = fill_one_tag(gql, dt, box, bool(args.get("ignorePrimary", False)), cache)
+                                ok, why = fill_one_tag(gql, dt, box, bool(settings.get("forceQuery", False)), cache)
                             finally:
                                 save_fill_cache(cache)
                             if ok:
@@ -360,13 +360,10 @@ def resolve_box(gql, want):
     return sorted(boxes, key=rank)[0]
 
 
-def candidate_words(t, ignore_primary):
-    """候选词：忽略主名开=只别名（无别名以主名兜底）；关（默认）=主名+别名。fillNorm 去重。"""
-    names = list(t.get("aliases") or []) if ignore_primary else list(t.get("aliases") or []) + [t.get("name")]
-    if ignore_primary and not names:
-        names = [t.get("name")]
+def candidate_words(t):
+    """候选词：主名 + 别名。fillNorm 去重。"""
     seen, out = set(), []
-    for w in names:
+    for w in list(t.get("aliases") or []) + [t.get("name")]:
         if not w: continue
         n = fill_norm(w)
         if n and n not in seen:
@@ -392,23 +389,25 @@ def query_box_word(gql, endpoint, word):
     return list(hits.values())
 
 
-def fill_one_tag(gql, tag, box, ignore_primary, cache=None):
+def fill_one_tag(gql, tag, box, force=False, cache=None):
     """给单个 tag 补 stash_id（与 tagMerge.js 填充ID Tab 规则一致）：每词精准实体全收集、
     排除已存在 id（endpoint+id）、append 全部写入（同 box 可多条）。
+    全量重查 force=True：该 box 已写过 id 也查询（只追加未写入实体），词缓存也绕过重查
+    （可捕捉 stash-box 新增实体/别名），查询命中仍写回缓存。
     查询缓存：候选词命中缓存（按 box + fillNorm 词）→ 直接用实体免查询；未命中才查
     stash-box（查询后限速），命中词并入缓存由调用方统一持久化。
-    返回 (wrote, reason)：reason=has_id（该 box 已有任意 id）/miss（无新增）/<写入条数>。"""
+    返回 (wrote, reason)：reason=has_id（该 box 已有任意 id，force 时跳过此判定）/miss（无新增）/<写入条数>。"""
     ep = box["endpoint"]
     cache = cache if cache is not None else {}
     existing = tag.get("stash_ids") or []
-    if any(s.get("endpoint") == ep for s in existing):
+    if not force and any(s.get("endpoint") == ep for s in existing):
         return False, "has_id"
     has = {(s.get("endpoint"), s.get("stash_id")) for s in existing}
     new = []
-    for w in candidate_words(tag, ignore_primary):
+    for w in candidate_words(tag):
         key = fill_norm(w)
         ent = cache.get(ep, {}).get(key)
-        if ent is None:
+        if force or ent is None:
             hits = query_box_word(gql, ep, w)
             time.sleep(FILL_QUERY_DELAY)
             if hits:
@@ -435,8 +434,9 @@ def fill_one_tag(gql, tag, box, ignore_primary, cache=None):
     return True, str(len(uniq))
 
 
-def fill_all(gql, box_name, ignore_primary):
-    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）。
+def fill_all(gql, box_name, force=False):
+    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）；
+    force=True 时已写过 id 的 tag 也处理（只追加未写入实体）。
     任务级查询缓存：开始 load_fill_cache，结束时原子写回（含本次命中词）。"""
     box = resolve_box(gql, box_name)
     if not box:
@@ -450,7 +450,7 @@ def fill_all(gql, box_name, ignore_primary):
         for done, t in enumerate(tags, 1):
             log_progress(done / float(total) if total else 1.0)
             try:
-                ok, why = fill_one_tag(gql, t, box, ignore_primary, cache)
+                ok, why = fill_one_tag(gql, t, box, force, cache)
                 if ok:
                     wrote += 1
                     ids += int(why)
@@ -554,7 +554,7 @@ def main():
         try:
             # stashBox：任务参数优先，其次插件页设置，默认 javstash
             box_name = args.get("stashBox") or settings.get("stashBox") or "javstash"
-            r = fill_all(gql, box_name, bool(args.get("ignorePrimary", False)))
+            r = fill_all(gql, box_name, bool(settings.get("forceQuery", False)))
             log("fill_id done: %s" % r)
             print(json.dumps({"output": r}))
         except Exception as e:

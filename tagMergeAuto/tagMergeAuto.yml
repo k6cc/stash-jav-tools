@@ -1,6 +1,6 @@
 name: Tag Merge Auto
 description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus manual full-scan and stash_id fill tasks.
-version: 1.2.3
+version: 1.2.4
 url: https://discourse.stashapp.cc/t/tag-merge-auto/16130
 errLog: info
 exec:
@@ -16,6 +16,10 @@ settings:
     displayName: Stash-box instance
     description: Stash-box instance for filling stash_id (e.g. javstash); matched by name. Default javstash.
     type: STRING
+  forceQuery:
+    displayName: Force re-query
+    description: When ON, fill re-queries tags that already have ids in this box and bypasses the query cache (appends missing entities only). Default OFF.
+    type: BOOLEAN
 hooks:
   - name: tag_create_auto
     description: Merge a newly created tag immediately if it matches the mapping, then auto-fill its stash_id from stash-box
@@ -31,4 +35,3 @@ tasks:
     defaultArgs:
       mode: fill_id
       stashBox: javstash
-      ignorePrimary: false

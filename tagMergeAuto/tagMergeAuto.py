@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tag Merge Auto v1.2.2: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
+Tag Merge Auto v1.2.3: 后台自动合并 tag（tagMerge 的无 UI 版本，零网络、零设置，由 tagMergeBackend 更名）。
 
 - 钩子 Tag.Create.Post：新 tag 创建时立即查本地映射库 tag_merge_map.json，
   命中（归一化精确匹配）则合并进目标 tag；目标不存在时先创建再合并。
@@ -81,7 +81,7 @@ Q_BOXES = "query { configuration { general { stashBoxes { name endpoint } } } }"
 Q_SCRAPE = ("query($source: ScraperSourceInput!, $input: ScrapeSingleTagInput!){"
             " scrapeSingleTag(source:$source, input:$input){ name alias_list remote_site_id } }")
 Q_TAG_FILL_ONE = "query($id: ID!){ findTag(id:$id){ id name aliases stash_ids{ endpoint stash_id } } }"
-FILL_QUERY_DELAY = 0.25  # 每词查询间隔（≈240 次/分，公共 box 限速）
+FILL_QUERY_DELAY = 0.5  # 每词查询间隔（≈120 次/分，保守限速，与 tagMerge.js 一致）
 
 # ---------- 归一化 / 映射库 ----------
 def nfc(s): return unicodedata.normalize("NFKC", (s or "").strip())
@@ -348,27 +348,36 @@ def query_box_word(gql, endpoint, word):
 
 
 def fill_one_tag(gql, tag, box, ignore_primary):
-    """给单个 tag 补 stash_id。返回 (wrote, reason)：reason=has_id/miss/conflict:N/<stash_id>。"""
+    """给单个 tag 补 stash_id（与 tagMerge.js 填充ID Tab 规则一致）：每词精准实体全收集、
+    排除已存在 id（endpoint+id）、append 全部写入（同 box 可多条）。
+    返回 (wrote, reason)：reason=has_id（该 box 已有任意 id）/miss（无新增）/<写入条数>。"""
     ep = box["endpoint"]
     existing = tag.get("stash_ids") or []
     if any(s.get("endpoint") == ep for s in existing):
         return False, "has_id"
-    entities = {}
+    has = {(s.get("endpoint"), s.get("stash_id")) for s in existing}
+    new = []
     for w in candidate_words(tag, ignore_primary):
         for e in query_box_word(gql, ep, w):
-            entities.setdefault(e["id"], e)
+            if (ep, e["id"]) not in has:
+                new.append(e)
         time.sleep(FILL_QUERY_DELAY)
-    ids = list(entities.keys())
-    if not ids:
+    # 跨词去重（同 box 实体 id 唯一）
+    seen = set()
+    uniq = []
+    for e in new:
+        if e["id"] in seen:
+            continue
+        seen.add(e["id"])
+        uniq.append(e)
+    if not uniq:
         return False, "miss"
-    if len(ids) > 1:
-        return False, "conflict:%d" % len(ids)
-    sid = ids[0]
     next_ids = [{"endpoint": s["endpoint"], "stash_id": s["stash_id"]} for s in existing]
-    next_ids.append({"endpoint": ep, "stash_id": sid})
+    for e in uniq:
+        next_ids.append({"endpoint": ep, "stash_id": e["id"]})
     gql(M_TAG_UPDATE, {"i": {"id": tag["id"], "stash_ids": next_ids}})
     tag["stash_ids"] = next_ids
-    return True, sid
+    return True, str(len(uniq))
 
 
 def fill_all(gql, box_name, ignore_primary):
@@ -378,7 +387,7 @@ def fill_all(gql, box_name, ignore_primary):
         return {"wrote": 0, "failed": 0, "note": "no stash-box configured"}
     tags = (((gql(Q_TAGS_FILL) or {}).get("findTags") or {}).get("tags")) or []
     total = len(tags)
-    wrote = failed = conflicts = missed = skipped = 0
+    wrote = failed = missed = skipped = ids = 0
     log_info("fill_id start: %d tags, box=%s" % (total, box["name"]))
     for done, t in enumerate(tags, 1):
         log_progress(done / float(total) if total else 1.0)
@@ -386,22 +395,21 @@ def fill_all(gql, box_name, ignore_primary):
             ok, why = fill_one_tag(gql, t, box, ignore_primary)
             if ok:
                 wrote += 1
-                log("fill_id wrote '%s' <- %s (%s)" % (t.get("name"), box["name"], why))
+                ids += int(why)
+                log("fill_id wrote '%s' <- %s (%s ids)" % (t.get("name"), box["name"], why))
             elif why == "has_id":
                 skipped += 1
-            elif why.startswith("conflict"):
-                conflicts += 1
             else:
                 missed += 1
         except Exception as e:
             failed += 1
             log("fill_id tag '%s' error: %s" % (t.get("name"), e))
         if done % 20 == 0 or done == total:
-            log_info("fill_id: %d/%d (wrote %d, conflicts %d, missed %d, failed %d)"
-                     % (done, total, wrote, conflicts, missed, failed))
+            log_info("fill_id: %d/%d (wrote %d tags / %d ids, missed %d, failed %d)"
+                     % (done, total, wrote, ids, missed, failed))
     log_progress(1.0)
-    return {"box": box["name"], "wrote": wrote, "skipped": skipped,
-            "conflicts": conflicts, "missed": missed, "failed": failed}
+    return {"box": box["name"], "wrote": wrote, "ids": ids, "skipped": skipped,
+            "missed": missed, "failed": failed}
 
 
 # ---------- 任务：全量扫描合并 ----------

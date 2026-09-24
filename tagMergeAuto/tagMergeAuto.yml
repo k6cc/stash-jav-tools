@@ -1,6 +1,6 @@
 name: Tag Merge Auto
 description: Auto-merge new tags into canonical Chinese tags from the local tag_merge_map.json. Hook on tag create plus manual full-scan and stash_id fill tasks.
-version: 1.2.2
+version: 1.2.3
 url: https://discourse.stashapp.cc/t/tag-merge-auto/16130
 errLog: info
 exec:
@@ -14,7 +14,7 @@ settings:
     type: BOOLEAN
   stashBox:
     displayName: Stash-box instance
-    description: Stash-box instance name used for filling stash_id (e.g. javstash). Matched by name; falls back to JAVStash -> StashDB -> ThePornDB order. Default javstash.
+    description: Stash-box instance for filling stash_id (e.g. javstash); matched by name. Default javstash.
     type: STRING
 hooks:
   - name: tag_create_auto
@@ -23,11 +23,11 @@ hooks:
       - Tag.Create.Post
 tasks:
   - name: "Full Scan & Merge"
-    description: "Scan all tags against tag_merge_map.json and merge matches (for pre-existing tags)"
+    description: "Scan all tags against tag_merge_map.json and merge matches (custom maps take priority)"
     defaultArgs:
       mode: scan_all
   - name: "Fill Stash IDs"
-    description: "Batch-fill stash_id for existing tags from stash-box (match by name + aliases, skip existing, auto-skip conflicts)"
+    description: "Batch-fill stash_id from stash-box (match by name + aliases, skip existing)"
     defaultArgs:
       mode: fill_id
       stashBox: javstash

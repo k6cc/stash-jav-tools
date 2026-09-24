@@ -11,6 +11,9 @@ javstash_autofill_plus.log
 tag_merge_map.custom.json
 tag_merge_map_*.custom.json
 
+# 填充查询缓存（运行时产物，升级插件保留；不随仓库发布）
+tagMergeAuto/fill_cache.json
+
 # 插件运行时状态目录（pending 队列 / 缓存 / 进度 / dead-letter）
 auto_state/
 

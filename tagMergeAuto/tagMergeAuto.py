@@ -8,7 +8,9 @@ Tag Merge Auto v1.2.3: 后台自动合并 tag（tagMerge 的无 UI 版本，零�
 - 任务 "Full Scan & Merge"（任务列表页手动触发）：全库扫描，把存量源 tag
   合并进目标（首次安装后处理映射发布前已存在的源 tag，之后日常靠钩子闭环）。
 - 任务 "Fill Stash IDs"：按候选词（主名+别名）从 stash-box 为存量 tag 批量补 stash_id
-  （复用 tagMerge UI 版填充ID 规则：fillNorm 不删分隔符、命中实体 1=写入 ≥2=冲突跳过）。
+  （复用 tagMerge UI 版填充ID 规则：fillNorm 不删分隔符、每词精准实体全收集、append 多写）。
+- 填充查询缓存：命中词写入插件目录 fill_cache.json（按 box 隔离），任务/钩子下次跳过已命中词；
+  未命中词跨会话重查（可捕捉 stash-box 新增实体）。
 - 钩子合并新 tag 后，若 autoFillStashId 开（默认），自动给目标 tag 补 stash_id。
 
 与 tagMerge UI 版解析/执行逻辑一致：归一化精确匹配、防链式、幂等、
@@ -25,6 +27,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag_merge_map.json")
 LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag_merge_auto.log")
+FILL_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fill_cache.json")
 
 # 归一化规则与 tagMerge.js 一致：NFKC（全角→半角）、小写、去空白与分隔符
 SEP_RE = re.compile(r"[\s\u3000·、，,。/\-—_・]+")
@@ -278,7 +281,11 @@ def handle_hook(gql, lang, args, settings):
                     if box:
                         dt = ((gql(Q_TAG_FILL_ONE, {"id": r["dest_id"]}) or {}).get("findTag") or {})
                         if dt:
-                            ok, why = fill_one_tag(gql, dt, box, bool(args.get("ignorePrimary", False)))
+                            cache = load_fill_cache()
+                            try:
+                                ok, why = fill_one_tag(gql, dt, box, bool(args.get("ignorePrimary", False)), cache)
+                            finally:
+                                save_fill_cache(cache)
                             if ok:
                                 log("hook auto-filled stash_id '%s' <- %s (%s)" % (dt.get("name"), box["name"], why))
                 except Exception as e:
@@ -294,6 +301,44 @@ def handle_hook(gql, lang, args, settings):
 def fill_norm(s):
     """fillNorm：NFKC + 小写 + 连续空格归一 + trim；不删分隔符（3P/ 与 3P·4P 是不同实体）。"""
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", (s or "")).lower()).strip()
+
+
+def load_fill_cache():
+    """读取命中词缓存 {endpoint: {norm_word: {"entities": [{id,name}], "ts": t}}}。
+    只保留结构合法的命中词（entities 非空且每项含 id）；"_" 开头键（说明/防御）跳过。
+    未命中词不入缓存 → 跨会话重查（与 tagMerge.js localStorage 缓存语义一致）。"""
+    try:
+        with open(FILL_CACHE_FILE, encoding="utf-8") as f:
+            raw = json.load(f) or {}
+    except Exception:
+        return {}
+    out = {}
+    for ep, words in raw.items():
+        if not isinstance(ep, str) or ep.startswith("_") or not isinstance(words, dict):
+            continue
+        wd = {}
+        for k, v in words.items():
+            if not isinstance(k, str) or not k or k.startswith("_") or not isinstance(v, dict):
+                continue
+            ents = v.get("entities")
+            if isinstance(ents, list) and ents and all(isinstance(e, dict) and e.get("id") for e in ents):
+                wd[k] = {"entities": ents, "ts": v.get("ts") or 0}
+        if wd:
+            out[ep] = wd
+    return out
+
+
+def save_fill_cache(cache):
+    """原子写缓存（tmp + os.replace），失败静默（缓存是优化，不阻塞任务/钩子）。"""
+    if not cache:
+        return
+    try:
+        tmp = FILL_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        os.replace(tmp, FILL_CACHE_FILE)
+    except Exception as e:
+        log("fill cache save error: %s" % e)
 
 
 def resolve_box(gql, want):
@@ -347,21 +392,31 @@ def query_box_word(gql, endpoint, word):
     return list(hits.values())
 
 
-def fill_one_tag(gql, tag, box, ignore_primary):
+def fill_one_tag(gql, tag, box, ignore_primary, cache=None):
     """给单个 tag 补 stash_id（与 tagMerge.js 填充ID Tab 规则一致）：每词精准实体全收集、
     排除已存在 id（endpoint+id）、append 全部写入（同 box 可多条）。
+    查询缓存：候选词命中缓存（按 box + fillNorm 词）→ 直接用实体免查询；未命中才查
+    stash-box（查询后限速），命中词并入缓存由调用方统一持久化。
     返回 (wrote, reason)：reason=has_id（该 box 已有任意 id）/miss（无新增）/<写入条数>。"""
     ep = box["endpoint"]
+    cache = cache if cache is not None else {}
     existing = tag.get("stash_ids") or []
     if any(s.get("endpoint") == ep for s in existing):
         return False, "has_id"
     has = {(s.get("endpoint"), s.get("stash_id")) for s in existing}
     new = []
     for w in candidate_words(tag, ignore_primary):
-        for e in query_box_word(gql, ep, w):
+        key = fill_norm(w)
+        ent = cache.get(ep, {}).get(key)
+        if ent is None:
+            hits = query_box_word(gql, ep, w)
+            time.sleep(FILL_QUERY_DELAY)
+            if hits:
+                cache.setdefault(ep, {})[key] = {"entities": hits, "ts": time.time()}
+            ent = {"entities": hits}
+        for e in ent["entities"]:
             if (ep, e["id"]) not in has:
                 new.append(e)
-        time.sleep(FILL_QUERY_DELAY)
     # 跨词去重（同 box 实体 id 唯一）
     seen = set()
     uniq = []
@@ -381,32 +436,37 @@ def fill_one_tag(gql, tag, box, ignore_primary):
 
 
 def fill_all(gql, box_name, ignore_primary):
-    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）。"""
+    """全量任务：所有该 box 无 stash_id 的 tag 逐个填充（进度经 Stash 任务协议上报）。
+    任务级查询缓存：开始 load_fill_cache，结束时原子写回（含本次命中词）。"""
     box = resolve_box(gql, box_name)
     if not box:
         return {"wrote": 0, "failed": 0, "note": "no stash-box configured"}
+    cache = load_fill_cache()
     tags = (((gql(Q_TAGS_FILL) or {}).get("findTags") or {}).get("tags")) or []
     total = len(tags)
     wrote = failed = missed = skipped = ids = 0
     log_info("fill_id start: %d tags, box=%s" % (total, box["name"]))
-    for done, t in enumerate(tags, 1):
-        log_progress(done / float(total) if total else 1.0)
-        try:
-            ok, why = fill_one_tag(gql, t, box, ignore_primary)
-            if ok:
-                wrote += 1
-                ids += int(why)
-                log("fill_id wrote '%s' <- %s (%s ids)" % (t.get("name"), box["name"], why))
-            elif why == "has_id":
-                skipped += 1
-            else:
-                missed += 1
-        except Exception as e:
-            failed += 1
-            log("fill_id tag '%s' error: %s" % (t.get("name"), e))
-        if done % 20 == 0 or done == total:
-            log_info("fill_id: %d/%d (wrote %d tags / %d ids, missed %d, failed %d)"
-                     % (done, total, wrote, ids, missed, failed))
+    try:
+        for done, t in enumerate(tags, 1):
+            log_progress(done / float(total) if total else 1.0)
+            try:
+                ok, why = fill_one_tag(gql, t, box, ignore_primary, cache)
+                if ok:
+                    wrote += 1
+                    ids += int(why)
+                    log("fill_id wrote '%s' <- %s (%s ids)" % (t.get("name"), box["name"], why))
+                elif why == "has_id":
+                    skipped += 1
+                else:
+                    missed += 1
+            except Exception as e:
+                failed += 1
+                log("fill_id tag '%s' error: %s" % (t.get("name"), e))
+            if done % 20 == 0 or done == total:
+                log_info("fill_id: %d/%d (wrote %d tags / %d ids, missed %d, failed %d)"
+                         % (done, total, wrote, ids, missed, failed))
+    finally:
+        save_fill_cache(cache)
     log_progress(1.0)
     return {"box": box["name"], "wrote": wrote, "ids": ids, "skipped": skipped,
             "missed": missed, "failed": failed}

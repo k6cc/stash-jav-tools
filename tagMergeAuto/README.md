@@ -1,6 +1,6 @@
 # tagMergeAuto
 
-> v1.2.3：填充逻辑与 tagMerge v2.7.1 同源——每词精准匹配、append 多写（同 box 可多条）、排除已存在 id（冲突判定移除）；查询限速降至约 120 次/分钟
+> v1.2.3：填充逻辑与 tagMerge v2.7.1 同源——每词精准匹配、append 多写（同 box 可多条）、排除已存在 id（冲突判定移除）；新增查询缓存（fill_cache.json，命中词跳过重查）；查询限速降至约 120 次/分钟
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：按优先级链读取插件目录的映射库（`tag_merge_map_<界面语言>.custom.json` → `tag_merge_map.custom.json` → `tag_merge_map_<界面语言>.json` → `tag_merge_map.json`），把名称相似的 tags（英文/日文/中文变体）自动合并为规范中文 tag。
 
@@ -58,6 +58,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 - **精准匹配**：每词独立，查询词需命中实体 name 或 aliases（归一化后）；近似结果不写
 - **写入**：每词精准实体全收集、排除已存在 id（endpoint+id）、append 全部写入——同一 box 可持有**多条** stash_id；该 box 已有任意 id 的 tag 直接跳过（has_id）；无新增跳过（miss）
 - **stash-box 选择**：任务参数 `stashBox` 默认 `javstash`，按实例名小写包含匹配；匹配不到按品牌优先级 JAVStash → StashDB → ThePornDB 选第一个
+- **查询缓存**：命中词写入插件目录 `fill_cache.json`（按 endpoint 隔离），下次任务/钩子跳过已命中词（免查询免限速）；未命中词跨会话重查（可捕捉 stash-box 新增实体）；运行时产物不入库、升级插件保留
 - **限速**：每词查询间隔 0.5s（≈120 次/分，公共 box 限流）；可重复执行（已写/未命中不重复写）
 - **钩子自动化**：插件页「设置 → 插件 → Tag Merge Auto」中 `auto-fill stash_id` 开关（默认开）控制钩子合并后是否自动补 stash_id；新 tag 合并后只查一次、失败不阻塞合并
 

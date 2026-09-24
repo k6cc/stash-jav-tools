@@ -11,9 +11,9 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [studioTools](./studioTools/) | 1.5.9 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash |
 | [JavStashLinker](./JavStashLinker/) | 1.5.9 | Python + UI | 批量匹配 JAVStash 演员 ID：场景反推 + 名称搜索 + 手动搜索（证据评级，自动补图补信息） |
 | [performerMerge](./performerMerge/) | 1.6.5 | 纯 UI | 重名演员检测与合并（证据分级连组 + 树级冲突检查），附带短名清理与别名修复 |
-| [tagMerge](./tagMerge/) | 2.7.1 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出）；填充ID 分页精准匹配批量补写 stash_id（候选实体按 box 分组跳转，同 box 可多写） |
+| [tagMerge](./tagMerge/) | 2.7.2 | 纯 UI | 按可编辑映射库合并相似 tags 为规范中文 tag（源名保留为别名，映射可编辑导出）；填充ID 分页精准匹配批量补写 stash_id（候选实体按 box 分组跳转，同 box 可多写，可全量重查） |
 | [studioToolsAuto](./studioToolsAuto/) | 1.1.3 | 纯后台 | 工作室创建时自动从 Stash-box 实例拉取资料，归一化精确匹配后合并/补全（零 UI 注入，可开多源补齐） |
-| [tagMergeAuto](./tagMergeAuto/) | 1.2.3 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描；Fill Stash IDs 任务与钩子自动补 stash_id（与 tagMerge 填充ID 规则同源） |
+| [tagMergeAuto](./tagMergeAuto/) | 1.2.4 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描；Fill Stash IDs 任务与钩子自动补 stash_id（与 tagMerge 填充ID 规则同源，可全量重查） |
 | [sceneTranslateAuto](./sceneTranslateAuto/) | 1.2.4 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
 | [javstashAutofill+](./javstashAutofill+/) | 1.3.0 | 纯后台 | 演员带 stash_id 反查复用/直抓补全，无 id 走 0.9 名称匹配（防重复）；新场景按 oshash 补空白字段+stash_id，番号全失败后剥离 BD 重试；手动任务批量回填 |
 | [oStatsI18n](./oStatsI18n/) | 1.0.0 | Python + UI | 统计页 O 统计与观看时长追踪（O Stats 多语言重构，中文/英文跟随 Stash 界面语言） |

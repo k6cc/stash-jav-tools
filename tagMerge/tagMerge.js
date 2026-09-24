@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.7.1";
+  var PLUGIN_VERSION = "2.7.2";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -99,7 +99,7 @@
       boxes: null,                                 // [{name, endpoint}]
       boxIndex: 0,                                 // 下拉选中的 box 下标
       allBoxes: false,                             // 全部 box 模式（开关）
-      ignorePrimary: false,                        // 忽略主名（默认关 = 主名+别名都查；开 = 只按别名，无别名以主名兜底）
+      forceQuery: false,                          // 全量重查（默认关 = 只查该 box 无 stash_id 的 tag、词缓存免查询；开 = 已写过/已缓存也重查）
       busy: false,                                 // 查询或填充进行中（开关/下拉禁用）
       querying: false,                             // 查询任务运行中（含暂停等待）
       queryPaused: false,                          // 查询暂停
@@ -981,22 +981,12 @@
     });
   }
 
-  // 候选词：忽略主名开启 → 只取别名（无别名以主名兜底）；关闭（默认）→ 主名 + 别名。组内按归一化去重
-  function candidateWords(t, ignorePrimary) {
-    var aliases = (t.aliases || []).map(fillNorm).filter(Boolean);
-    var ws;
-    if (ignorePrimary) {
-      ws = aliases.slice();
-      if (!ws.length) {
-        var n = fillNorm(t.name);
-        if (n) ws.push(n);
-      }
-    } else {
-      ws = [];
-      var name = fillNorm(t.name);
-      if (name) ws.push(name);
-      ws = ws.concat(aliases);
-    }
+  // 候选词：主名 + 别名。组内按归一化去重
+  function candidateWords(t) {
+    var ws = [];
+    var name = fillNorm(t.name);
+    if (name) ws.push(name);
+    ws = ws.concat((t.aliases || []).map(fillNorm).filter(Boolean));
     var seen = {}, out = [];
     ws.forEach(function (w) { if (!seen[w]) { seen[w] = true; out.push(w); } });
     return out;
@@ -1018,22 +1008,26 @@
     return out;
   }
 
-  // 构建单 box 执行计划：参与 tag（该 box 无 stash_id）、候选词反向索引、需查询词、全缓存 tag 剪枝
-  function buildBoxFillPlan(tags, box, ignorePrimary) {
+  // 构建单 box 执行计划：参与 tag（全量重查时含该 box 已有 id 的）、候选词反向索引、需查询词、全缓存 tag 剪枝
+  function buildBoxFillPlan(tags, box, force) {
     var cache = loadFillCache(box.endpoint);
     var candidates = tags.filter(function (t) {
+      // 全量重查：该 box 已写过 id 也参与（只追加未写入实体）；默认关 = 已有任意 id 整 tag 跳过
+      if (force) return true;
       return !(t.stash_ids || []).some(function (s) { return s.endpoint === box.endpoint; });
     });
     var wordTags = {};
     candidates.forEach(function (t) {
-      candidateWords(t, ignorePrimary).forEach(function (w) {
+      candidateWords(t).forEach(function (w) {
         (wordTags[w] = wordTags[w] || []).push(t);
       });
     });
     var queryWords = {};
     var preSkip = 0;
     candidates.forEach(function (t) {
-      var ws = candidateWords(t, ignorePrimary);
+      var ws = candidateWords(t);
+      // 全量重查跳过剪枝：所有词都重查（可捕捉 stash-box 新增实体/别名），查询后会话命中优先
+      if (force) { ws.forEach(function (w) { queryWords[w] = true; }); return; }
       // 查询前剪枝：所有候选词均有持久缓存 → 该 tag 无需查询（词结果已确定）；否则只收集缺词
       var allCached = ws.every(function (w) { return !!cache[w]; });
       if (allCached) { preSkip++; return; }
@@ -1042,6 +1036,7 @@
     return {
       box: box,
       cache: cache,
+      force: force,
       candidates: candidates,
       wordTags: wordTags,
       queryWords: Object.keys(queryWords),
@@ -1068,8 +1063,10 @@
     tag.stash_ids = next; // 更新本地对象：后续 box / 重查写入必须保留已写条目
   }
 
-  // 词结果解析：持久缓存优先，其次本次会话查询命中（未命中词返回空）
+  // 词结果解析：全量重查 → 以本次会话查询命中为准（缓存词也重查，捕捉 stash-box 新增）；
+  // 否则持久缓存优先，其次本次会话查询命中（未命中词返回空）
   function resolvePlanWord(plan, word) {
+    if (plan.force) return plan.sessionHits[word] || [];
     var c = plan.cache[word];
     if (c) return c.entities;
     return plan.sessionHits[word] || [];
@@ -1080,13 +1077,22 @@
   // 已存在于该 tag stash_ids 的 id 视为已写入，排除；可新增 0 条 → 整组不进预览（隐藏）；
   // 跨 box 结果按 box+id 去重并入（全部 box 模式多 plan 累加）
   function updatePreviewForTag(plan, tag, f) {
-    var ws = candidateWords(tag, f.ignorePrimary);
+    var ws = candidateWords(tag);
     var has = {};
     (tag.stash_ids || []).forEach(function (s) { has[s.endpoint + "\u0000" + s.stash_id] = true; });
     var ents = [];
     ws.forEach(function (w) {
       (resolvePlanWord(plan, w) || []).forEach(function (e) {
-        if (!has[plan.box.endpoint + "\u0000" + e.id]) ents.push(e);
+        var k = plan.box.endpoint + "\u0000" + e.id;
+        if (has[k]) {
+          // 该 id 本地已存在 → 跳过；日志提示一次（同一 tag 同一实体只报一条）
+          if (!f._dupLogged) f._dupLogged = {};
+          var lk = tag.id + "\u0000" + k;
+          if (!f._dupLogged[lk]) {
+            f._dupLogged[lk] = true;
+            addLog(tc("[已存在] ", "[EXISTING] ") + tag.name + " ← " + plan.box.name + " (" + e.id + ")");
+          }
+        } else ents.push(e);
       });
     });
     if (!ents.length) return;
@@ -1150,7 +1156,7 @@
       boxes = [single];
     }
 
-    var plans = boxes.map(function (box) { return buildBoxFillPlan(tags, box, f.ignorePrimary); });
+    var plans = boxes.map(function (box) { return buildBoxFillPlan(tags, box, f.forceQuery); });
     f.plans = plans;
     f.totalCandidates = 0;
     var totalWords = 0;
@@ -1164,6 +1170,7 @@
     // 预收敛：持久缓存已可判定的 tag 先进预览（暂定，查询中随词结果更新）
     f.previewIndex = {};
     f.preview = [];
+    f._dupLogged = {}; // 已存在日志去重：本次查询会话内同一 tag+实体只报一条
     plans.forEach(function (plan) {
       plan.candidates.forEach(function (t) { updatePreviewForTag(plan, t, f); });
     });
@@ -1477,7 +1484,7 @@
     }
     cfg.appendChild(status);
 
-    // 控件：box 下拉 + 全部 box 开关 + 忽略主名开关 + 查询/暂停/继续 + 填充
+    // 控件：box 下拉 + 全部 box 开关 + 全量重查开关 + 查询/暂停/继续 + 填充
     var select = el("select", "tgm-fill-select", null, {
       onchange: function (e) { f.boxIndex = parseInt(e.target.value, 10) || 0; render(); },
       disabled: f.busy || f.allBoxes, // 全部 box 开启时下拉变灰不可选
@@ -1495,10 +1502,10 @@
       tc("对所有配置的 stash-box 分别匹配填充（查询量随 box 数线性增长）",
         "Match and fill against every configured stash-box (queries scale linearly with box count)"),
       function (on) { f.allBoxes = on; render(); }, f.busy));
-    actions.appendChild(buildToggle(tc("忽略主名", "Ignore Primary"), f.ignorePrimary,
-      tc("默认关：主名 + 别名都查；开启后只按别名匹配（无别名 tag 以主名兜底）",
-        "Off by default: query primary name + aliases; when on, match by aliases only (tags without aliases fall back to the primary name)"),
-      function (on) { f.ignorePrimary = on; render(); }, f.busy));
+    actions.appendChild(buildToggle(tc("全量重查", "Force Re-query"), f.forceQuery,
+      tc("开启后即使该 box 已写过 id、词已缓存也重新查询（仅追加未写入实体）",
+        "Re-query even if this box already has ids or words are cached (append missing entities only)"),
+      function (on) { f.forceQuery = on; render(); }, f.busy));
 
     // 主按钮 4 态：空闲 查询ID（绿）→ 查询中 暂停（黄+激活白条）→ 暂停 继续查询（绿）→ 完成 填充全部（绿）
     // 暂停态不提供「填充全部」——想先填已匹配的单组用卡片「填充」按钮

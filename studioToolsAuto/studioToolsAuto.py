@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Studio Tools Auto v1.1.2: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
+Studio Tools Auto v1.1.3: 后台自动拉取/合并/更新工作室（studioTools 的无 UI 版本，由 studioToolsBackend 更名）。
 
 - 钩子 Studio.Create.Post：新建工作室自动按优先级拉取 Stash-box 实例 →
   归一化精确匹配（无相似度阈值）→ canonical 名撞库（主名/别名交叉唯一）→
@@ -107,6 +107,17 @@ def log(msg):
         try:
             with open(LOG, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+        except Exception:
+            pass
+
+
+def log_progress(p):
+    # Stash 任务进度协议：stderr 输出 \x01p\x02<0~1>，任务页渲染进度条
+    with _LOG_LOCK:
+        try:
+            p = max(0.0, min(1.0, float(p)))
+            sys.stderr.write("\x01p\x02%s\n" % ("%.3f" % p))
+            sys.stderr.flush()
         except Exception:
             pass
 
@@ -509,9 +520,10 @@ def scan_all(gql, conn):
         else:
             todo.append(s)
     results = []
-    for s in todo:
+    for i, s in enumerate(todo):
         r = process_studio(gql, conn, s, index, sources, multi, timeout)
         results.append({"id": s["id"], "name": s.get("name") or "", **r})
+        log_progress((i + 1) / len(todo) if todo else 1.0)
     summary = {"total": len(studios), "primary": sources[0]["key"],
                "skipped_has_primary_sid": has_primary, "scanned": len(todo)}
     for st in ("merged", "updated", "hit", "skip", "error"):

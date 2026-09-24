@@ -306,6 +306,7 @@ class SceneGallerySync:
             except Exception as e:
                 failed += 1
                 log.LogError(f"[{idx}/{total}] scene {scene_id} error: {repr(e)}")
+            log.LogProgress(idx / total)
             if idx % 50 == 0:
                 log.LogInfo(
                     f"Progress: {idx}/{total} (ok={ok} no_folder={no_folder} "

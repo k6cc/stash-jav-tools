@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.7.2";
+  var PLUGIN_VERSION = "2.7.3";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -1008,14 +1008,12 @@
     return out;
   }
 
-  // 构建单 box 执行计划：参与 tag（全量重查时含该 box 已有 id 的）、候选词反向索引、需查询词、全缓存 tag 剪枝
+  // 构建单 box 执行计划：全部 tag 参与（词级跳过：已查写/缓存词不查询，已写 id 的 tag 其新词也查询）、
+  // 候选词反向索引、需查询词（缺缓存词）、全缓存 tag 剪枝
   function buildBoxFillPlan(tags, box, force) {
     var cache = loadFillCache(box.endpoint);
-    var candidates = tags.filter(function (t) {
-      // 全量重查：该 box 已写过 id 也参与（只追加未写入实体）；默认关 = 已有任意 id 整 tag 跳过
-      if (force) return true;
-      return !(t.stash_ids || []).some(function (s) { return s.endpoint === box.endpoint; });
-    });
+    // 全部参与：词级跳过由 queryWords 剪枝承担，该 box 已有 id 的 tag 其新词（缺缓存）照样查询
+    var candidates = tags;
     var wordTags = {};
     candidates.forEach(function (t) {
       candidateWords(t).forEach(function (w) {
@@ -1026,9 +1024,9 @@
     var preSkip = 0;
     candidates.forEach(function (t) {
       var ws = candidateWords(t);
-      // 全量重查跳过剪枝：所有词都重查（可捕捉 stash-box 新增实体/别名），查询后会话命中优先
+      // 全量重查：所有词都重查（可捕捉 stash-box 新增实体/别名），查询后会话命中优先
       if (force) { ws.forEach(function (w) { queryWords[w] = true; }); return; }
-      // 查询前剪枝：所有候选词均有持久缓存 → 该 tag 无需查询（词结果已确定）；否则只收集缺词
+      // 词级剪枝：候选词均有持久缓存 → 该 tag 无需查询（词结果已确定，已查写/缓存例外）；否则只收集缺缓存词查询
       var allCached = ws.every(function (w) { return !!cache[w]; });
       if (allCached) { preSkip++; return; }
       ws.forEach(function (w) { if (!cache[w]) queryWords[w] = true; });

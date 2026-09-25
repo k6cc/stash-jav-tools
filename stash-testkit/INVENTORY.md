@@ -27,6 +27,8 @@
 | tagMerge 映射维护/校验 | `tests/tagMerge/tools/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/NOTES.md`） |
 | 探 javstash 某番号/演员 | `tests/javstashAutofill/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
 | 探 binge 首页热门口径 | `tests/binge/probe_trending.py` | `python probe_trending.py [关键字]` |
+| 探 binge 插件实际设置/gender | `tests/binge/probe_settings.py` | 读 configuration.plugins 实际值 + javstash trending 演员 gender |
+| 诊断番号为何没进 binge 首页 | `tests/binge/probe_snos397.py` | trending 定位 + 本地 owned + 过滤链模拟（lookback=7/previewDays=0/MAX=12） |
 | 探 tagCreate 幽灵 id 边界 | `tests/nfoSceneParser/probe_ghost_id.py` | 直发原始 mutation，确认钩子合并时不返回已删 tag 的 id |
 | 查 DB 孤儿（只读） | 直连 sqlite3 | 见 `README.md` 硬约束"DB 直写前停实例" |
 

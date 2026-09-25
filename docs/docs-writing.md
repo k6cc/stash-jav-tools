@@ -39,9 +39,9 @@
 
 ## 二、论坛介绍文章（forum-post-*.md）
 
-插件功能多次迭代后，Discourse 论坛帖内容可能滞后。更新论坛介绍时，在仓库根目录写 `forum-post-<插件名小写>.md`（如 `forum-post-javstashlinker.md`），已被 `.gitignore` 排除、不随仓库发布，用户手动粘贴到论坛。
+插件功能多次迭代后，Discourse 论坛帖内容可能滞后。更新论坛介绍时，在 `docs/` 下写 `forum-post-<插件名小写>.md`（如 `docs/forum-post-javstashlinker.md`），已被 `.gitignore` 排除、不随仓库发布，用户手动粘贴到论坛。
 
-写作规则（极简优先，读者是论坛用户不是开发者；篇幅与详略以 `forum-post-javstashlinker.md` / `forum-post-performermerge.md` 为基准，超出即视为写复杂了）：
+写作规则（极简优先，读者是论坛用户不是开发者；篇幅与详略以 `docs/forum-post-javstashlinker.md` / `docs/forum-post-performermerge.md` 为基准，超出即视为写复杂了）：
 
 - **只写**：插件定位（解决什么问题）、各功能模块一句话职责、核心机制表（匹配优先级/置信度规则，每行一句话）、安装方式、依赖、配套插件；每个模块小节正文 ≤ 3 句（表格/条目另计）
 - **Summary 表一句定位**：主操作 + 纯 UI 声明，不加机制枚举括号（证据分级链条等正文有表）、不加行为尾注（引用转移/源删除/仅追加）

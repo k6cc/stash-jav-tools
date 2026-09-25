@@ -27,17 +27,7 @@
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
 6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
-7. Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
-
-### 新插件首发（仅首次发布，顺序不可颠倒）
-
-新插件 = 仓库中尚不存在其发布条目的插件（如首次上线的 backend，改名后的新 ID 同样适用）。除走完上述流程外，首发必须多做三步（依据 studioToolsAuto / tagMergeAuto 更名首发实况）：
-
-1. **release.yml 白名单**：`.github/workflows/release.yml` 的 `on.push.tags` 必须新增 `"<插件>-v*.*.*"` 模式——缺失时打 tag 不会触发任何构建，`gh run list` 永远为空，且已推送的 tag 不会补触发（需删远程 tag 重打重推：`git push origin :refs/tags/<tag>` + `git tag -d <tag>` + 重打 + `git push origin main --tags`）
-2. **stash-plugins 占位符（必须先推送到远程）**：本地 clone `E:\Temp\stash-plugins`（远程 `k6cc/stash-plugins`）常落后，先 `git fetch; git reset --hard origin/main`；在 `plugins/main/index.yml` 末尾追加占位条目（`version: 0.0.0`、`sha256:` 全 0、`path:` 按 release URL 约定 `https://github.com/k6cc/stash-jav-tools/releases/download/<插件>-v0.0.0/<插件>-v0.0.0.zip`、`date:` 当前时间）；`README.md` 插件表与依赖清单**手动加行**（`scripts/sync_readme.py` 只更新已有行、不插入新行）；commit 后**必须 push**——release workflow 是 clone 远程版再 awk 更新，占位符不在远程则 awk 找不到 `- id:` 静默跳过、链接推不上（tagMerge 曾长期停留在全 0 sha256 占位）
-3. **运行时日志勿提交**：`.gitignore` 已有 `*_backend.log` / `*_auto.log` 规则，新插件若带日志文件先确认被忽略，误提交后 `git rm --cached <log>` 补救
-
-其余顺序与常规发版一致：yml `url:` 用真实 Discourse 帖链接（用户先发帖）→ 插件目录 commit/push → 打 tag → 验证。**闭环验证**：`gh run watch` 成功后回 stash-plugins 执行 `git fetch; git show origin/main:plugins/main/index.yml`，确认该插件条目 `version`/`sha256` 已被真实值覆盖（占位符机制生效），再确认两仓库 `git status` 干净。
+7. Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响。**新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/new-plugin-release.md`。
 
 ## 文件编辑（agent 工作约定）
 
@@ -48,7 +38,8 @@
 ## 专题规范（按需 Read，不每次必读）
 
 - **改带 UI 的插件 `.js` 前**：读 `docs/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。
-- **写/改插件 README 或 `forum-post-*.md` 前**：读 `docs/docs-writing.md`（README 结构与取舍 + 论坛帖写作规则）。
+- **写/改插件 README 或论坛帖前**：读 `docs/docs-writing.md`（README 结构与取舍 + 论坛帖写作规则；论坛草稿在 `docs/forum-post-*.md`，已 gitignore）。
+- **新插件首次发布前**：读 `docs/new-plugin-release.md`（release.yml 白名单 + stash-plugins 占位符）。
 
 ## 测试工具集（stash-testkit/）
 
@@ -58,5 +49,5 @@
 
 ## 其他
 
-- `.gitignore` 已忽略 `__pycache__`、备份文件、论坛文章草稿（`forum-post-*.md`）、`stash-testkit/config.json`（含 API key），不要提交
+- `.gitignore` 已忽略 `__pycache__`、备份文件、`docs/forum-post-*.md`（论坛草稿）、`stash-testkit/config.json`（含 API key），不要提交
 - 本文件是 agent 协作约定，不随插件版本发布

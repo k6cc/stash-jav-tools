@@ -1,12 +1,12 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` 八个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` / `sceneTranslateAuto` / `javstashAutofill+` / `oStatsI18n` 共 11 个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
 
 ## 发版
 
 **权威版本号 = 各插件 `<name>.yml` 的 `version:`**，其余位置必须与之一致。通用同步项：
 
-- 根 `README.md` 版本表（含全部八插件，发版必同步）
+- 根 `README.md` 版本表（含全部 11 插件，发版必同步）
 - 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**；sceneGallerySync 例外：头部无 note，在文末「## 变更历史」新增 `### X.Y.Z` 条目
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
 - **tagMergeAuto 的 `tag_merge_map.json` 与 tagMerge 保持同源同步**（复制自 tagMerge 目录，任一侧更新后必须同步另一份）；映射表读取按优先级链（`tag_merge_map_<lang>.custom.json` → `tag_merge_map.custom.json` → `tag_merge_map_<lang>.json` → `tag_merge_map.json`），用户自定义文件（`tag_merge_map*.custom.json`）是本地产物，不入库、不参与同步、不打进发布 zip
@@ -18,6 +18,8 @@
 | sceneTranslate | `translateProxy.py` 头部 banner（`Scene Translate Proxy vX.Y.Z`）+ 状态报文 `"version"` 字段；`sceneTranslate.js` 头部 banner（`Scene Translate Plugin vX.Y.Z`） |
 | JavStashLinker / performerMerge / tagMerge | 对应 `.js` 顶部 `PLUGIN_VERSION`（面板标题右侧显示） |
 | studioToolsAuto / tagMergeAuto / sceneTranslateAuto | 对应 `.py` 头部 docstring banner（`... Auto vX.Y.Z`） |
+| javstashAutofill+ | `javstash_autofill_plus.py` 头部 docstring banner |
+| oStatsI18n | `oStatsI18n.js` 顶部 `PLUGIN_VERSION`（JS UI 插件） |
 
 ### 流程
 
@@ -27,8 +29,8 @@
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
 6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
-7. Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
-8. **新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/new-plugin-release.md`
+- Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
+- **新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/new-plugin-release.md`
 
 ## 文件编辑（agent 工作约定）
 

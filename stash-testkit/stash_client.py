@@ -1,25 +1,21 @@
 # -*- coding: utf-8 -*-
 """Stash 实例测试通用客户端（供各插件验证复用）。
 
-定位：连接本地/远程 Stash 实例做场景生命周期（创建/查询/更新/销毁）、扫描触发、轮询等待。
-认证：Stash API Key，请求需双发 `ApiKey:` 与 `Authorization: Bearer` 两个头（实测缺一不可）。
-
-配置：读同目录 config.json（复制自 config.example.json 并填写）。
-可用环境变量覆盖：STASH_API_URL / STASH_API_KEY。
-
-老版本 GraphQL 兼容（v0.31.1 实测）：
-  - findScenes 无 `path` 字段（Scene 只有 `paths`）；定位场景用 filter.q + title/path 子串本地过滤
-  - sceneDestroy 返回 Boolean，不要写 selection（selection 会 422）
-  - sceneUpdate 用 input 对象；无 me 字段；无 jobs 查询
-
-用法示例：
+5 行上手：
   from stash_client import Stash
-  s = Stash()
-  s.find_scene(220)
-  s.find_scenes(q="TST-")
-  s.trigger_scan()                       # 增量扫描（勿用 rescan:true，见 README 已知坑）
-  s.wait_for_scene(q="TST-999", timeout=120)
-  s.destroy_scene("225")
+  s = Stash()                                  # 读同目录 config.json
+  s.trigger_scan([r"E:\\...\\测试目录"])         # 增量扫描（勿 rescan:true）
+  s.wait_for_scene(q="TST-", timeout=120)      # 等新场景入库
+  s.destroy_scene("225")                        # Boolean，无 selection；blob 锁拦重试
+
+定位：连接本地/远程 Stash 实例做场景生命周期（创建/查询/更新/销毁）、扫描触发、轮询等待。
+认证：Stash API Key，请求双发 `ApiKey:` 与 `Authorization: Bearer` 两个头（已封装）。
+配置：读同目录 config.json（复制自 config.example.json 并填写）；环境变量 STASH_API_URL / STASH_API_KEY 可覆盖。
+
+老版本 GraphQL 兼容（v0.31.1 实测，完整版见 README.md 硬约束清单）：
+  - findScenes 无 `path` 字段（Scene 只有 `paths`）；定位用 filter.q + 本地过滤
+  - sceneDestroy 返回 Boolean，不写 selection；VideoFile 哈希在 files{fingerprints}
+  - 别在 PowerShell 命令行内联 GraphQL（$id / ! 被插值），写 .py 文件执行
 """
 import json, os, sys, time, urllib.request, urllib.error
 

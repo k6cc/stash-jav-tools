@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` 八个插件 + 根 `README.md` 版本表。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` 八个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
 
 ## 发版
 
@@ -27,7 +27,7 @@
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
 6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
-7. Windows：git 提示 LF→CRLF 属正常，不影响内容；PowerShell 5.1 不支持 heredoc 与 `&&`/`||` 语句分隔符，commit 用 `-m "..."`、命令链用 `;`；**沙箱内 `git push` 会因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行（`dangerouslyDisableSandbox`），commit/add 等本地操作不受影响
+7. Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
 
 ### 新插件首发（仅首次发布，顺序不可颠倒）
 
@@ -77,6 +77,7 @@
 
 - **同一文件的多处修改一律串行执行**：等上一次编辑落盘完成后再发起下一次；只有不同文件的修改可以并行。原因：并行的每次编辑基于各自快照应用差异后整体写回，后完成者覆盖先完成者，同批只有最后落盘的一处存活（tagMerge.js 曾多次复现修改静默丢失）
 - 多处修改完成后用 `rg` 逐点核对关键改动确已在盘，再报完成
+- **Edit 工具偶发「File has not been read yet」卡死**（即使刚 Read 过）：改用 PowerShell `[IO.File]::ReadAllText($path)` + `[IO.File]::WriteAllText($path, $content, (New-Object Text.UTF8Encoding $false))` 做字符串替换绕过；写回用 UTF-8 无 BOM、LF 结尾，与仓库现有文件一致
 
 ## UI 交互设计规范（全部带 UI 的插件通用）
 
@@ -182,7 +183,13 @@ window.__<插件缩写>Loaded = true;
 - **注意事项归拢一处**：条目化，每条一句话，不展开「因为什么/会造成什么」
 - 语言英文，保留原帖框架（Summary 表 + Hi stashers 开头 + 章节结构）与语气；只剩一层小节时总述标题（如「What it does」）可省；截图过时则移除占位，发帖时现截现传
 
+## 测试工具集（stash-testkit/）
+
+插件开发/验证用的本地 Stash 实例测试工具集，**不随插件发布**。AI 做插件测试时入口是 `stash-testkit/INVENTORY.md`（任务→脚本映射表 + 硬约束 top5），流程细节与硬约束清单在 `stash-testkit/README.md`，业务语义深查在 `tests/<plugin>/NOTES.md`，历史结论在 `_archive/`。
+
+**用户说"沉淀本轮经验"时**，按 `stash-testkit/INVENTORY.md` 末尾的「沉淀规范」四步走：分流（新脚本→INVENTORY+README 索引 / 通用坑→README 硬约束 / 业务语义→子目录 NOTES / 一次性结论→_archive/）→ 写作（操作导向、不重复、可执行）→ 反模式（不写设计辩护/流水账/已被脚本覆盖的人工步骤）→ 自检（两处索引同步、分类正确、无重复）。
+
 ## 其他
 
-- `.gitignore` 已忽略 `__pycache__`、备份文件与论坛文章草稿（`forum-post-*.md`），不要提交
+- `.gitignore` 已忽略 `__pycache__`、备份文件、论坛文章草稿（`forum-post-*.md`）、`stash-testkit/config.json`（含 API key），不要提交
 - 本文件是 agent 协作约定，不随插件版本发布

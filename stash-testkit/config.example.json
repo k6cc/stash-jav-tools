@@ -1,10 +1,24 @@
 {
-  "_comment": "复制本文件为 config.json 并填写真实值；config.json 已被 .gitignore 忽略，不会提交。api_key 必填（Stash 设置里生成的 API Key，请求需双发 ApiKey 与 Authorization: Bearer 头）。",
+  "_readme": "复制本文件为 config.json 并填写真实值；config.json 已被 .gitignore 忽略，不会提交。",
+
   "api_url": "http://localhost:9999/graphql",
+  "_api_url": "Stash GraphQL 端点；默认本地实例 9999 端口。",
+
   "api_key": "",
+  "_api_key": "Stash 设置里生成的 API Key（必填）；请求会自动双发 ApiKey 与 Authorization: Bearer 头。",
+
   "db_path": "E:/stashAPP/stash-go.sqlite",
+  "_db_path": "Stash SQLite 数据库路径；db_cleanup.py 直写用（会停 Stash→写→重启）。",
+
   "stash_exe": "E:/stashAPP/stash-win.exe",
+  "_stash_exe": "stash-win.exe 完整路径；db_cleanup.py 停/启实例用。",
+
   "ffmpeg_exe": "C:/path/to/ffmpeg.exe",
+  "_ffmpeg_exe": "ffmpeg.exe 路径；gen_test_video.py 生成测试视频用。",
+
   "plugin_dir": "E:/stashAPP/plugins/k6cc",
-  "test_dir": "E:/Temp/test-scenes"
+  "_plugin_dir": "插件部署根目录；worker_e2e.py 等依赖已部署插件的脚本用。",
+
+  "test_dir": "E:/Temp/test-scenes",
+  "_test_dir": "测试素材生成目录；gen_test_video.py --dir 默认落点。"
 }

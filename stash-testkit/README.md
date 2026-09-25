@@ -92,9 +92,7 @@ stash-testkit/
 | `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟单测与 E2E |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
-| `tests/binge/probe_trending.py` | binge 首页 trending/costar 拉取口径探测 |
-| `tests/binge/probe_settings.py` | binge 插件实际设置（lookback/preview/gender）补查 + javstash trending 演员 gender |
-| `tests/binge/probe_snos397.py` | 诊断某番号为何没进 binge 首页热门（trending 定位 + 本地 owned + 过滤链模拟） |
+| `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟） |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 
 ## 清理规范

@@ -27,8 +27,6 @@
 | tagMerge 映射维护/校验 | `tests/tagMerge/tools/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/NOTES.md`） |
 | 探 javstash 某番号/演员 | `tests/javstashAutofill/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
 | 探 binge 首页热门口径 | `tests/binge/probe_trending.py` | `python probe_trending.py [关键字]` |
-| 探 binge 插件实际设置/gender | `tests/binge/probe_settings.py` | 读 configuration.plugins 实际值 + javstash trending 演员 gender |
-| 诊断番号为何没进 binge 首页 | `tests/binge/probe_snos397.py` | trending 定位 + 本地 owned + 过滤链模拟（lookback=7/previewDays=0/MAX=12） |
 | 探 tagCreate 幽灵 id 边界 | `tests/nfoSceneParser/probe_ghost_id.py` | 直发原始 mutation，确认钩子合并时不返回已删 tag 的 id |
 | 查 DB 孤儿（只读） | 直连 sqlite3 | 见 `README.md` 硬约束"DB 直写前停实例" |
 
@@ -54,7 +52,7 @@
 
 | 本轮产生了什么 | 写到哪 |
 |---|---|
-| 新脚本/新工具/新入口 | `INVENTORY.md` 任务→脚本表 + `README.md` 脚本索引（两处同步加行） |
+| 新脚本/新工具/新入口 | 索引规则：**插件级脚本只精确到 `tests/<插件名>/` 目录行、仅在 README 用途列补充能做什么**（不单独一行、不进 INVENTORY 任务表）；**多插件共用/系统层面**的脚本才在 README 单独一行介绍；INVENTORY 任务表**只收录高频任务脚本**（冒烟/造视频/扫描/等场景/清孤儿/常用单测入口等），低频诊断探针一律只进 README 用途列 |
 | 下次还会踩的坑（运行时/数据语义/schema/外部源/工具链） | `README.md` 硬约束清单对应分类下加一条 |
 | 最高频新坑（5 条 top 里要换进来的） | 同步更新本文件"硬约束 top 5" |
 | 某插件特有的业务语义（映射规则、刮削口径、字段语义） | 对应 `tests/<plugin>/NOTES.md`，不要进主 README |

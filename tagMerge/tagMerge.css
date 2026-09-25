@@ -87,8 +87,8 @@
 .tgm-config {
   background: #2b2b2b !important;
   border-radius: 8px !important;
-  padding: 16px !important;
-  margin-bottom: 20px !important;
+  padding: 10px 16px !important;
+  margin-bottom: 12px !important;
 }
 
 .tgm-config-status {
@@ -220,6 +220,11 @@
 
 .tgm-progress {
   margin: 10px 0 16px !important;
+}
+
+/* 填充ID 页进度条在 cfg 内是最后子元素，下边距由 cfg padding 承担，避免与 cfg margin 叠加 */
+.tgm-progress-final {
+  margin-bottom: 0 !important;
 }
 
 .tgm-progress-bar {
@@ -555,7 +560,7 @@
   align-items: center !important;
   justify-content: space-between !important;
   gap: 8px !important;
-  margin-bottom: 8px !important;
+  margin-bottom: 12px !important;
   min-width: 0 !important;
 }
 

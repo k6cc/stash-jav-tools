@@ -1,4 +1,4 @@
-﻿/**
+/**
  * tagMerge
  *
  * 读取插件目录下的映射库 tag_merge_map.json（经 /plugin/tagMerge/assets/ 提供），
@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.7.4";
+  var PLUGIN_VERSION = "2.7.5";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -1543,15 +1543,17 @@
     if (f.progress) {
       var prog = f.progress;
       var pct = prog.total ? Math.round((prog.current / prog.total) * 100) : 0;
-      cfg.appendChild(el("div", "tgm-progress", [
+      cfg.appendChild(el("div", "tgm-progress tgm-progress-final", [
         el("div", "tgm-progress-bar", prog.current + " / " + prog.total, { style: "width:" + pct + "%" }),
         el("div", "tgm-progress-title", prog.title || ""),
       ]));
     }
 
     // 预览区：查询中实时统计（不重建列表，避免每词全量重绘）；暂停或完成时按组列出匹配结果
+    // 预览区作为配置卡片的兄弟节点直接挂外层 wrap（不进 .tgm-config 灰底），与其他分页卡片对齐
+    var previewWrap = null;
     if (f.querying || f.queryPaused || f.queryDone || (f.preview && f.preview.length)) {
-      var previewWrap = el("div", "tgm-fill-preview");
+      previewWrap = el("div", "tgm-fill-preview");
       previewWrap.appendChild(el("div", "tgm-fill-preview-stats",
         f.querying && !f.queryPaused ? tc("查询中... ", "Querying... ") + fillPreviewStatsText()
           : fillPreviewStatsText()));
@@ -1563,10 +1565,10 @@
       } else if (f.queryDone) {
         previewWrap.appendChild(el("div", "tgm-empty", tc("无匹配结果", "No matches")));
       }
-      cfg.appendChild(previewWrap);
     }
 
     wrap.appendChild(cfg);
+    if (previewWrap) wrap.appendChild(previewWrap);
     return wrap;
   }
 

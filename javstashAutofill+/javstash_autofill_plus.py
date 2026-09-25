@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+Javstash Autofill+ v1.3.1
 Stash plugin: Performer.Create.Post hook + Scene.Create.Post hook.
 Unified performer resolution (scene fill, backfill task and manual creation share it):
   - stash-id first: reverse-lookup the local performer carrying (endpoint, stash_id);
@@ -324,7 +325,7 @@ def get_scene_full(gql, sid):
          "stash_ids{ endpoint stash_id } created_at files{ path } } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
-_CODE_RE = re.compile(r"^((?:FC2[-_]?PPV[-_]?\d{5,7}|[A-Za-z]{2,6}[-_]?\d{2,5}|\d{6}[-_]\d{2,5}|[A-Za-z]\d{4}))")
+_CODE_RE = re.compile(r"^((?:FC2[-_]?PPV[-_]?\d{5,7}|FC2[-_]?\d{5,7}|[A-Za-z]{2,6}[-_]?\d{2,5}|\d{6}[-_]\d{2,5}|[A-Za-z]\d{4}))")
 def codes_match(a, b):
     """Code equality with javstash-style suffix tolerance ('012012-920' vs
     '012012-920-carib', '020519_001' vs '020519_001-1pon'). Only a dash/underscore

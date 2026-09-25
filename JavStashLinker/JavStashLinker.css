@@ -146,13 +146,15 @@
 .jsm-input {
   width: 100% !important;
   max-width: 500px !important;
-  padding: 6px 10px !important;
+  height: 27px !important;
+  box-sizing: border-box !important;
+  padding: 0 10px !important;
   border: 1px solid #444 !important;
   border-radius: 4px !important;
   background: #1a1a1a !important;
   color: #e0e0e0 !important;
   margin-bottom: 12px !important;
-  font-size: 13px !important;
+  font-size: 12px !important;
   font-family: inherit !important;
 }
 
@@ -244,6 +246,8 @@
   font-size: 13px !important;
   font-weight: 600 !important;
   font-family: inherit !important;
+  /* 白字在彩色实心底上的轻投影：三档按钮统一继承 */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3) !important;
   transition: background 0.15s, opacity 0.15s !important;
 }
 
@@ -280,12 +284,24 @@
   box-sizing: border-box !important;
   line-height: 1 !important;
 }
+/* 中按钮（动作按钮）：分页/Tab 级主操作。定高 27px + line-height:1 等高基座；
+   同一按钮组内按钮统一用本档，禁止与大/小档混排 */
+.jsm-btn-md {
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+  height: 27px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  line-height: 1 !important;
+}
 
 .jsm-btn-state {
-  background: transparent !important;
-  border: 1px solid #666 !important;
+  background: rgba(136, 136, 136, 0.1) !important;
+  border: 1px solid rgba(136, 136, 136, 0.4) !important;
   color: #999 !important;
   cursor: default !important;
+  text-shadow: none !important;
 }
 
 .jsm-btn-disabled {
@@ -522,7 +538,9 @@
 }
 
 .jsm-select {
-  padding: 4px 8px !important;
+  height: 27px !important;
+  box-sizing: border-box !important;
+  padding: 0 8px !important;
   background: #1a1a1a !important;
   color: #e0e0e0 !important;
   border: 1px solid #444 !important;

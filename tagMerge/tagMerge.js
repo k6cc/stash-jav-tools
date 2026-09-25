@@ -12,7 +12,7 @@
   if (window.__tgmLoaded) return;
   window.__tgmLoaded = true;
 
-  var PLUGIN_VERSION = "2.7.3";
+  var PLUGIN_VERSION = "2.7.4";
   var MAP_BASE = "/plugin/tagMerge/assets/";
   console.log("[tgm] tagMerge v" + PLUGIN_VERSION + " loaded");
 
@@ -1388,7 +1388,7 @@
     render();
   }
 
-  // 预览条目卡片：head（组名 + ·N 个别称 + 徽章 + 填充 + 忽略/恢复）+ 实体按钮行
+  // 预览条目卡片：head（组名 + ·N 个别名 + 徽章 + 填充 + 忽略/恢复）+ 实体按钮行
   // 徽章「新增 N 条」= 该组可新增实体数（已存在 id 已排除）；实体按钮按 box 分组
   // （javstash / stashdb / theporndb，固定顺序），组间 "/"、组内空格间隔；
   // 深灰实心按钮只包实体名（无图标），点击新窗口跳该实体页；窄屏自动换行
@@ -1397,7 +1397,7 @@
     var head = el("div", "tgm-edit-item-head");
     var aliasN = (p.tag.aliases || []).length;
     head.appendChild(el("span", "tgm-edit-item-target",
-      [p.tag.name, aliasN ? el("span", "tgm-fill-alias-n", " · " + aliasN + tc(" 个别称", " aliases")) : null],
+      [p.tag.name, aliasN ? el("span", "tgm-fill-alias-n", " · " + aliasN + tc(" 个别名", " aliases")) : null],
       { title: p.tag.name }));
     var badge = null, actions = [];
     if (p.ignored) {
@@ -1510,24 +1510,24 @@
     var hasWritable = (f.preview || []).some(function (p) { return !p.done && !p.ignored; });
     var mainBtn;
     if (f.filling) {
-      mainBtn = el("button", "tgm-btn tgm-btn-primary", tc("填充中...", "Filling..."), { disabled: true });
+      mainBtn = el("button", "tgm-btn tgm-btn-primary tgm-btn-md", tc("填充中...", "Filling..."), { disabled: true });
     } else if (f.querying && !f.queryPaused) {
-      mainBtn = el("button", "tgm-btn tgm-btn-warn tgm-btn-warn-on", [iconBtn(tc("暂停", "Pause"), "pause")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-warn tgm-btn-warn-on tgm-btn-md", [iconBtn(tc("暂停", "Pause"), "pause")], {
         onclick: function () { f.queryPaused = true; render(); },
         title: tc("暂停查询，下方按组列出已匹配结果", "Pause querying and list matches by group"),
       });
     } else if (f.querying && f.queryPaused) {
-      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("继续查询", "Resume Query"), "play")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary tgm-btn-md", [iconBtn(tc("继续查询", "Resume Query"), "play")], {
         onclick: function () { f.queryPaused = false; render(); },
         title: tc("继续查询", "Resume querying"),
       });
     } else if (f.queryDone && hasWritable) {
-      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("填充全部", "Fill All"), "fill")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary tgm-btn-md", [iconBtn(tc("填充全部", "Fill All"), "fill")], {
         onclick: function () { handleFill(); },
         title: tc("写入全部待新增实体的 stash_id", "Write stash_id for all pending entities"),
       });
     } else {
-      mainBtn = el("button", "tgm-btn tgm-btn-primary", [iconBtn(tc("查询ID", "Query IDs"), "search")], {
+      mainBtn = el("button", "tgm-btn tgm-btn-primary tgm-btn-md", [iconBtn(tc("查询ID", "Query IDs"), "search")], {
         onclick: function () { handleQuery(); },
         title: tc("按候选词查询所选 stash-box，下方列出匹配结果", "Query the selected stash-box by candidate words and list matches below"),
       });
@@ -1729,11 +1729,11 @@
     clearBtn.hidden = !ed.search;
     var searchWrap = el("div", "tgm-search-wrap", [searchInput, clearBtn]);
     var toolbarBtns = [
-      el("button", "tgm-btn tgm-btn-muted", tc("添加", "Add"), {
+      el("button", "tgm-btn tgm-btn-muted tgm-btn-md", tc("添加", "Add"), {
         onclick: handleEditorAdd,
         disabled: ed.saving,
       }),
-      hasAnyConflict() ? el("button", "tgm-btn tgm-btn-warn" + (ed.conflictOnly ? " tgm-btn-warn-on" : ""), tc("冲突项", "Conflicts"), {
+      hasAnyConflict() ? el("button", "tgm-btn tgm-btn-warn tgm-btn-md" + (ed.conflictOnly ? " tgm-btn-warn-on" : ""), tc("冲突项", "Conflicts"), {
         onclick: function () {
           ed.conflictOnly = !ed.conflictOnly;
           if (ed.conflictOnly) {
@@ -1746,7 +1746,7 @@
           ed.conflictOnly ? "Exit conflict filter" : "Show only entries with conflict sources"),
       }) : null,
       // 已忽略筛选：常驻显示（无已忽略条目也不隐藏），保留恢复入口的可发现性
-      el("button", "tgm-btn tgm-btn-warn" + (ed.ignoredOnly ? " tgm-btn-warn-on" : ""), tc("已忽略", "Ignored"), {
+      el("button", "tgm-btn tgm-btn-warn tgm-btn-md" + (ed.ignoredOnly ? " tgm-btn-warn-on" : ""), tc("已忽略", "Ignored"), {
         onclick: function () {
           ed.ignoredOnly = !ed.ignoredOnly;
           if (ed.ignoredOnly) {
@@ -1758,7 +1758,7 @@
         title: tc(ed.ignoredOnly ? "退出忽略筛选" : "筛选显示已忽略的条目",
           ed.ignoredOnly ? "Exit ignored filter" : "Show only ignored entries"),
       }),
-      el("button", "tgm-btn tgm-btn-primary", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
+      el("button", "tgm-btn tgm-btn-primary tgm-btn-md", ed.saving ? tc("导出中...", "Exporting...") : tc("导出文件", "Export File"), {
         onclick: handleEditorExport,
         disabled: ed.saving,
         title: tc("下载完整映射表 JSON", "Download the full mapping JSON"),

@@ -146,6 +146,8 @@
   font-size: 13px !important;
   font-weight: 600 !important;
   font-family: inherit !important;
+  /* 白字在彩色实心底上的轻投影：三档按钮统一继承 */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3) !important;
   flex-shrink: 0 !important;
   transition: background 0.15s, opacity 0.15s !important;
 }
@@ -234,6 +236,14 @@
   border-radius: 4px !important;
 }
 
+/* 中档状态提示：与分页级中档按钮(.pdm-btn-md)同高；组合 .pdm-btn-state 使用以复用透明框视觉，
+   本类只覆盖尺寸（透明框/inline-flex/line-height:1 均由 .pdm-btn-state 提供） */
+.pdm-btn-state-md {
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+  height: 27px !important;
+}
+
 /* 中性小按钮（忽略/恢复）：灰底，非操作主色 */
 .pdm-btn-neutral {
   background: #555 !important;
@@ -263,13 +273,14 @@
   width: 100% !important;
   box-sizing: border-box !important;
   min-width: 0 !important;
-  padding: 6px 10px !important;
+  height: 27px !important;
+  padding: 0 10px !important;
   padding-right: 34px !important;
   border: 1px solid #444 !important;
   border-radius: 4px !important;
   background: #1a1a1a !important;
   color: #e0e0e0 !important;
-  font-size: 13px !important;
+  font-size: 12px !important;
   font-family: inherit !important;
 }
 
@@ -313,6 +324,17 @@
   padding: 3px 10px !important;
   font-size: 11px !important;
   height: 22px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  line-height: 1 !important;
+}
+/* 中按钮（动作按钮）：分页/Tab 级主操作。定高 27px + line-height:1 等高基座；
+   同一按钮组内按钮统一用本档，禁止与大/小档混排 */
+.pdm-btn-md {
+  padding: 4px 12px !important;
+  font-size: 12px !important;
+  height: 27px !important;
   display: inline-flex !important;
   align-items: center !important;
   box-sizing: border-box !important;

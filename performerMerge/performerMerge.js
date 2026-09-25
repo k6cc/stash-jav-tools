@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.6.5";
+  var PLUGIN_VERSION = "1.6.6";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -1548,13 +1548,13 @@
       el("div", "pdm-config-status", statusText),
       el("div", "pdm-actions", [
         pending.length
-          ? el("button", "pdm-btn pdm-btn-clean", tc("清理全部", "Clean All"), {
+          ? el("button", "pdm-btn pdm-btn-clean pdm-btn-md", tc("清理全部", "Clean All"), {
               onclick: function () { handleCleanShortNames(_state.shortNames.slice()); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
               title: tc("仅删除别名条目",
                 "Only alias entries are removed"),
             })
-          : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待清理", "Nothing to Clean")),
+          : el("span", "pdm-btn-state pdm-btn-state-md", tc("无待清理", "Nothing to Clean")),
       ]),
     ]));
 
@@ -1750,13 +1750,13 @@
       el("div", "pdm-config-status", statusText),
       el("div", "pdm-actions", [
         pending.length
-          ? el("button", "pdm-btn pdm-btn-primary", tc("修复全部", "Repair All"), {
+          ? el("button", "pdm-btn pdm-btn-primary pdm-btn-md", tc("修复全部", "Repair All"), {
               onclick: function () { handleRepairAliases(_state.aliasRepairs.slice()); },
               disabled: _state.cleaning || _state.merging || _state.scanning,
               title: tc("把合并成单行的别名拆回多个",
                 "Split aliases merged into one line back into multiple"),
             })
-          : el("span", "pdm-btn-state pdm-btn-state-lg", tc("无待修复", "Nothing to Repair")),
+          : el("span", "pdm-btn-state pdm-btn-state-md", tc("无待修复", "Nothing to Repair")),
       ]),
     ]));
 

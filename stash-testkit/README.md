@@ -18,7 +18,7 @@ stash-testkit/
 │   ├── sceneTranslateAuto/  # 插件特定验证脚本
 │   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
 │   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
-│   ├── binge/               # 首页热门口径探测
+│   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
 │   └── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
@@ -49,6 +49,7 @@ stash-testkit/
 - **插件"查不到/版本旧" = 同 id 旧副本**：`E:\stashAPP\plugins\` 下另有同名目录时 Stash 加载旧副本。全盘找 `.yml` → 移除旧副本 → 重启 → 再查 version。
 - **`configuration { plugins }` 只记录改过设置的插件**：仅安装且默认设置的插件不在 config.yml 也不在 plugins 查询结果里；读默认设置按插件目录 config.json 处理。
 - **hook 并发 spawn worker**：重扫风暴下可能重复翻译一次；插件守卫（写前重读）保证不覆盖，仅浪费一次调用，已知。
+- **开 Debug 日志看服务端时序**：GraphQL `configureGeneral(input:{logLevel:"Debug", logFile:"..."})` 重启后生效，流媒体的 `[transcode]` 行能看清转码启停；测完还原 Info + 空 logFile。
 
 ### 数据语义
 
@@ -81,6 +82,9 @@ stash-testkit/
 
 - **GraphQL 查询写 `.py` 脚本文件**，别在 PowerShell 命令行内联（`$id`/`!` 被插值导致 422）。
 - **破坏性测试前备份**：实例数据目录或 `stash-go.sqlite`。
+- **测流媒体/播放别用 `--virtual-time-budget`**：headless Chrome 加该参数时媒体时钟不推进、`currentTime` 恒为 0，验证播放与 seek 恢复必须跑真实时间。
+- **用 CDP 驱动 Chrome 必须带 `--remote-allow-origins=*`**，否则 WebSocket 握手 403；`browser-automation-cdp` 技能的 `start_chrome.py` 已内建该参数，手动启动浏览器时别漏。额外 flag 用它的 `--extra` 透传。
+- **浏览器里测 Stash 流要同源注入**：Stash 流端点无 CORS 头，跨域 `fetch` 必失败；先 `open` 到 `http://127.0.0.1:9999/login` 这类同源页面再注入脚本，段 URL 用 manifest 自带的 apikey（无需登录态）。
 
 ## 脚本索引
 
@@ -92,7 +96,7 @@ stash-testkit/
 | `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟单测与 E2E |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
-| `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟） |
+| `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 
 ## 清理规范

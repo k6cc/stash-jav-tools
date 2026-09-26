@@ -26,19 +26,20 @@
 | 测 tagCreate 兜底真库端到端 | `tests/nfoSceneParser/test_tag_create_fallback_live.py` | 自动挑候选源名，测完自清理 |
 | tagMerge 映射维护/校验 | `tests/tagMerge/tools/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/NOTES.md`） |
 | 探 javstash 某番号/演员 | `tests/javstashAutofill/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
-| 探 binge 首页热门口径 | `tests/binge/probe_trending.py` | `python probe_trending.py [关键字]` |
+| 诊断某番号为何没进 binge 首页热门 | `tests/binge/probe_trending_filter.py` | `python probe_trending_filter.py [番号] [lookback天数]`（模拟前端过滤链，逐条打印 SKIP 原因） |
+| 测 Stash HLS 段生产节奏 | `tests/binge/hls_segment_probe.py` | `python hls_segment_probe.py --scene 244 --minutes 2 --lead 10 --reset-cache [--ffprobe]` |
+| 真实 Chrome 播放 HLS / A/B | `tests/binge/hls_chrome_probe.py` | `python hls_chrome_probe.py --scene 244 --seconds 150 [--seek 600] [--engine native\|hlsjs]` |
 | 探 tagCreate 幽灵 id 边界 | `tests/nfoSceneParser/probe_ghost_id.py` | 直发原始 mutation，确认钩子合并时不返回已删 tag 的 id |
 | 查 DB 孤儿（只读） | 直连 sqlite3 | 见 `README.md` 硬约束"DB 直写前停实例" |
 
 ## 硬约束（每条都踩过，别再踩）
 
-完整版见 `README.md` 硬约束清单；最高频 5 条：
+完整版见 `README.md` 硬约束清单；最高频 4 条：
 
 1. **DB 直写前必停 Stash**（运行中改 SQLite 内存缓存/WAL 不一致）；`db_cleanup.py` 已内置停→写→重启
 2. **别用 `rescan:true`**（metadataScan 全量重扫触发 hook 风暴崩溃）；测试一律增量扫描
 3. **测试视频内容必须唯一**（`gen_test_video.py` 保证），复制已有文件会被 oshash 合并进旧场景
 4. **GraphQL 查询写 `.py` 脚本文件**，别在 PowerShell 命令行内联（`$id`/`!` 会被插值导致 422）
-5. **javstash 直抓需双镜像头**：`ApiKey: <key>` + `User-Agent: stash/1.0.0`，且请求间 sleep（限流敏感）
 
 ## 归档
 

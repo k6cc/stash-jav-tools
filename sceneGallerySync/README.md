@@ -363,6 +363,9 @@ A: 钩子模式下的临时任务目录，用于后台进程读取连接信息�
 
 ## 变更历史
 
+### 1.9.7
+- **钩子派生后台时输出 stash 日志**：`Scene.Update.Post` 检测到 extrafanart 并成功启动后台进程时输出一行日志（`Scene {id} '<场景标题或文件名>': extrafanart found, background started`），前台不再完全静默；后台详细结果日志仍在 `.sgs_pending/{scene_id}.log`（detached 进程无法写 stash 日志）；输出管道显式重配置为 UTF-8，修复 Windows 下中日文标题乱码
+
 ### 1.9.6
 - **批量任务显示进度条**：任务页 "Create Gallery for Scene" 批量执行时按场景数上报进度，Tasks 页显示百分比进度条；原有每 50 个场景的汇总日志限流行为不变
 

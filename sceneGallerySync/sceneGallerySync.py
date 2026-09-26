@@ -5,6 +5,12 @@ import re
 import time
 import subprocess
 
+# Windows 管道默认 cp936 编码，标题含中日文时写 stderr 会乱码（stash 按 UTF-8 读取）
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # 确保插件目录在 sys.path 最前，避免同名 config 模块被其他路径抢占
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PLUGIN_DIR not in sys.path:
@@ -57,7 +63,7 @@ class SceneGallerySync:
             scene_dir = os.path.dirname(scene["files"][0]["path"])
             if not self.__find_extrafanart_folder(scene_dir):
                         return
-            self.__spawn_background(scene_id)
+            self.__spawn_background(scene_id, scene)
         elif mode == "background":
             self.__run_background(scene_id)
         else:
@@ -80,7 +86,7 @@ class SceneGallerySync:
         except OSError:
             pass
 
-    def __spawn_background(self, scene_id):
+    def __spawn_background(self, scene_id, scene):
         self.__cleanup_stale_tasks()
         os.makedirs(self.PENDING_DIR, exist_ok=True)
         task_file = os.path.join(self.PENDING_DIR, f"{scene_id}.json")
@@ -130,6 +136,11 @@ class SceneGallerySync:
             return
         finally:
             log_fh.close()
+
+        # stash 日志留痕：detached 进程无法写 stash 日志，后台结果只在 .sgs_pending/{scene_id}.log
+        scene_filename = os.path.splitext(os.path.basename(scene["files"][0]["path"]))[0]
+        label = scene.get("title") or scene_filename
+        log.LogInfo(f"Scene {scene_id} '{label}': extrafanart found, background started (details: .sgs_pending/{scene_id}.log)")
 
 
     def __run_background(self, scene_id):

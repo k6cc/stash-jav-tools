@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.2.4："Full Scan & Translate" 批量任务按已处理场景数上报进度，任务页显示进度条
+> v1.3.0：新增「Full Scan (Preview)」dry-run 审计任务（仅扫描不翻译，降低误操作风险）；批量任务统计拆分为场景/图库独立计数，单场景翻译失败不再整组记为失败
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
@@ -49,6 +49,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 |---|---|---|
 | 钩子 `Scene.Create.Post` / `Scene.Update.Post` | 场景创建/更新 | 语言预检（毫秒级，无网络）→ 需翻译则写入 pending 队列（带时间戳与 title/details 快照，同场景覆盖合并；同内容更新跳过重入队不刷新延迟）并 spawn 单例后台 worker → worker 按「钩子入队延迟」到期后读当前标题翻译并写回，**顺带翻译关联图库（按「同步翻译关联图库」开关）**（hook 立即返回，不阻塞 Stash） |
 | 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 分组并发 + 限速 → 批量写回（不经过入队延迟；关联图库按开关同步；缓存跳过已翻译，可中断重跑） |
+| 任务「Full Scan (Preview)」 | 任务列表页手动点击 | dry-run 审计：仅分页扫描统计需翻译的场景/图库数量，**不调用翻译 API、不写回任何字段**；摘要输出到 Stash 任务日志，全量目标清单（scene id + 标题预览 + 关联图库）写入插件日志文件 `scene_translate_auto.log`，供跑全量前评估规模 |
 
 ## 核心机制
 

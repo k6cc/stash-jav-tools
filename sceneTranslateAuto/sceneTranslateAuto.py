@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.2.4: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.3.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
@@ -10,6 +10,8 @@ Scene Translate Auto v1.2.4: 自动翻译场景标题/简介为目标语言（sc
   跳过重入队不刷新延迟，仅内容变化才顺延——只处理"最后一次内容变化后静默 N 秒"的快照）。
 - 任务 "Full Scan & Translate"（手动触发）：全库分页扫描存量场景，按 batchSize 分组并发翻译
   + 限速 + 断点续扫（缓存跳过），不经过入队延迟。
+- 任务 "Full Scan (Preview)"（手动触发，dry-run）：仅扫描审计需翻译的场景/图库数量，
+  不调用翻译 API、不写回；摘要输出到 Stash 任务日志，全量目标清单写入插件日志文件。
 - 语言判断：番号全文匹配跳过；含假名文本按汉字/假名占比判定——假名占优/纯日文判日文，
   汉字占优（汉字数 > 假名数 且 汉字 ≥ 2）判已译（中文）；含 CJK 无假名判已译（中文）；
   含谚文判韩语；
@@ -179,6 +181,16 @@ def log_progress(p):
         p = max(0.0, min(1.0, float(p)))
         sys.stderr.write("\x01p\x02%s\n" % ("%.3f" % p))
         sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def log_audit(msg):
+    """dry-run 审计明细：仅写插件日志文件，不输出到 stderr（避免 Stash 任务日志刷屏）。"""
+    line = "%s [sta-audit] %s" % (datetime.datetime.now().isoformat(), msg)
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
     except Exception:
         pass
 
@@ -1036,6 +1048,8 @@ def handle_hook(payload):
 # ─── Scan All 路径 ───────────────────────────────────────────────────────────
 
 def scan_all(payload):
+    args = payload.get("args") or {}
+    dry_run = bool(args.get("dry_run"))
     conn = payload.get("server_connection") or {}
     gql = make_gql(conn)
     stash_cfg = read_stash_plugin_config(gql)
@@ -1054,17 +1068,18 @@ def scan_all(payload):
         pass
     concurrency = 3
     try:
-        concurrency = max(1, int(stash_cfg.get("scanAllConcurrency") or settings.get("scanAllConcurrency") or 3))
+        concurrency = max(1, int(settings.get("scanAllConcurrency") or 3))
     except Exception:
         pass
     limiter = RateLimiter(qps_for(settings))
     cache = load_cache()
 
-    # 1) 分页收集需要翻译的场景
+    # 1) 分页收集需要翻译的场景（dry-run 与正常模式共用扫描阶段）
     needed = []
     page = 1
     per_page = 500
     total = None
+    stat = {"scenes": 0, "title_need": 0, "details_need": 0, "galleries_need": 0, "cache_skip": 0}
     while True:
         try:
             data = gql(Q_SCENES_PAGE, {"filter": {"per_page": per_page, "page": page}})
@@ -1083,14 +1098,22 @@ def scan_all(payload):
             details = (sc.get("details") or "").strip()
             galleries = [g for g in (sc.get("galleries") or []) if g and g.get("id")] \
                 if settings.get("gallerySync") else []
+            title_need = needs_translation(title, target, code_pat, min_len)
+            details_need = needs_translation(details, target, code_pat, min_len)
             gal_need = [g for g in galleries
                         if needs_translation((g.get("title") or "").strip(), target, code_pat, min_len) or
                            needs_translation((g.get("details") or "").strip(), target, code_pat, min_len)]
-            if not needs_translation(title, target, code_pat, min_len) and \
-               not needs_translation(details, target, code_pat, min_len) and not gal_need:
+            if not title_need and not details_need and not gal_need:
                 continue
+            stat["scenes"] += 1
+            if title_need:
+                stat["title_need"] += 1
+            if details_need:
+                stat["details_need"] += 1
+            stat["galleries_need"] += len(gal_need)
             with _cache_lock:
                 if cache_hit(cache, sid, title, details, settings.get("cacheHours") or 24):
+                    stat["cache_skip"] += 1
                     # 场景已缓存（此前已译/跳过）：仅当有图库需翻译才继续处理
                     if not gal_need:
                         continue
@@ -1100,23 +1123,57 @@ def scan_all(payload):
         page += 1
         if total is not None and (page - 1) * per_page >= total:
             break
-    log("scan_all: %d scenes need translation (page %d, total %s)" % (len(needed), page - 1, total))
+    log("scan_all: %d scenes need translation (page %d, total %s)%s"
+        % (len(needed), page - 1, total, " [DRY-RUN]" if dry_run else ""))
 
-    # 2) 按 batchSize 分组并发翻译
-    # 批量合并翻译按 batchSize 分组提交（每组一次 API 调用）；并发线程共享令牌桶限速
-    ok = 0
-    failed = 0
+    # 2) dry-run：输出审计结果，不调用翻译 API、不写回
+    if dry_run:
+        log("scan_all DRY-RUN audit: total_scenes=%s, need_translate=%d (title=%d, details=%d), "
+            "galleries_need=%d, cache_skip=%d"
+            % (total, stat["scenes"], stat["title_need"], stat["details_need"],
+               stat["galleries_need"], stat["cache_skip"]))
+        for sid, title, details, gals in needed:
+            log_audit("dry-run scene %s title=%r details_len=%d galleries=%d"
+                      % (sid, title[:80], len(details), len(gals or [])))
+            for g in (gals or []):
+                log_audit("dry-run   gallery %s title=%r"
+                          % (g.get("id"), (g.get("title") or "")[:80]))
+        log_progress(1.0)
+        return {
+            "dry_run": True,
+            "total_scenes": total,
+            "need_translate": stat["scenes"],
+            "title_need": stat["title_need"],
+            "details_need": stat["details_need"],
+            "galleries_need": stat["galleries_need"],
+            "cache_skip": stat["cache_skip"],
+        }
+
+    # 3) 按 batchSize 分组并发翻译
+    # 每组内场景串行、组间并行（上限 scanAllConcurrency）；并发线程共享令牌桶限速
+    scenes_ok = 0
+    galleries_ok = 0
+    scenes_failed = 0
     _prog_lock = threading.Lock()
     done_count = [0]
 
     def work_batch(items):
-        nonlocal ok, failed
+        nonlocal scenes_ok, galleries_ok, scenes_failed
+        b_scenes_ok = 0
+        b_galleries_ok = 0
+        b_scenes_failed = 0
         try:
-            updates_list = []
             for sid, title, details, galleries in items:
-                u = translate_entity(gql, "scene", sid, title, details, settings, cache, limiter)
-                if u:
-                    updates_list.append((sid, u))
+                # 单场景异常隔离（v1.3.0）：翻译 API 报错只影响当前场景，
+                # 不再中断整个 batch、不再把整组计入 failed
+                try:
+                    u = translate_entity(gql, "scene", sid, title, details, settings, cache, limiter)
+                    if u:
+                        b_scenes_ok += 1
+                except Exception as e:
+                    b_scenes_failed += 1
+                    log_dead(sid, e)
+                    log("scan_all scene %s error: %s" % (sid, e))
                 for g in galleries or []:
                     gid = g.get("id")
                     if not gid:
@@ -1125,31 +1182,23 @@ def scan_all(payload):
                         gu = translate_entity(gql, "gallery", gid, g.get("title"), g.get("details"),
                                               settings, cache, limiter)
                         if gu:
-                            updates_list.append(("g:%s" % gid, gu))
+                            b_galleries_ok += 1
                             log("scan_all gallery %s translated: %s" % (gid, ",".join(gu.keys())))
-                    except Exception as e:
-                        log("scan_all gallery %s error: %s" % (gid, e))
-                        log_dead("g:%s" % gid, e)
-            with _prog_lock:
-                ok += len(updates_list)
-                done_count[0] += len(items)
-        except Exception as e:
-            with _prog_lock:
-                failed += len(items)
-                done_count[0] += len(items)
-            for sid, _, _, galleries in items:
-                log_dead(sid, e)
-                for g in galleries or []:
-                    if g and g.get("id"):
-                        log_dead("g:%s" % g.get("id"), e)
-            log("batch error: %s" % e)
+                    except Exception as ge:
+                        log("scan_all gallery %s error: %s" % (gid, ge))
+                        log_dead("g:%s" % gid, ge)
         finally:
             with _prog_lock:
+                scenes_ok += b_scenes_ok
+                galleries_ok += b_galleries_ok
+                scenes_failed += b_scenes_failed
+                done_count[0] += len(items)
                 n = done_count[0]
             log_progress(n / len(needed) if needed else 1.0)
             if n % 50 == 0 or n == len(needed):
                 save_cache(cache)
-                log("scan_all progress: %d/%d (ok=%d failed=%d)" % (n, len(needed), ok, failed))
+                log("scan_all progress: %d/%d (scenes_ok=%d galleries_ok=%d scenes_failed=%d)"
+                    % (n, len(needed), scenes_ok, galleries_ok, scenes_failed))
 
     batches = [needed[i:i + batch] for i in range(0, len(needed), batch)] if batch > 1 else [[x] for x in needed]
     pool = ThreadPoolExecutor(max_workers=concurrency)
@@ -1158,8 +1207,10 @@ def scan_all(payload):
     pool.shutdown()
     save_cache(cache)
     log_progress(1.0)
-    log("scan_all done: needed=%d ok=%d failed=%d" % (len(needed), ok, failed))
-    return {"needed": len(needed), "done": ok, "failed": failed}
+    log("scan_all done: needed=%d scenes_ok=%d galleries_ok=%d scenes_failed=%d"
+        % (len(needed), scenes_ok, galleries_ok, scenes_failed))
+    return {"needed": len(needed), "scenes_translated": scenes_ok,
+            "galleries_translated": galleries_ok, "scenes_failed": scenes_failed}
 
 
 # ─── 入口 ────────────────────────────────────────────────────────────────────

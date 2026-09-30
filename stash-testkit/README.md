@@ -93,7 +93,7 @@ stash-testkit/
 | `stash_client.py` | GraphQL 客户端：场景 CRUD / 扫描 / 轮询 / 封面字节 |
 | `gen_test_video.py` | 生成内容唯一测试视频 |
 | `db_cleanup.py` | 测试收尾 DB 孤儿清理（`--prefix` 白名单，`--dry-run` 预览） |
-| `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟单测与 E2E |
+| `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |

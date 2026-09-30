@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.3.0: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.3.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
@@ -69,7 +69,7 @@ DEFAULTS = {
     "rateLimits": {"google_free": 3, "google_api": 3, "microsoft": 2, "baidu": 1, "openai": 2, "deepl": 2},
     "batchSize": 10,
     "gallerySync": True,
-    "codePattern": r"[A-Za-z]{2,10}[-_ ]?\d{2,6}",
+    "codePattern": r"(?:FC2[-_ ]?PPV[-_ ]?\d{5,7}|FC2[-_ ]?\d{5,7}|[A-Za-z]{2,10}[-_ ]?\d{2,6}|\d{6}[-_ ]?\d{2,5}|[A-Za-z]\d{4})",
     "minLength": 4,
     "cacheHours": 24,
     # Stash 插件页默认（GraphQL 未读到设置时兜底）

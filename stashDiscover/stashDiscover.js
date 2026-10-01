@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "0.2.10";
+  var PLUGIN_VERSION = "0.2.11";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -1060,11 +1060,11 @@
     }
 
     var isSearching = (_state.searchQuery || "").trim().length > 0;
-    var totalPages = isSearching
-      ? Math.max(1, Math.ceil(filtered.length / _state.perPage))
-      : (_state.allLoaded
-        ? Math.max(1, Math.ceil(filtered.length / _state.perPage))
-        : _state.currentPage + 1);
+    // Pages the local cache already covers — always known, even mid-lazy-load
+    var knownPages = Math.max(1, Math.ceil(filtered.length / _state.perPage));
+    var totalPages = isSearching || _state.allLoaded
+      ? knownPages
+      : Math.max(knownPages, _state.currentPage + 1);
 
     // ── Result count — between the filter toolbar and the cards ──
     var countInfo = document.createElement("div");
@@ -1104,21 +1104,18 @@
     prevBtn.onclick = function () { goToPage(_state.currentPage - 1); };
     pg.appendChild(prevBtn);
 
-    // Page numbers: full window when the result set is known, current page only while lazy-loading
-    if (_state.allLoaded || isSearching) {
-      var startPage = Math.max(1, _state.currentPage - 2);
-      var endPage = Math.min(totalPages, startPage + 4);
-      if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
-      for (var pn = startPage; pn <= endPage; pn++) {
-        pg.appendChild(makePageButton(pn, pn === _state.currentPage));
-      }
-    } else {
-      pg.appendChild(makePageButton(_state.currentPage, true));
+    // Page numbers: show every page the local cache already covers; while
+    // lazy-loading, the > arrow keeps fetching further pages on demand
+    var startPage = Math.max(1, _state.currentPage - 2);
+    var endPage = Math.min(knownPages, startPage + 4);
+    if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
+    for (var pn = startPage; pn <= endPage; pn++) {
+      pg.appendChild(makePageButton(pn, pn === _state.currentPage));
     }
 
     var canNext = isSearching
-      ? _state.currentPage < totalPages
-      : (_state.allLoaded ? _state.currentPage < totalPages : true);
+      ? _state.currentPage < knownPages
+      : (_state.allLoaded ? _state.currentPage < knownPages : true);
     var nextBtn = document.createElement("button");
     nextBtn.type = "button";
     nextBtn.className = "btn btn-secondary";

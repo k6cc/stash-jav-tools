@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "0.2.8";
+  var PLUGIN_VERSION = "0.2.9";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -1073,8 +1073,9 @@
       countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 共 " + filtered.length + " 个",
         "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " total");
     } else {
-      countInfo.textContent = tc("第 " + _state.currentPage + " 页（更多结果加载中）",
-        "Page " + _state.currentPage + " (more loading)");
+      // Not all box pages fetched yet — results load on demand while paging
+      countInfo.textContent = tc("第 " + _state.currentPage + " 页 · 已发现 " + filtered.length + " 个（翻页加载更多）",
+        "Page " + _state.currentPage + " · " + filtered.length + " found (more load as you page)");
     }
     pane.appendChild(countInfo);
 
@@ -1979,11 +1980,9 @@
   // the stash-box performer page; click anywhere else (or scroll) → dismiss.
 
   var _performerCardEl = null;
-  var _performerCardPending = null;
 
   function hidePerformerCard() {
     if (_performerCardEl) { _performerCardEl.remove(); _performerCardEl = null; }
-    if (_performerCardPending) { _performerCardPending.cancelled = true; _performerCardPending = null; }
     document.removeEventListener("click", hidePerformerCard);
     var modalEl = document.querySelector(".ssd-modal");
     if (modalEl) modalEl.removeEventListener("scroll", hidePerformerCard);
@@ -1993,9 +1992,6 @@
     if (!pill.isConnected) return;
     // Toggle: clicking the pill of a mounted card closes it
     if (_performerCardEl && _performerCardEl._ssdPill === pill) { hidePerformerCard(); return; }
-    // While the avatar is still preloading, clicking the same pill again
-    // means "open it" — keep waiting instead of cancelling the pending card
-    if (_performerCardPending && _performerCardPending.pill === pill) return;
     hidePerformerCard();
 
     // Local performer avatar when mapped (fast, internal); box image otherwise
@@ -2004,20 +2000,10 @@
     var imgSrc = lp ? ("/performer/" + lp.id + "/image")
       : (((performer.images || [])[0] || {}).url || "");
 
-    // Preload the avatar before mounting: the card is sized by the image
-    // (aspect ratio kept), so positioning earlier would compute a collapsed
-    // height and the expanding card would end up covering the pill.
-    var pending = { pill: pill };
-    _performerCardPending = pending;
-    var mount = function () {
-      if (pending.cancelled || !pill.isConnected) { _performerCardPending = null; return; }
-      _performerCardPending = null;
-      mountPerformerCard(pill, item, performer, lp, imgSrc);
-    };
-    if (!imgSrc) { mount(); return; }
-    var preload = new Image();
-    preload.onload = preload.onerror = mount;
-    preload.src = imgSrc;
+    // Mount immediately with a fixed-size portrait skeleton (instant feedback);
+    // the avatar loads inside the fixed 80x120 frame, so the card size never
+    // changes and the mount position is always correct.
+    mountPerformerCard(pill, item, performer, lp, imgSrc);
   }
 
   function mountPerformerCard(pill, item, performer, lp, imgSrc) {
@@ -2039,8 +2025,10 @@
     if (imgSrc) {
       var img = document.createElement("img");
       img.className = "ssd-perf-avatar";
-      img.src = imgSrc;
       img.alt = "";
+      wrap.classList.add("is-loading");
+      img.onload = img.onerror = function () { wrap.classList.remove("is-loading"); };
+      img.src = imgSrc;
       wrap.appendChild(img);
     }
     var ageEl = document.createElement("span");

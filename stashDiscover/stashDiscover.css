@@ -279,8 +279,9 @@
 .ssd-carousel-hero {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  max-height: 460px;
+  /* JAV cover standard ratio (800x538) so the cover fills the frame edge to edge */
+  aspect-ratio: 800 / 538;
+  max-height: 560px;
   background-size: contain;
   background-position: center;
   background-repeat: no-repeat;
@@ -292,7 +293,7 @@
   justify-content: center;
   color: var(--ssd-modal-muted);
   font-size: 14px;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 800 / 538;
   background: #111;
 }
 .ssd-carousel-nav {
@@ -549,17 +550,40 @@
   cursor: pointer;
 }
 .ssd-perf-avatar-wrap {
+  /* Fixed portrait skeleton (2:3) — most performer avatars fill it edge to
+     edge; other ratios are contained, never cropped. Card size never changes,
+     so the mount position is always correct. */
   position: relative;
+  width: 80px;
+  height: 120px;
+  background: #1a1a1a;
+  border-radius: 6px;
   line-height: 0;
+  overflow: hidden;
 }
 .ssd-perf-avatar {
-  /* Show the full image: only cap the size, never crop */
-  max-width: 120px;
-  max-height: 120px;
-  width: auto;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   display: block;
   border-radius: 6px;
+}
+.ssd-perf-avatar-wrap.is-loading::after {
+  /* Spinner shown until the avatar loads */
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(255, 255, 255, 0.75);
+  border-radius: 50%;
+  animation: ssd-spin 0.7s linear infinite;
+}
+@keyframes ssd-spin {
+  to { transform: rotate(360deg); }
 }
 .ssd-perf-badge {
   position: absolute;

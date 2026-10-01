@@ -1,0 +1,71 @@
+name: stashDiscover
+description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
+version: 0.2.8
+url: https://discourse.stashapp.cc/
+errLog: info
+
+settings:
+  recentDays:
+    displayName: "Recent Window (days)"
+    description: "Only show scenes released within the last N days. 0 = unlimited (show all). Prevents the tab from flooding with old scenes. Default 180."
+    type: NUMBER
+  previewDays:
+    displayName: "Preview Window (days)"
+    description: "Future-dated scenes are previews. -1 = hide all previews, 0 = unlimited, N = only show previews releasing within N days. Default 7."
+    type: STRING
+  jackettUrl:
+    displayName: "Jackett API URL"
+    description: "Jackett base URL or Torznab endpoint. Base URL is auto-completed (e.g. http://192.168.3.190:9117)"
+    type: STRING
+  jackettApiKey:
+    displayName: "Jackett API Key"
+    description: "Jackett API key (found in Jackett dashboard top-right)"
+    type: STRING
+  downloaderType:
+    displayName: "Downloader Type"
+    description: "Torrent downloader for push-to-download (currently only qbittorrent)"
+    type: STRING
+  downloaderUrl:
+    displayName: "Downloader URL"
+    description: "qBittorrent Web UI URL, e.g. http://localhost:8080"
+    type: STRING
+  downloaderUsername:
+    displayName: "Downloader Username"
+    description: "qBittorrent Web UI username"
+    type: STRING
+  downloaderPassword:
+    displayName: "Downloader Password"
+    description: "qBittorrent Web UI password"
+    type: STRING
+  preferredBox:
+    displayName: "Preferred stash-box"
+    description: "Endpoint substring to prefer when multiple boxes are configured (e.g. javstash.org). Empty = query all."
+    type: STRING
+
+exec:
+  - python
+  - "{pluginDir}/stashDiscover.py"
+
+interface: raw
+
+tasks:
+  - name: "Search Resources"
+    description: "Search Jackett for a scene and return results (called by UI)"
+    defaultArgs:
+      mode: search
+  - name: "Push to Downloader"
+    description: "Push a magnet link to the configured downloader (called by UI)"
+    defaultArgs:
+      mode: push_download
+
+ui:
+  javascript:
+    - stashDiscover.js
+  css:
+    - stashDiscover.css
+  csp:
+    connect-src:
+      - "https://stashdb.org"
+      - "https://javstash.org"
+      - "https://theporndb.net"
+      - "https://r18.dev"

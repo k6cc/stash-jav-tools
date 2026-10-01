@@ -1,0 +1,631 @@
+/* ─── stashDiscover ──────────────────────────────────────────────────────── */
+/* Grid/cards reuse Stash native .scene-card / .grid-card classes and the     */
+/* native .filtered-list-toolbar so themes apply automatically. Modal uses    */
+/* dark theme (performerMerge pattern).                                       */
+
+:root {
+  --ssd-primary: #0ca678;
+  --ssd-primary-hover: #099268;
+  --ssd-accent: #f76707;
+  --ssd-accent-hover: #e8590c;
+  --ssd-secondary: #495057;
+  --ssd-secondary-hover: #868e96;
+  --ssd-success: #37b24d;
+  --ssd-danger: #f03e3e;
+  --ssd-preview: #7950f2;
+  --ssd-modal-bg: #2b2b2b;
+  --ssd-modal-border: #444;
+  --ssd-modal-text: #e0e0e0;
+  --ssd-modal-muted: #999;
+  --ssd-radius: 6px;
+}
+
+/* ─── Tab nav link ───────────────────────────────────────────────────────── */
+
+.ssd-nav-link {
+  cursor: pointer;
+  color: var(--ssd-modal-muted);
+  transition: color 0.15s;
+}
+.ssd-nav-link:hover { color: var(--ssd-modal-text); }
+.ssd-nav-link.active {
+  color: var(--ssd-primary) !important;
+  font-weight: 600;
+}
+
+/* ─── Toolbar ─────────────────────────────────────────────────────────────── */
+/* The filter toolbar reuses Stash native classes 1:1 (.filtered-list-toolbar, */
+/* .clearable-input-group, .sort-by-select, .page-size-selector, .zoom-slider) */
+/* so themes apply automatically — no plugin CSS needed.                        */
+
+.ssd-count-info {
+  font-size: 12px;
+  color: var(--ssd-modal-muted);
+  white-space: nowrap;
+}
+
+/* Result count — sits between the filter toolbar and the card grid */
+.ssd-count-line {
+  margin: 2px 4px 10px;
+  text-align: center;
+  font-size: 14px;
+}
+
+/* Per-page selector: keep the native width, never squeezed by the toolbar */
+.ssd-tab-pane .page-size-selector {
+  min-width: 74px;
+  flex-shrink: 0;
+}
+.ssd-tab-pane .page-size-selector select {
+  width: 100%;
+  min-width: 64px;
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────────── */
+
+.ssd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.ssd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.ssd-btn-lg { padding: 6px 16px; font-size: 13px; }
+.ssd-btn-sm { padding: 3px 10px; font-size: 11px; height: 22px; line-height: 1; }
+
+.ssd-btn-primary { background: var(--ssd-primary); color: #fff; }
+.ssd-btn-primary:hover:not(:disabled) { background: var(--ssd-primary-hover); }
+.ssd-btn-secondary { background: var(--ssd-secondary); color: #fff; }
+.ssd-btn-secondary:hover:not(:disabled) { background: var(--ssd-secondary-hover); }
+.ssd-btn-accent { background: var(--ssd-accent); color: #fff; }
+.ssd-btn-accent:hover:not(:disabled) { background: var(--ssd-accent-hover); }
+.ssd-btn-success { background: var(--ssd-success) !important; color: #fff; }
+.ssd-btn-danger { background: var(--ssd-danger) !important; color: #fff; }
+
+/* ─── States ─────────────────────────────────────────────────────────────── */
+
+.ssd-loading {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+}
+.ssd-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--ssd-modal-border);
+  border-top-color: var(--ssd-primary);
+  border-radius: 50%;
+  animation: ssd-spin 0.8s linear infinite;
+}
+@keyframes ssd-spin { to { transform: rotate(360deg); } }
+
+.ssd-error {
+  background: rgba(240, 62, 62, 0.1);
+  border: 1px solid rgba(240, 62, 62, 0.3);
+  color: #ff8787;
+  padding: 12px 16px;
+  border-radius: var(--ssd-radius);
+  font-size: 13px;
+}
+.ssd-empty {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--ssd-modal-muted);
+  font-size: 14px;
+}
+
+/* ─── Native grid cards (1:1 Stash .scene-card.grid-card) ─────────────────── */
+
+.ssd-card-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0 auto;
+  max-width: 2250px;
+}
+/* Native .scene-card carries 5px margins (→ 10px gap between cards) */
+.ssd-card-grid .scene-card {
+  margin: 5px;
+  cursor: pointer;
+}
+/* Native hides specs/studio on hover because the preview video fades in;
+   our cards have no video, so keep the overlays visible. */
+.ssd-card-grid .scene-card:hover .scene-specs-overlay,
+.ssd-card-grid .scene-card:hover .studio-overlay {
+  transition: none;
+}
+.ssd-card-grid .scene-card:hover .scene-specs-overlay { opacity: 1; }
+.ssd-card-grid .scene-card:hover .studio-overlay { opacity: 0.75; }
+
+/* Studio name — native .studio-overlay inherits the card's 14px; shrink it a
+   notch so long studio names take less cover space */
+.ssd-card-grid .studio-overlay { font-size: 12px; }
+
+/* ── Custom overlays on top of native .scene-card-preview ─────────────────── */
+
+/* Box source pill — bottom-left corner (native cards put duration/specs at the
+   bottom-right and studio at the top-right; the bottom-left has no fixed
+   native content). Bottom edge mirrors the native .scene-specs-overlay row. */
+.ssd-overlay-box {
+  position: absolute;
+  bottom: 1rem;
+  left: 0.7rem;
+  z-index: 9;
+  background: rgba(12, 166, 120, 0.92);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Preview (future-dated) pill — top-left corner (the box source pill has its
+   own corner at the bottom-left, so the two never overlap) */
+.ssd-overlay-preview {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 9;
+  background: rgba(121, 80, 242, 0.92);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* ── Refract theme compatibility ───────────────────────────────────────────
+   Refract (body.stash-liquid-glass) hides the native popover row on scene
+   cards (.card-popovers + sibling hr, display:none !important) because it
+   injects its own performer circles / tag badge — but its JS only touches
+   cards with an <a href="/scenes/..."> link, which our div+onclick cards
+   lack. Restore the badges with higher specificity (5 classes beat
+   Refract's body+3 classes). */
+.ssd-card-grid .scene-card.ssd-scene-card .card-section .card-popovers {
+  display: flex !important;
+}
+.ssd-card-grid .scene-card.ssd-scene-card .card-section hr {
+  display: block !important;
+}
+
+/* ─── Pager ──────────────────────────────────────────────────────────────── */
+
+.ssd-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16px;
+  padding: 12px 0;
+}
+
+/* Native .page-count's padding ("5.25px 5px 5.25px 15px") plus Stash's own
+   ".pagination .btn.page-count { padding-right: 5px }" are tuned for the
+   "第X页，共Y页 ⌄" label — a bare page number needs symmetric padding
+   to stay visually centered inside the button */
+.ssd-pager .pagination .btn.page-count {
+  padding-left: 10.5px;
+  padding-right: 10.5px;
+}
+
+/* ─── Modal (dark theme — performerMerge pattern) ────────────────────────── */
+
+.ssd-modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(0, 0, 0, 0.75) !important;
+  z-index: 99999 !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  padding: 30px 16px !important;
+}
+.ssd-modal {
+  position: relative;
+  max-width: 820px !important;
+  width: 100% !important;
+  max-height: calc(100vh - 60px) !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable !important;
+  margin: auto 0 !important;
+  background: var(--ssd-modal-bg) !important;
+  border-radius: 8px !important;
+  color: var(--ssd-modal-text) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+}
+.ssd-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 4px;
+  background: #555;
+  color: #ddd;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.ssd-modal-close:hover { background: var(--ssd-danger); color: #fff; }
+
+/* ─── Carousel (lazy load — binge pattern: backgroundImage on current only) ─ */
+
+.ssd-carousel {
+  position: relative;
+  width: 100%;
+  background: #000;
+}
+.ssd-carousel-hero {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 460px;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-color: #000;
+}
+.ssd-carousel-hero-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ssd-modal-muted);
+  font-size: 14px;
+  aspect-ratio: 16 / 9;
+  background: #111;
+}
+.ssd-carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  z-index: 5;
+  line-height: 1;
+}
+.ssd-carousel-nav:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.85);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.ssd-carousel-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.ssd-carousel-prev { left: 14px; }
+.ssd-carousel-next { right: 14px; }
+.ssd-carousel-counter {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  z-index: 5;
+}
+
+/* ─── Modal sections (dividers — performerMerge pattern) ─────────────────── */
+
+.ssd-modal-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--ssd-modal-border);
+}
+.ssd-modal-section:last-child { border-bottom: none; }
+
+.ssd-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ssd-modal-text);
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+
+/* Action row */
+.ssd-action-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Meta grid */
+.ssd-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ssd-meta-item {
+  background: #1a1a1a;
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+.ssd-meta-label {
+  font-size: 10px;
+  color: var(--ssd-modal-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+.ssd-meta-value {
+  font-size: 13px;
+  color: var(--ssd-modal-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Detail rows */
+.ssd-detail-row {
+  font-size: 13px;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+.ssd-detail-label {
+  color: var(--ssd-modal-muted);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.ssd-detail-link {
+  color: var(--ssd-primary);
+  text-decoration: none;
+  word-break: break-all;
+  font-size: 12px;
+  margin-right: 8px;
+}
+.ssd-detail-link:hover { text-decoration: underline; }
+
+/* Tag / performer pills (rounded background) */
+.ssd-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ssd-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  background: rgba(12, 166, 120, 0.15);
+  border: 1px solid rgba(12, 166, 120, 0.4);
+  color: #63e6be;
+  white-space: nowrap;
+}
+.ssd-pill-performer {
+  background: rgba(51, 154, 240, 0.12);
+  border-color: rgba(51, 154, 240, 0.4);
+  color: #74c0fc;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ssd-pill-performer:hover {
+  background: rgba(51, 154, 240, 0.25);
+  border-color: #74c0fc;
+}
+
+/* Synopsis — full display, no inner scroll */
+.ssd-synopsis-text {
+  font-size: 13px;
+  color: var(--ssd-modal-text);
+  line-height: 1.7;
+  margin-top: 6px;
+  white-space: pre-wrap;
+}
+
+/* ─── Search section ─────────────────────────────────────────────────────── */
+
+.ssd-search-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ssd-search-bar .clearable-input-group { flex: 1; min-width: 0; margin-bottom: 0; }
+.ssd-search-bar .form-control { font-size: 13px; }
+/* Follow the input's height (overrides .ssd-btn-sm's fixed 22px) */
+.ssd-search-bar .ssd-btn { align-self: stretch; height: auto; font-size: 13px; padding: 0 14px; }
+.ssd-search-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ssd-modal-text);
+  margin-bottom: 10px;
+}
+.ssd-search-loading {
+  font-size: 13px;
+  color: var(--ssd-modal-muted);
+  padding: 12px 0;
+}
+.ssd-search-error {
+  font-size: 13px;
+  color: #ff8787;
+  padding: 10px 14px;
+  background: rgba(240, 62, 62, 0.1);
+  border-radius: var(--ssd-radius);
+}
+.ssd-search-empty {
+  font-size: 13px;
+  color: var(--ssd-modal-muted);
+  padding: 12px 0;
+}
+.ssd-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ssd-search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  transition: border-color 0.15s;
+}
+.ssd-search-item:hover { border-color: var(--ssd-primary); }
+.ssd-search-item-info { flex: 1; min-width: 0; }
+.ssd-search-item-title {
+  font-size: 13px;
+  color: var(--ssd-modal-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+.ssd-search-item-meta {
+  font-size: 11px;
+  color: var(--ssd-modal-muted);
+}
+.ssd-search-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Search pagination */
+.ssd-search-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ssd-modal-border);
+}
+.ssd-search-pager .ssd-count-info {
+  min-width: 100px;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* ─── Floating performer avatar card ─────────────────────────────────────── */
+
+.ssd-performer-card {
+  position: fixed;
+  z-index: 100000;
+  padding: 6px;
+  background: var(--ssd-modal-bg);
+  border: 1px solid var(--ssd-modal-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.ssd-perf-avatar-wrap {
+  position: relative;
+  line-height: 0;
+}
+.ssd-perf-avatar {
+  /* Show the full image: only cap the size, never crop */
+  max-width: 120px;
+  max-height: 120px;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+}
+.ssd-perf-badge {
+  position: absolute;
+  bottom: 3px;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  /* Dark outline fading outwards instead of a solid background */
+  text-shadow:
+    -0.5px -0.5px 0 rgba(0, 0, 0, 0.9), 0.5px -0.5px 0 rgba(0, 0, 0, 0.9),
+    -0.5px 0.5px 0 rgba(0, 0, 0, 0.9), 0.5px 0.5px 0 rgba(0, 0, 0, 0.9),
+    0 0 2px rgba(0, 0, 0, 0.7), 0 0 4px rgba(0, 0, 0, 0.45),
+    0 0 7px rgba(0, 0, 0, 0.2);
+}
+.ssd-perf-age { left: 4px; }
+.ssd-perf-flag { right: 4px; }
+.ssd-perf-flag img {
+  display: block;
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* ─── Notice ─────────────────────────────────────────────────────────────── */
+
+.ssd-notice {
+  padding: 8px 12px;
+  border-radius: var(--ssd-radius);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.ssd-notice-error {
+  background: rgba(240, 62, 62, 0.12);
+  color: #ff8787;
+  border: 1px solid rgba(240, 62, 62, 0.3);
+}
+.ssd-notice-info {
+  background: rgba(51, 154, 240, 0.1);
+  color: #74c0fc;
+  border: 1px solid rgba(51, 154, 240, 0.3);
+}
+
+/* ─── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .ssd-meta-grid { grid-template-columns: repeat(2, 1fr); }
+  .ssd-search-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ssd-search-item-actions { justify-content: flex-end; }
+}
+
+@media (max-width: 480px) {
+  .ssd-modal-overlay { padding: 0 !important; }
+  .ssd-modal {
+    border-radius: 0 !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
+  }
+  .ssd-carousel-hero { max-height: 280px; }
+  .ssd-action-row .ssd-btn { flex: 1; }
+}

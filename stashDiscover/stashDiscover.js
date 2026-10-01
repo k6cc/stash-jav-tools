@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "0.2.9";
+  var PLUGIN_VERSION = "0.2.10";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -2048,6 +2048,9 @@
     var left = Math.max(8, Math.min(r.left + r.width / 2 - cw / 2, window.innerWidth - cw - 8));
     var top = r.top - ch - 8;
     if (top < 8) top = r.bottom + 8;
+    // Keep the card inside the viewport even when the pill sits near the
+    // bottom edge (flipped-below placement would overflow)
+    if (top + ch > window.innerHeight - 8) top = Math.max(8, window.innerHeight - ch - 8);
     card.style.left = left + "px";
     card.style.top = top + "px";
 

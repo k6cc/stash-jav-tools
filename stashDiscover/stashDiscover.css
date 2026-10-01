@@ -554,8 +554,8 @@
      edge; other ratios are contained, never cropped. Card size never changes,
      so the mount position is always correct. */
   position: relative;
-  width: 80px;
-  height: 120px;
+  width: 96px;
+  height: 144px;
   background: #1a1a1a;
   border-radius: 6px;
   line-height: 0;

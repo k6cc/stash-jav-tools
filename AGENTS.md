@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` / `sceneTranslateAuto` / `javstashAutofill+` / `oStatsI18n` 共 11 个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` / `sceneTranslateAuto` / `javstashAutofill+` / `oStatsI18n` / `stashDiscover` 共 12 个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
 
 ## 发版
 
@@ -19,6 +19,7 @@
 | studioToolsAuto / tagMergeAuto / sceneTranslateAuto | 对应 `.py` 头部 docstring banner（`... Auto vX.Y.Z`） |
 | javstashAutofill+ | `javstash_autofill_plus.py` 头部 docstring banner |
 | oStatsI18n | `oStatsI18n.js` 顶部 `PLUGIN_VERSION`（JS UI 插件） |
+| stashDiscover | `stashDiscover.js` 顶部 `PLUGIN_VERSION`（console banner 输出） |
 
 ### 流程
 

@@ -19,6 +19,7 @@ stash-testkit/
 │   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
 │   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
 │   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
+│   ├── stashDiscover/       # 发现页/弹窗/Jackett 链路业务语义（NOTES.md）
 │   └── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
@@ -49,6 +50,7 @@ stash-testkit/
 - **插件"查不到/版本旧" = 同 id 旧副本**：`E:\stashAPP\plugins\` 下另有同名目录时 Stash 加载旧副本。全盘找 `.yml` → 移除旧副本 → 重启 → 再查 version。
 - **`configuration { plugins }` 只记录改过设置的插件**：仅安装且默认设置的插件不在 config.yml 也不在 plugins 查询结果里；读默认设置按插件目录 config.json 处理。
 - **hook 并发 spawn worker**：重扫风暴下可能重复翻译一次；插件守卫（写前重读）保证不覆盖，仅浪费一次调用，已知。
+- **Stash 监听 0.0.0.0 时插件 Python 进程连自身 GraphQL 报 WinError 10049**：host 归一化成 `127.0.0.1` 再连（stashDiscover 后端实测）。
 - **开 Debug 日志看服务端时序**：GraphQL `configureGeneral(input:{logLevel:"Debug", logFile:"..."})` 重启后生效，流媒体的 `[transcode]` 行能看清转码启停；测完还原 Info + 空 logFile。
 
 ### 数据语义
@@ -57,6 +59,7 @@ stash-testkit/
 - **别造无文件裸场景测新场景插件**：`create_scene()` 建无文件场景会让 nfoSceneParser 等 `Scene.Create.Post` 插件 `IndexError: files[0]`。依赖文件的测试必须走"真实视频 + 增量扫描"。
 - **封面"是否仍为自动帧"判别**：`screenshot?t=` 是场景 `updated_at` 的 epoch；`?t= == created_at` ⇔ 场景创建后无人写过任何元数据。
 - **封面内容验证**：`fetch_scene_image()` 抓 screenshot 端点字节，与本地封面文件比对即可判定"封面被谁写了"。
+- **Stash `logs` 查询返回新→旧**：Python 任务写 marker → 前端轮询日志的协议，正序扫描第一个匹配 marker 即最新一条（倒序恰好取到最旧）。
 
 ### GraphQL schema（v0.31.1 实测）
 
@@ -69,6 +72,7 @@ stash-testkit/
 - **老版本 `plugins(include:[...])` 422**：用 `configuration { plugins }` 或 `plugins { id name settings {...} }`（settings 必须带子选择）。
 - **`SceneQueryInput` 不收 `q` 字段**（422）；按 code/performer 精确查走对应字段。
 - **tagCreate 被别名占用名拒绝**：已被用作其他 tag 别名的名字 `tagCreate` 报错；`Tag.Create.Post` 钩子（tagMergeAuto）同步合并会令 `tagCreate` 返回 `null`。javstashAF+ v1.2.4 起创建前先 name/别名预查。
+- **本地 Performer 无 `age` 字段**：本地 Stash 存 `birthdate`，年龄自行计算；stash-box 端是 `birth_date`（两端字段名不同）。
 - **Identify 新建 tag 不触发 `Tag.Create.Post` 钩子**（走仓库层 `tagCreator.Create()`）；兜底是手动跑 tagMergeAuto "Full Scan & Merge"（`runPluginTask(plugin_id:"tagMergeAuto", task_name:"Full Scan & Merge")`，`plugin_id` 是 `ID!`）。
 
 ### 外部源（javstash / stashdb）
@@ -77,6 +81,8 @@ stash-testkit/
 - **javstash 限流敏感**：连发请求 5 分钟级 read timeout；探测单请求 + 45s timeout + 请求间 sleep。
 - **stashdb.org 本机匿名访问被拒**：只能经本地 stash `stash_box_endpoint` 代理。
 - **box tag 网页 URL**：`endpoint 去 /graphql 尾 + "/tags/" + remote_site_id`，三 box 同构。
+- **stash-box `findPerformer` 有 `birth_date` + `country`**：country 是 ISO 3166-1 alpha-2 两字码（如 JP），直接可查（javstash 实测）。
+- **国籍国旗别用 emoji**：Windows 的 Segoe UI Emoji 不渲染国旗字形（显示成两字母），用 `flagcdn.com/w40/<小写码>.png` + `onerror` 回退国家码文本。
 
 ### 工具链
 
@@ -85,6 +91,7 @@ stash-testkit/
 - **测流媒体/播放别用 `--virtual-time-budget`**：headless Chrome 加该参数时媒体时钟不推进、`currentTime` 恒为 0，验证播放与 seek 恢复必须跑真实时间。
 - **用 CDP 驱动 Chrome 必须带 `--remote-allow-origins=*`**，否则 WebSocket 握手 403；`browser-automation-cdp` 技能的 `start_chrome.py` 已内建该参数，手动启动浏览器时别漏。额外 flag 用它的 `--extra` 透传。
 - **浏览器里测 Stash 流要同源注入**：Stash 流端点无 CORS 头，跨域 `fetch` 必失败；先 `open` 到 `http://127.0.0.1:9999/login` 这类同源页面再注入脚本，段 URL 用 manifest 自带的 apikey（无需登录态）。
+- **断言异步 UI 先等元素出现**：点击触发的渲染/预载/回填是异步的，点击后立即 evaluate 读到中间态；先轮询等目标元素/文本出现再断言（否则"头像没加载出来"式误判）。
 
 ## 脚本索引
 
@@ -97,6 +104,7 @@ stash-testkit/
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
+| `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、标记协议、显示映射、测试环境），见 `tests/stashDiscover/NOTES.md` |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 
 ## 清理规范

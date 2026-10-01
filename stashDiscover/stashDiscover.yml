@@ -1,7 +1,7 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
 version: 0.2.8
-url: https://discourse.stashapp.cc/
+url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
 settings:

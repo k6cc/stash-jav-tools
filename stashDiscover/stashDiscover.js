@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "0.2.11";
+  var PLUGIN_VERSION = "0.2.12";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -343,6 +343,22 @@
     });
   }
 
+  // True when the boundary date on a fetched box page already lies outside
+  // the recent/preview window — box pages arrive date-sorted in the fetch
+  // direction, so every later page would be outside the window too; paging
+  // on would only waste requests.
+  function boxPageOutOfWindow(scenes) {
+    var recentCut = recentCutoffDate(_state.recentDays);
+    var previewCut = previewCutoffDate(_state.previewDays);
+    for (var i = scenes.length - 1; i >= 0; i--) {
+      var rd = scenes[i].scene.release_date;
+      if (!rd) continue;
+      if (_state.sortDir === "ASC") return !!previewCut && rd > previewCut;
+      return !!recentCut && rd < recentCut;
+    }
+    return false;
+  }
+
   // Fetch more box pages until cachedMissing covers up to `needed` items, or all boxes exhausted.
   // Returns the (possibly extended) cachedMissing array.
   function ensureMissingLoaded(needed) {
@@ -379,6 +395,9 @@
       return fetchBoxPage(b, sid, pageNum).then(function (result) {
         _state.boxCursors[b.endpoint] = pageNum + 1;
         if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
+        // Window early-stop: the page's boundary date crossed the window,
+        // every later page is outside it as well
+        else if (boxPageOutOfWindow(result.scenes)) _state.boxExhausted[b.endpoint] = true;
         if (result.count && !_state.boxTotalCount) _state.boxTotalCount = result.count;
         return result.scenes;
       }).catch(function (e) {
@@ -612,8 +631,29 @@
       if (pageNum < 1) pageNum = 1;
     }
     _state.currentPage = pageNum;
-    var needed = pageNum * _state.perPage;
+    loadAndRender(pageNum * _state.perPage);
+  }
+
+  // Render the current page from the local cache immediately (when the cache
+  // already covers the page start), then top up to `needed` in the background
+  // with an incremental refresh when more scenes arrive. Falls back to a
+  // spinner when the page start is beyond the known results.
+  function loadAndRender(needed) {
+    var known = getFilteredMissing().length;
+    var start = (_state.currentPage - 1) * _state.perPage;
+    if (known > start) {
+      renderTabContent();
+      if (_state.allLoaded || known >= needed) return;
+      var before = _state.cachedMissing.length;
+      ensureMissingLoaded(needed).then(function () {
+        if (_state.cachedMissing.length > before) renderTabContent();
+      });
+      return;
+    }
+    _state.loading = true;
+    renderTabContent();
     ensureMissingLoaded(needed).then(function () {
+      _state.loading = false;
       renderTabContent();
     });
   }
@@ -622,9 +662,7 @@
   function changePerPage(newPerPage) {
     _state.perPage = newPerPage;
     _state.currentPage = 1;
-    ensureMissingLoaded(newPerPage).then(function () {
-      renderTabContent();
-    });
+    loadAndRender(newPerPage);
   }
 
   // Change sort direction.

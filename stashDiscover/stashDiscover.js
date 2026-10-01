@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "1.0.0";
+  var PLUGIN_VERSION = "1.0.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -1898,7 +1898,36 @@
     // Meta grid
     var metaGrid = document.createElement("div");
     metaGrid.className = "ssd-meta-grid";
-    if (sc.code) metaGrid.appendChild(buildMetaItem(tc("番号", "Code"), sc.code));
+    if (sc.code) {
+      var codeItem = buildMetaItem(tc("番号", "Code"), sc.code);
+      codeItem.className += " ssd-code-copyable";
+      // Click the whole item to copy; a brief text color change is the only
+      // feedback — no toast text, no animation
+      codeItem.addEventListener("click", function () {
+        var flashCopied = function () {
+          codeItem.classList.add("ssd-copied");
+          clearTimeout(codeItem._copyT);
+          codeItem._copyT = setTimeout(function () {
+            codeItem.classList.remove("ssd-copied");
+          }, 800);
+        };
+        var fallbackCopy = function () {
+          var ta = document.createElement("textarea");
+          ta.value = sc.code;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          flashCopied();
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(sc.code).then(flashCopied, fallbackCopy);
+        } else {
+          fallbackCopy();
+        }
+      });
+      metaGrid.appendChild(codeItem);
+    }
     if (sc.release_date) metaGrid.appendChild(buildMetaItem(tc("发行日期", "Release Date"), sc.release_date));
     if (sc.production_date) metaGrid.appendChild(buildMetaItem(tc("制作日期", "Production Date"), sc.production_date));
     if (sc.duration) metaGrid.appendChild(buildMetaItem(tc("时长", "Duration"), formatDuration(sc.duration)));

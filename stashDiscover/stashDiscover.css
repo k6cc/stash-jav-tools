@@ -388,6 +388,17 @@
   white-space: nowrap;
 }
 
+/* Code meta item: click the whole item to copy; brief text color change is
+   the only feedback — no toast, no animation */
+.ssd-code-copyable {
+  cursor: pointer;
+}
+
+.ssd-code-copyable.ssd-copied .ssd-meta-label,
+.ssd-code-copyable.ssd-copied .ssd-meta-value {
+  color: #35c46f;
+}
+
 /* Detail rows */
 .ssd-detail-row {
   font-size: 13px;

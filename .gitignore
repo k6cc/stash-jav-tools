@@ -29,6 +29,9 @@ oStatsI18n/watch_data.json
 # 论坛发帖草稿（不随仓库发布）
 forum-post-*.md
 
+# agent 工作区数据（记忆/会话，不提交）
+.workbuddy/
+
 # 测试工具本地配置（含 API key，不提交）
 stash-testkit/config.json
 

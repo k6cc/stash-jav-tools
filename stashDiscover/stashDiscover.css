@@ -269,7 +269,7 @@
 }
 .ssd-modal-close:hover { background: var(--ssd-danger); color: #fff; }
 
-/* ─── Carousel (lazy load — binge pattern: backgroundImage on current only) ─ */
+/* ─── Carousel (lazy load: backgroundImage on current only) ──────────────── */
 
 .ssd-carousel {
   position: relative;

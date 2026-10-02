@@ -4,13 +4,13 @@
  * Adds a "Missing Scenes" tab to Stash performer pages. Discovers scenes
  * from configured stash-box instances that are NOT in the local library.
  *
- * stash-box API follows binge-cn conventions:
+ * stash-box GraphQL API:
  *   - queryScenes(input:{performers:{value:[id],modifier:INCLUDES},sort:DATE,direction:DESC})
  *   - scenes carry images[{url}] (covers + screenshots, flat array)
  *   - findScene(id) for full detail (director, production_date, urls.site, ...)
  *   - web URL = new URL(endpoint).origin + "/scenes/" + id
  *
- * Windows (binge-cn pattern):
+ * Release windows:
  *   - recentDays: 0=unlimited, N=only scenes released within last N days
  *   - previewDays: -1=hide all future, 0=unlimited, N=only future within N days
  */
@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "1.0.1";
+  var PLUGIN_VERSION = "1.1.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -144,7 +144,7 @@
 
   var _boxRateLimiter = createRateLimiter(3, 300);
 
-  // ─── Date helpers (binge-cn pattern: local calendar date, not UTC) ───────
+  // ─── Date helpers (local calendar date, not UTC) ────────────────────────
 
   function localDateStr(d) {
     var y = d.getFullYear();
@@ -185,6 +185,7 @@
     currentPage: 1,
     sortDir: "DESC",           // DESC | ASC (pushed to box query as sort:DATE)
     zoom: 1,                   // card size 0-3 (native SceneCardGrid zoomWidths)
+    displayMode: "grid",       // grid | list — seeded from localStorage below
     refocusSearch: false,      // restore search-input focus after re-render
     recentDays: 180,
     previewDays: 7,
@@ -202,6 +203,11 @@
     localPerformerMaps: {},    // endpoint(lower) -> box performer id(lower) -> {id,name,image_path}
   };
 
+  // Persisted display mode (grid | list) — survives tab re-entry
+  try {
+    if (localStorage.getItem("ssdDisplayMode") === "list") _state.displayMode = "list";
+  } catch (e) { /* localStorage unavailable — stay grid */ }
+
   // ─── URL / page detection ─────────────────────────────────────────────────
 
   function getPerformerIdFromUrl() {
@@ -215,7 +221,7 @@
     return /\/performers?\/\d+/.test(window.location.pathname + window.location.hash);
   }
 
-  // ─── Box web URL (binge-cn pattern: origin from endpoint) ────────────────
+  // ─── Box web URL (origin from GraphQL endpoint) ──────────────────────────
 
   function boxWebBase(endpoint) {
     try {
@@ -281,7 +287,7 @@
     return fetchPage();
   }
 
-  // stash-box scene fields — flat images[] array (binge-cn convention)
+  // stash-box scene fields — flat images[] array
   var BOX_SCENE_FIELDS =
     "id title code details release_date duration " +
     "urls { url site { name } } " +
@@ -472,7 +478,7 @@
     });
   }
 
-  // Full scene detail for modal (findScene — binge-cn QUERY_SCENE pattern)
+  // Full scene detail for modal (findScene)
   var BOX_SCENE_DETAIL_FIELDS =
     "id title details release_date production_date code director duration " +
     "urls { url site { name } } " +
@@ -701,7 +707,7 @@
     });
   }
 
-  // ─── Local performer/studio mapping by stash_id (binge-cn pattern) ───────
+  // ─── Local performer/studio mapping by stash_id ──────────────────────────
 
   function buildLocalPerformerStashIdMap(endpoint) {
     return callGQL(
@@ -892,7 +898,7 @@
     });
   }
 
-  // ─── Grid rendering ───────────────────────────────────────────────────────
+  // ─── Scene rendering (grid / list) ───────────────────────────────────────
 
   function renderTabContent() {
     // Drop any orphaned hover popovers from a previous render
@@ -1031,22 +1037,57 @@
     };
     toolbar.appendChild(refreshBtn);
 
-    // Card size — native zoom slider (0-3)
-    var zoomWrap = document.createElement("div");
-    zoomWrap.className = "zoom-slider-container";
-    var zoomInput = document.createElement("input");
-    zoomInput.type = "range";
-    zoomInput.className = "zoom-slider form-control-range";
-    zoomInput.min = "0";
-    zoomInput.max = "3";
-    zoomInput.value = String(_state.zoom);
-    zoomInput.title = tc("卡片大小", "Card size");
-    zoomInput.oninput = function () {
-      _state.zoom = parseInt(this.value, 10) || 0;
-      layoutCardGrid();
+    // Display mode — native grid/list toggle (same btn-group + icons as the
+    // scenes page toolbar); persisted in localStorage
+    var displayGroup = document.createElement("div");
+    displayGroup.setAttribute("role", "group");
+    displayGroup.className = "btn-group";
+
+    var switchDisplayMode = function (mode) {
+      if (_state.displayMode === mode) return;
+      _state.displayMode = mode;
+      try { localStorage.setItem("ssdDisplayMode", mode); } catch (e) {}
+      renderTabContent();
     };
-    zoomWrap.appendChild(zoomInput);
-    toolbar.appendChild(zoomWrap);
+
+    var gridModeBtn = document.createElement("button");
+    gridModeBtn.type = "button";
+    gridModeBtn.className = "btn btn-secondary" + (_state.displayMode === "grid" ? " active" : "");
+    gridModeBtn.title = tc("网格显示", "Grid view");
+    gridModeBtn.innerHTML =
+      '<svg data-prefix="fas" data-icon="table-cells-large" class="svg-inline--fa fa-table-cells-large fa-icon" role="img" viewBox="0 0 448 512" aria-hidden="true"><path fill="currentColor" d="M384 96l-128 0 0 128 128 0 0-128zm64 128l0 192c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 96C0 60.7 28.7 32 64 32l320 0c35.3 0 64 28.7 64 64l0 128zM64 288l0 128 128 0 0-128-128 0zm128-64l0-128-128 0 0 128 128 0zm64 64l0 128 128 0 0-128-128 0z"></path></svg>';
+    gridModeBtn.onclick = function () { switchDisplayMode("grid"); };
+
+    var listModeBtn = document.createElement("button");
+    listModeBtn.type = "button";
+    listModeBtn.className = "btn btn-secondary" + (_state.displayMode === "list" ? " active" : "");
+    listModeBtn.title = tc("列表显示", "List view");
+    listModeBtn.innerHTML =
+      '<svg data-prefix="fas" data-icon="list" class="svg-inline--fa fa-list fa-icon" role="img" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M40 48C26.7 48 16 58.7 16 72l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24L40 48zM192 64c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L192 64zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-288 0zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-288 0zM16 232l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24l-48 0c-13.3 0-24 10.7-24 24zM40 368c-13.3 0-24 10.7-24 24l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24l-48 0z"></path></svg>';
+    listModeBtn.onclick = function () { switchDisplayMode("list"); };
+
+    displayGroup.appendChild(gridModeBtn);
+    displayGroup.appendChild(listModeBtn);
+    toolbar.appendChild(displayGroup);
+
+    // Card size — native zoom slider (0-3); grid only, list rows are fixed
+    if (_state.displayMode !== "list") {
+      var zoomWrap = document.createElement("div");
+      zoomWrap.className = "zoom-slider-container";
+      var zoomInput = document.createElement("input");
+      zoomInput.type = "range";
+      zoomInput.className = "zoom-slider form-control-range";
+      zoomInput.min = "0";
+      zoomInput.max = "3";
+      zoomInput.value = String(_state.zoom);
+      zoomInput.title = tc("卡片大小", "Card size");
+      zoomInput.oninput = function () {
+        _state.zoom = parseInt(this.value, 10) || 0;
+        layoutCardGrid();
+      };
+      zoomWrap.appendChild(zoomInput);
+      toolbar.appendChild(zoomWrap);
+    }
 
     pane.appendChild(toolbar);
 
@@ -1117,13 +1158,17 @@
     }
     pane.appendChild(countInfo);
 
-    var grid = document.createElement("div");
-    grid.className = "ssd-card-grid";
-    pageItems.forEach(function (item, idx) {
-      grid.appendChild(buildSceneCard(item, start + idx));
-    });
-    pane.appendChild(grid);
-    layoutCardGrid();
+    if (_state.displayMode === "list") {
+      pane.appendChild(buildSceneTable(pageItems));
+    } else {
+      var grid = document.createElement("div");
+      grid.className = "ssd-card-grid";
+      pageItems.forEach(function (item, idx) {
+        grid.appendChild(buildSceneCard(item, start + idx));
+      });
+      pane.appendChild(grid);
+      layoutCardGrid();
+    }
 
     // ── Pagination controls (native .pagination.btn-group: arrows + page numbers) ──
     var pager = document.createElement("div");
@@ -1211,6 +1256,153 @@
     for (var i = 0; i < cards.length; i++) {
       cards[i].style.width = cardW + "px";
     }
+  }
+
+  // ── List view — 1:1 native .table-list.scene-table (scene list table) ──
+  // Structure captured from the native scenes page list mode; themes apply
+  // automatically via native class names. No select-col (no bulk operations).
+  function buildSceneTable(pageItems) {
+    var wrap = document.createElement("div");
+    wrap.className = "table-list scene-table ssd-scene-table";
+
+    var table = document.createElement("table");
+    table.className = "table table-striped table-bordered";
+
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    [
+      ["cover_image", tc("封面图片", "Cover")],
+      ["title", tc("标题", "Title")],
+      ["date", tc("日期", "Date")],
+      ["scene_code", tc("工作室代码", "Studio Code")],
+      ["duration", tc("时长", "Duration")],
+      ["studio", tc("工作室", "Studio")],
+      ["performers", tc("演员", "Performers")],
+      ["tags", tc("标签", "Tags")],
+    ].forEach(function (col) {
+      var th = document.createElement("th");
+      th.className = col[0] + "-head";
+      th.textContent = col[1];
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    var borderRow = document.createElement("tr");
+    var borderTh = document.createElement("th");
+    borderTh.className = "border-row";
+    borderTh.colSpan = 100;
+    borderRow.appendChild(borderTh);
+    thead.appendChild(borderRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement("tbody");
+    pageItems.forEach(function (item) {
+      tbody.appendChild(buildSceneRow(item));
+    });
+    table.appendChild(tbody);
+
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function buildSceneRow(item) {
+    var sc = item.scene;
+    var tr = document.createElement("tr");
+
+    // Cover — click opens the same detail modal as grid cards
+    var coverTd = document.createElement("td");
+    coverTd.className = "cover_image-data";
+    var coverLink = document.createElement("a");
+    coverLink.href = "javascript:void(0)";
+    coverLink.onclick = function () { openModal(item); };
+    if (item.images.length > 0) {
+      var img = document.createElement("img");
+      img.loading = "lazy";
+      img.className = "image-thumbnail";
+      img.alt = sc.title || sc.code || "";
+      img.src = item.images[0].url;
+      img.onerror = function () { this.style.visibility = "hidden"; };
+      coverLink.appendChild(img);
+    }
+    coverTd.appendChild(coverLink);
+    tr.appendChild(coverTd);
+
+    // Title — opens the stash-box scene page in a new tab (does NOT open the modal)
+    var titleTd = document.createElement("td");
+    titleTd.className = "title-data";
+    var titleLink = document.createElement("a");
+    titleLink.href = boxSceneUrl(item.endpoint, sc.id);
+    titleLink.target = "_blank";
+    titleLink.rel = "noopener noreferrer";
+    titleLink.title = sc.title || sc.code || "";
+    var titleSpan = document.createElement("span");
+    titleSpan.className = "ellips-data";
+    titleSpan.textContent = sc.title || sc.code || tc("无标题", "Untitled");
+    titleLink.appendChild(titleSpan);
+    titleTd.appendChild(titleLink);
+    tr.appendChild(titleTd);
+
+    // Date / studio code / duration — plain cells
+    var dateTd = document.createElement("td");
+    dateTd.className = "date-data";
+    dateTd.textContent = sc.release_date || "";
+    tr.appendChild(dateTd);
+
+    var codeTd = document.createElement("td");
+    codeTd.className = "scene_code-data";
+    codeTd.textContent = sc.code || "";
+    tr.appendChild(codeTd);
+
+    var durTd = document.createElement("td");
+    durTd.className = "duration-data";
+    durTd.textContent = sc.duration ? formatDuration(sc.duration) : "";
+    tr.appendChild(durTd);
+
+    // Studio — plain ellips-data (plugin rows have no filter-target pages)
+    var studioTd = document.createElement("td");
+    studioTd.className = "studio-data";
+    if (sc.studio && sc.studio.name) {
+      var studioSpan = document.createElement("span");
+      studioSpan.className = "ellips-data";
+      studioSpan.textContent = sc.studio.name;
+      studioTd.appendChild(studioSpan);
+    }
+    tr.appendChild(studioTd);
+
+    // Performers — native comma-list, plain <li><span> (no filter links)
+    var perfTd = document.createElement("td");
+    perfTd.className = "performers-data";
+    var perfUl = document.createElement("ul");
+    perfUl.className = "comma-list overflowable";
+    (sc.performers || []).forEach(function (p) {
+      var name = (p && p.performer && p.performer.name) || "";
+      if (!name) return;
+      var li = document.createElement("li");
+      var span = document.createElement("span");
+      span.textContent = name;
+      li.appendChild(span);
+      perfUl.appendChild(li);
+    });
+    perfTd.appendChild(perfUl);
+    tr.appendChild(perfTd);
+
+    // Tags — same comma-list structure
+    var tagTd = document.createElement("td");
+    tagTd.className = "tags-data";
+    var tagUl = document.createElement("ul");
+    tagUl.className = "comma-list overflowable";
+    (sc.tags || []).forEach(function (t) {
+      var name = (t && t.name) || "";
+      if (!name) return;
+      var li = document.createElement("li");
+      var span = document.createElement("span");
+      span.textContent = name;
+      li.appendChild(span);
+      tagUl.appendChild(li);
+    });
+    tagTd.appendChild(tagUl);
+    tr.appendChild(tagTd);
+
+    return tr;
   }
 
   function buildSceneCard(item, idx) {
@@ -1628,7 +1820,7 @@
     btn.textContent = tc("在 " + brand + " 查看", "View on " + brand);
   }
 
-  // ─── DMM gallery screenshot probing (ported from binge-cn dmmGallery.ts) ───
+  // ─── DMM gallery screenshot probing ──────────────────────────────────────
   // stash-box scenes only carry the cover in images[]; screenshots live on the
   // DMM CDN. contentId comes from the r18.dev URL in scene.urls (only reliable
   // source — some labels can't be derived from the code).
@@ -1761,7 +1953,7 @@
       var hero = document.createElement("div");
       hero.className = "ssd-carousel-hero";
       hero.setAttribute("data-ssd-carousel-hero", "");
-      // Lazy: only load current image (binge pattern); honor current index so
+      // Lazy: only load current image; honor current index so
       // progressive gallery remounts don't snap the viewer back to the cover.
       hero.style.backgroundImage = "url('" + images[startIdx] + "')";
 
@@ -2184,7 +2376,7 @@
     return age >= 0 && age < 130 ? String(age) : "";
   }
 
-  // ─── Action: Add to Library (binge-cn pattern: map performers/studio by stash_id) ──
+  // ─── Action: Add to Library (map performers/studio by stash_id) ──────────
 
   function handleSaveScene(item, btn) {
     // Two-step confirm to prevent misclicks: first click arms the button,
@@ -2264,7 +2456,7 @@
         urls: urls,
         performer_ids: performerIds,
         tag_ids: tagIds,
-        // stash_ids is accepted by SceneCreateInput (binge-cn pattern) — no
+        // stash_ids is accepted by SceneCreateInput — no
         // second sceneUpdate round-trip needed
         stash_ids: [{ endpoint: endpoint, stash_id: String(sc.id) }],
       };
@@ -2335,7 +2527,7 @@
     }).catch(function () { return null; });
   }
 
-  // ─── Action: Open in box (binge-cn sourceSceneUrl pattern) ───────────────
+  // ─── Action: Open in box ─────────────────────────────────────────────────
 
   function handleOpenInBox(item) {
     var url = boxSceneUrl(item.endpoint, item.scene.id);

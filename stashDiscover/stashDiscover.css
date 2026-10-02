@@ -10,6 +10,8 @@
   --ssd-accent-hover: #e8590c;
   --ssd-secondary: #495057;
   --ssd-secondary-hover: #868e96;
+  --ssd-info: #1c7ed6;
+  --ssd-info-hover: #1971c2;
   --ssd-success: #37b24d;
   --ssd-danger: #f03e3e;
   --ssd-preview: #7950f2;
@@ -39,19 +41,27 @@
 /* so themes apply automatically — no plugin CSS needed.                        */
 
 .ssd-count-info {
-  font-size: 12px;
-  color: var(--ssd-modal-muted);
   white-space: nowrap;
 }
 
-/* Result count — sits between the filter toolbar and the card grid */
+/* Result count — sits between the filter toolbar and the card grid.
+   Matches native .paginationIndex: 14px / 21px (body font), 400, centered,
+   10px below. Color comes from the native .text-muted class (theme-aware). */
 .ssd-count-line {
-  margin: 2px 4px 10px;
+  margin: 0 4px 10px;
   text-align: center;
   font-size: 14px;
+  line-height: 21px;
 }
 
 /* Per-page selector: keep the native width, never squeezed by the toolbar */
+.ssd-tab-pane {
+  /* Native tab panes sit 7px lower (shared sidebar-toggle placeholder) and keep an
+     8px gap between the nav-tabs bottom border and the filter toolbar — without this
+     the toolbar overlaps and visually hides the 2px divider line. */
+  padding-top: 15px;
+}
+
 .ssd-tab-pane .page-size-selector {
   min-width: 74px;
   flex-shrink: 0;
@@ -88,6 +98,8 @@
 .ssd-btn-secondary:hover:not(:disabled) { background: var(--ssd-secondary-hover); }
 .ssd-btn-accent { background: var(--ssd-accent); color: #fff; }
 .ssd-btn-accent:hover:not(:disabled) { background: var(--ssd-accent-hover); }
+.ssd-btn-info { background: var(--ssd-info); color: #fff; }
+.ssd-btn-info:hover:not(:disabled) { background: var(--ssd-info-hover); }
 .ssd-btn-success { background: var(--ssd-success) !important; color: #fff; }
 .ssd-btn-danger { background: var(--ssd-danger) !important; color: #fff; }
 
@@ -429,26 +441,30 @@
 .ssd-pill {
   display: inline-flex;
   align-items: center;
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: 12px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 11px;
+  font-size: 11px;
   font-weight: 500;
-  line-height: 1.4;
-  background: rgba(12, 166, 120, 0.15);
-  border: 1px solid rgba(12, 166, 120, 0.4);
-  color: #63e6be;
+  line-height: 1;
+  /* Same small tier as .ssd-btn-sm (11px / 22px), weight 500 (non-clickable badge);
+     translucent fill — solid = interactive */
+  background: rgba(233, 236, 239, 0.14);
+  border: 1px solid rgba(233, 236, 239, 0.28);
+  color: #f1f3f5;
   white-space: nowrap;
 }
+/* Clickable performer name — solid button (interactive = solid), pill radius.
+   Colors/hover/text-shadow come from .ssd-btn + .ssd-btn-info (blue on white). */
 .ssd-pill-performer {
-  background: rgba(51, 154, 240, 0.12);
-  border-color: rgba(51, 154, 240, 0.4);
-  color: #74c0fc;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  border-radius: 11px;
+  max-width: 180px;
 }
-.ssd-pill-performer:hover {
-  background: rgba(51, 154, 240, 0.25);
-  border-color: #74c0fc;
+.ssd-pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Synopsis — full display, no inner scroll */
@@ -546,6 +562,7 @@
   min-width: 100px;
   text-align: center;
   font-size: 12px;
+  color: var(--ssd-modal-muted);
 }
 
 /* ─── Floating performer avatar card ─────────────────────────────────────── */

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "1.1.0";
+  var PLUGIN_VERSION = "1.1.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -187,6 +187,7 @@
     zoom: 1,                   // card size 0-3 (native SceneCardGrid zoomWidths)
     displayMode: "grid",       // grid | list — seeded from localStorage below
     refocusSearch: false,      // restore search-input focus after re-render
+    searchCaret: null,         // caret offset to restore with focus
     recentDays: 180,
     previewDays: 7,
     queryBoxes: [],            // [{name,endpoint,api_key}]
@@ -923,9 +924,13 @@
     searchInput.placeholder = tc("搜索…", "Search…");
     searchInput.value = _state.searchQuery || "";
     var _searchTimer = null;
-    searchInput.oninput = function () {
+    // IME safety: skip input events during composition (Chinese/Japanese typing),
+    // commit once on compositionend; selection is restored after re-render below.
+    searchInput.oninput = function (e) {
+      if (e && e.isComposing) return;
       clearTimeout(_searchTimer);
       var val = this.value;
+      _state.searchCaret = this.selectionStart;
       _searchTimer = setTimeout(function () {
         _state.searchQuery = val;
         _state.currentPage = 1;
@@ -933,6 +938,14 @@
         renderTabContent();
       }, 250);
     };
+    searchInput.addEventListener("compositionend", function () {
+      clearTimeout(_searchTimer);
+      _state.searchCaret = searchInput.selectionStart;
+      _state.searchQuery = searchInput.value;
+      _state.currentPage = 1;
+      _state.refocusSearch = true;
+      renderTabContent();
+    });
     searchGroup.appendChild(searchInput);
 
     if ((_state.searchQuery || "").length > 0) {
@@ -1093,7 +1106,12 @@
 
     if (_state.refocusSearch) {
       _state.refocusSearch = false;
+      // Restore caret position (focus() alone jumps the caret to the end)
+      var caret = _state.searchCaret;
       searchInput.focus();
+      if (typeof caret === "number" && caret >= 0 && caret <= searchInput.value.length) {
+        try { searchInput.setSelectionRange(caret, caret); } catch (err) { /* type=search etc. */ }
+      }
     }
 
     if (_state.loadError) {
@@ -1147,10 +1165,16 @@
 
     // ── Result count — between the filter toolbar and the cards ──
     var countInfo = document.createElement("div");
-    countInfo.className = "ssd-count-info ssd-count-line";
+    countInfo.className = "ssd-count-info ssd-count-line text-muted";
     if (_state.allLoaded || isSearching) {
-      countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 共 " + filtered.length + " 个",
-        "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " total");
+      if (isSearching) {
+        // Search filters the already-discovered cache — show matched vs discovered
+        countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 匹配 " + filtered.length + " / " + _state.cachedMissing.length + " 个",
+          "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " matched / " + _state.cachedMissing.length + " found");
+      } else {
+        countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 共 " + filtered.length + " 个",
+          "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " total");
+      }
     } else {
       // Not all box pages fetched yet — results load on demand while paging
       countInfo.textContent = tc("第 " + _state.currentPage + " 页 · 已发现 " + filtered.length + " 个（翻页加载更多）",
@@ -2141,10 +2165,16 @@
       sc.performers.forEach(function (p) {
         var pf = p.performer;
         if (!pf || !pf.name) return;
-        var pill = document.createElement("span");
-        pill.className = "ssd-pill ssd-pill-performer";
-        pill.textContent = pf.name;
-        pill.title = tc("点击查看头像", "Click to view avatar");
+        // Clickable → solid button (interactive = solid; transparent is
+        // reserved for non-clickable badges like the tags below)
+        var pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "ssd-btn ssd-btn-sm ssd-btn-info ssd-pill-performer";
+        pill.title = pf.name;
+        var pillText = document.createElement("span");
+        pillText.className = "ssd-pill-text";
+        pillText.textContent = pf.name;
+        pill.appendChild(pillText);
         pill.addEventListener("click", function (e) {
           e.stopPropagation();
           showPerformerCard(pill, item, pf);

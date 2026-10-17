@@ -93,6 +93,7 @@ jobs:
           cd /tmp/stash-plugins
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          python3 -m pip install --quiet pyyaml
           # 竞争安全：多个 release 并发推送时 push 可能被拒（non-fast-forward），
           # 每次重试前 fetch + reset 到远程最新（已包含其他插件刚推的改动），
           # 再重新套用本插件的 index.yml 更新与 README 同步。
@@ -109,6 +110,11 @@ jobs:
             in_block && /^  sha256: / { print "  sha256: " sha; next }
             { print }
             ' plugins/main/index.yml > /tmp/index.yml && mv /tmp/index.yml plugins/main/index.yml
+            # 校验闸：index.yml 必须仍是 Stash 能解析的 YAML（一行不合法会让整个
+            # 插件源读不出来），不合法就整步失败、不推送；同款校验见 stash-plugins 的
+            # .github/workflows/validate-index.yml
+            python3 scripts/validate_index.py plugins/main/index.yml || {
+              echo "✗ plugins/main/index.yml is not valid YAML — refusing to push"; exit 1; }
             # 从 index.yml 同步 README 版本表（复用仓库自带脚本，幂等）；
             # 失败不阻塞 index.yml 提交，README 由 stash-plugins 的 sync-readme.yml 兜底
             python3 scripts/sync_readme.py || echo "⚠ sync_readme.py failed — README left to fallback workflow"

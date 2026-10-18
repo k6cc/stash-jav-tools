@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.0.0";
+  var PLUGIN_VERSION = "2.0.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -1786,14 +1786,14 @@
     main.appendChild(info);
 
     // Source badge: same ID = linked (green); same box but another ID = already
-    // has one (grey); box not linked at all = plain box label (grey)
+    // has one (faded grey); box not linked at all = plain box label (grey)
     var right = document.createElement("div");
     right.className = "ssd-find-right";
     var localId = localStashIdForBox(r);
     if (localId && localId.toLowerCase() === String(r.candidate.id).toLowerCase()) {
       right.appendChild(makeChip(tc("已关联 " + r.boxName, "Linked · " + r.boxName), "ok"));
     } else if (localId) {
-      right.appendChild(makeChip(tc("已有 " + r.boxName, "Has ID · " + r.boxName), "muted"));
+      right.appendChild(makeChip(tc("已有 " + r.boxName, "Has ID · " + r.boxName), "dim"));
     } else {
       right.appendChild(makeChip(r.boxName, "muted"));
     }
@@ -1986,8 +1986,8 @@
     actions.appendChild(openBtn);
 
     var linkBtn = makePanelBtn(tc("关联", "Link"), "primary", "md");
-    linkBtn.title = tc("写好编号，并把本地空缺的字段和别名补上（不改名、不覆盖已有值）",
-      "Write the ID and fill the local blanks (aliases/fields) without overwriting existing values");
+    linkBtn.title = tc("替换该源编号，其余字段与别名补齐（不改名）",
+      "Replace this source's ID; fill the rest (name untouched)");
     linkBtn.disabled = busy;
     linkBtn.onclick = function (e) {
       e.stopPropagation();
@@ -1996,8 +1996,8 @@
     actions.appendChild(linkBtn);
 
     var owBtn = makePanelBtn(tc("覆盖", "Overwrite"), "accent", "md");
-    owBtn.title = tc("以源为准覆盖本地别名、图片与字段（本地独有的信息不会删除）",
-      "Replace local aliases, image and fields with the source (local-only values are kept)");
+    owBtn.title = tc("以源为准覆盖本地，本地独有不删除",
+      "Overwrite from the source; local-only values kept");
     owBtn.disabled = busy;
     owBtn.onclick = function (e) {
       e.stopPropagation();
@@ -2088,10 +2088,10 @@
       _state.findRowMsg[key] = {
         kind: "ok",
         text: mode === "overwrite"
-          ? tc("已覆盖：别名/图片/链接以源为准，补充字段 " + filled + " 项，正在重新查询…",
-            "Overwritten from the source — " + filled + " field(s) written. Re-querying…")
-          : tc("已关联：补充字段 " + filled + " 项（不改名、不覆盖已有值），正在重新查询…",
-            "Linked — " + filled + " blank field(s) filled (name and existing values untouched). Re-querying…"),
+          ? tc("已覆盖：以源为准写入字段 " + filled + " 项，本地独有保留，正在重新查询…",
+            "Overwritten — " + filled + " field(s) written from the source. Re-querying…")
+          : tc("已关联：编号已写入，补齐字段 " + filled + " 项，正在重新查询…",
+            "Linked — ID written, " + filled + " field(s) filled. Re-querying…"),
       };
       renderTabContent();
       setTimeout(loadMissingScenes, 900);

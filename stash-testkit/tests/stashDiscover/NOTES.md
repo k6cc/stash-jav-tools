@@ -51,7 +51,7 @@
   - 已修 bug（**真实根因**）：`content` 分支在 `filtered.length === 0`（搜索把缓存过滤空 → no-match 面板）判定**之前**就已 append 了 meta 行 + 查找块，随后又 append 了 no-match 面板（面板内部也建查找块），导致**重复渲染**（`.ssd-find` 数量=2、`.ssd-find-item` 翻倍）。修复为把 `filtered.length === 0` 判定提前到 meta 行之前，直接 append no-match 面板并 `return`。此前「`if (_state.findOpen && panelState === \"content\")`」的猜测是无效死代码，已移除。
   - 验收口径：`.ssd-find` 数量恒为 1；`.ssd-find-item` 数量 == 唯一结果数。
 - **收起行**：主名行 = 名称（13px 粗体）+ ` · 国旗` + ` · 性别` + ` · 年龄 N 岁`；**名称之后的元信息统一小号 11px（与别名行同号）并与主名共享基线**（`.ssd-find-name-main` 600/13px、`.ssd-find-meta` 11px 且**不设** `vertical-align`、国旗沿基础规则的 `vertical-align: -1px`）。**踩坑**：曾给 meta 与国旗加 `vertical-align: middle` 追求「居中」，结果 11px 文本与国旗都浮在基线之上、肉眼明显不齐（用户反馈「没有对齐」），已回退为基线对齐。年龄取自 `searchPerformer` 的 `birth_date` 经 `birthDateToAge` 计算，无生日则该项不显示；国旗/性别/年龄均无时整段不渲染。副行 = 别名（最多 3 + `+N`，N=隐藏数，`+N` 用边框徽章）+ 源徽章 + 三角箭头；整行可点 → 向下内联展开；**手风琴**（单一 `findExpandedKey`，同时只开一条）；大图懒加载。
-  - 右侧徽章三态（`localStashIdForBox`）：候选 id == 本地在该源的 stash_id → 绿 `ssd-chip--ok`「已关联 <源名>」；同源有 id 但不等 → 灰 `ssd-chip--muted`「已有 <源名>」；该源无本地 id → 灰「<源名>」。
+  - 右侧徽章三态（`localStashIdForBox`）：候选 id == 本地在该源的 stash_id → 绿 `ssd-chip--ok`（不透明）「已关联 <源名>」；同源有 id 但不等 → 灰 `ssd-chip--dim`（**0.38 透明度**，冲突态刻意淡于普通源名）「已有 <源名>」；该源无本地 id → 灰 `ssd-chip--muted`（0.75）「<源名>」。三档透明度 1 / 0.75 / 0.38 拉开层次，扫一眼即可区分「已关联 / 无编号 / 编号冲突」。
 - **展开**：左=演员大图（**图外侧**左右箭头 + 计数，默认第一张，**最后查看=所选**）；右=有值才显示的字段（性别/国籍(旗帜+名)/生日/身高/三围/生涯/全部别名/消歧/外部链接(仅 host，3 + `+N`)/源参演数）；底部三色动作**统一中号档**（`ssd-btn-md`，26px 高）：`源名` **secondary 灰**（新标签开 `boxWebBase + /performers/ + id`）、`关联` primary、`覆盖` accent。
 - **边框徽章 `.ssd-find-badge`**：`+N`（别名隐藏数 / 外部链接隐藏数）与「源参演数」数字均用它（1px 灰边 + 3px 圆角 + 11px 字），与 `.ssd-chip` 区分（chip=胶囊态标签，badge=计数框）。
 - **外链图标**：源跳转按钮不再拼接文本 `↗`，改用内联 SVG `FIND_EXT_SVG`（`appendExtIcon()` 追加 `.ssd-btn-icon`，11×11、`stroke: currentColor`）——经典「方框 + 右上出箭头」外链记号，换上标符号只是字形替换，按钮文案/配色/尺寸逻辑不变。
@@ -63,7 +63,7 @@
 - **放开时间窗口后保留候选**：`loadMissingScenes()` 原先会把 `findState/findResults/findFailures/findMessage/findExpandedKey/findBusyKey/findRowMsg` 一并重置，导致点「不限时间（本次）」（或「恢复默认」）后已搜出的候选与展开态被清空（输入框与演员名行因不在重置范围内而保留）。现已**删除该重置**——重载只重建场景数据，查找块的结果/展开/行内提示全部保留（实测：搜出 23 条 → 点「不限时间」→ loading 帧过后 23 条仍在、`findState="done"`、`findTerm` 保留）。**切换演员**仍由 `resetPerformerState()` 清空，不受影响；`findRowMsg` 不再清空也意味着上一轮的动作反馈会随结果一起留在页面上。
 - **切换演员重置**：`resetPerformerState()` 清 `findTerm` 与 `performerName`，修掉「换演员后查找框仍预填上一个演员名」的 bug。
 - **重测基线**：`preferredBox=javstash.org`、`recentDays=180`、`previewDays="7"`；演员 43=AIKA（javstash+stashdb 双源）作收起行徽章三态用例；actor 56=爱泽花梨（无编号）+ 临时 `preferredBox=theporndb`/`previewDays=-1`/`recentDays=1` 作 empty+preferredFallback 四元素同行用例，测完均已还原。
-- **关联（追加语义）**：写 `stash_ids`（**只写候选所属源**，保留其他源）；`alias_list` = 源主名+源别名并入本地去重；其余字段只补空；`urls` 追加去重；**图片仅在本地无自定义图时补**（`hasCustomImage` = `image_path` 不含 `default=true`）；**永不改 name**。
+- **关联（追加语义 + 同源编号替换）**：写 `stash_ids`（**只写候选所属源，该源已有编号时替换掉旧编号，其他源的原编号一律保留**，由 `mergeStashIds` 按 endpoint 归一比较实现）；`alias_list` = 源主名+源别名并入本地去重；其余字段只补空；`urls` 追加去重；**图片仅在本地无自定义图时补**（`hasCustomImage` = `image_path` 不含 `default=true`）；**永不改 name**。按钮 title 与成功提示按此语义一句话措辞（关联「替换该源编号，其余字段与别名补齐（不改名）」；覆盖「以源为准覆盖本地，本地独有不删除」）。
 - **覆盖（以源为准）**：`stash_ids` 同上；`alias_list` = 源「主名+别名」**整体替换**；`urls` 覆盖式替换；图片=所选图覆盖（**源无图则不动本地图**）；其余字段覆盖式写入；源没有而本地有的字段**保留不删**；需**红色二次点击确认**；动作后**保持该条展开**，900ms 后自动重查。
 - **career_length 覆盖残留（已知·保留）**：本地 `1990 - 1991`、源只有 `start=2007` → 拼出 `"2007"` → Stash 只更新 start、保留本地 end → 结果 `"2007 - 1991"`。与 JavStashLinker `buildPerfDetails` 的「源没有的字段不删」语义一致，不修。
 - **图片写入**：图片可直接传 URL，由 Stash 服务端下载（JavStashLinker `applyPerformerImageAsync` 先例 L773-796）。

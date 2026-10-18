@@ -242,6 +242,9 @@
 }
 .ssd-chip--ok { border-color: rgba(55, 178, 77, 0.55); color: var(--ssd-success); }
 .ssd-chip--muted { opacity: 0.75; }
+/* "This source already carries an ID, but a different one" — faded below the
+   plain box chip so a conflict never reads like a plain source label at a glance */
+.ssd-chip--dim { opacity: 0.38; }
 
 .ssd-actions {
   display: flex;

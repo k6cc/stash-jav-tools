@@ -32,6 +32,9 @@ forum-post-*.md
 # 测试工具本地配置（含 API key，不提交）
 stash-testkit/config.json
 
+# ImageMetaSync 验证脚本的基线快照（生成物，不提交）
+stash-testkit/tests/ImageMetaSync/image_state.json
+
 # 探针运行配置（生成物，内嵌明文 API key，不提交）
 stash-testkit/tests/**/_cfg.js
 

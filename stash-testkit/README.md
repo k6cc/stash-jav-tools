@@ -106,6 +106,7 @@ stash-testkit/
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
 | `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、标记协议、显示映射、测试环境），见 `tests/stashDiscover/NOTES.md` |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
+| `tests/ImageMetaSync/` | 图库图片元数据回填端到端验证（`verify_image_meta_sync.py`：快照/清空/任务/钩子/差异对比） |
 
 ## 清理规范
 

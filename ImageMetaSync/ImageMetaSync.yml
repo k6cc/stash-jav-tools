@@ -1,0 +1,41 @@
+name: ImageMetaSync
+description: "Backfills metadata (performers, studio, date, tags, title, code, urls, details) onto the images of a scene's gallery (cover/fanart/stills) from the linked scene. Galleries and scenes whose performers are ambiguous (0 or 2+) are skipped. Optional fallback for scenes without a gallery. Requires Python and requests."
+version: 1.0.0
+url: https://discourse.stashapp.cc/t/image-meta-sync/18956
+errLog: info
+exec:
+  - python
+  - "{pluginDir}/ImageMetaSync.py"
+interface: raw
+settings:
+  fillTagsTitleCode:
+    displayName: Fill tags / title / code
+    description: "写入 tag、标题、番号（title 为「图库/场景标题 #N」编号，封面用纯标题）；OFF = 只写演员/工作室/日期。默认 ON。"
+    type: BOOLEAN
+  fillUrlsDetails:
+    displayName: Fill urls / details
+    description: 写入 url 与简介；OFF（默认）= 不写（逐图重复简介通常无意义）。
+    type: BOOLEAN
+  overwrite:
+    displayName: Overwrite existing values
+    description: 覆盖图片已有元数据；OFF（默认）= 只补空字段。
+    type: BOOLEAN
+  includeScenesWithoutGallery:
+    displayName: Include scenes without a gallery
+    description: 批量任务同时处理没有关联图库的场景（只处理封面/fanart/poster 图片）；OFF（默认）= 只处理图库。首次回填存量时临时打开跑一次即可。
+    type: BOOLEAN
+  excludeTags:
+    displayName: Excluded tags
+    description: 不写入图片的 tag 名称（英文逗号分隔），用于剔除只属于场景/图库层级的 tag；留空 = 全部写入。
+    type: STRING
+tasks:
+  - name: "Sync Image Metadata"
+    description: "Backfill image metadata for every gallery, and (when enabled) for scenes without a gallery. Fields are written only when the value derived from the scene is unambiguous; galleries/scenes with 0 or 2+ performers are skipped and logged."
+    defaultArgs:
+      mode: sync_all
+hooks:
+  - name: gallery_image_meta_sync
+    description: Sync image metadata when a gallery is created or updated (runs in a detached process, never blocking the scan queue)
+    triggeredBy:
+      - Gallery.Create.Post
+      - Gallery.Update.Post

@@ -6,7 +6,7 @@
 
 **权威版本号 = 各插件 `<name>.yml` 的 `version:`**，其余位置必须与之一致。通用同步项：
 
-- 根 `README.md` 版本表（含全部 11 插件，发版必同步）
+- 根 `README.md` 版本表（含全部 12 插件，发版必同步）
 - 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**；sceneGallerySync 例外：头部无 note，在文末「## 变更历史」新增 `### X.Y.Z` 条目
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
 

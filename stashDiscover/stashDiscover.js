@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "1.1.1";
+  var PLUGIN_VERSION = "2.0.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -58,8 +58,40 @@
     }
   })();
 
+  function isZh() {
+    return !!(_intlLocale && /^zh/i.test(_intlLocale));
+  }
+
   function tc(zh, en) {
-    return (_intlLocale && /^zh/i.test(_intlLocale)) ? zh : en;
+    return isZh() ? zh : en;
+  }
+
+  // ─── Box request failures (kind → status label) ──────────────────────────
+
+  // A hung box request must never leave the tab spinning (the "looks frozen"
+  // forum report) — every call is aborted after this timeout.
+  var BOX_TIMEOUT_MS = 15000;
+
+  var BOX_ERR_TEXT = {
+    timeout: ["请求超时", "Timed out"],
+    network: ["无法连接", "Unreachable"],
+    auth: ["鉴权失败", "Auth failed"],
+    blocked: ["请求被拒绝", "Rejected"],
+    graphql: ["接口报错", "API error"],
+    parse: ["响应异常", "Bad response"],
+    unknown: ["未知错误", "Unknown error"],
+  };
+
+  function boxErrText(kind, zh) {
+    var pair = BOX_ERR_TEXT[kind] || BOX_ERR_TEXT.unknown;
+    return zh ? pair[0] : pair[1];
+  }
+
+  // Error carrying a kind so the caller can classify failures (box vs config)
+  function ssdError(kind, message) {
+    var e = new Error(message || "");
+    e.ssdKind = kind;
+    return e;
   }
 
   // ─── GraphQL helpers ─────────────────────────────────────────────────────
@@ -78,21 +110,51 @@
       });
   }
 
-  function callBoxGQL(endpoint, apiKey, query, variables) {
+  function callBoxGQL(endpoint, apiKey, query, variables, timeoutMs) {
     var payload = { query: query };
     if (variables) payload.variables = variables;
     var headers = { "Content-Type": "application/json" };
     if (apiKey) headers["ApiKey"] = apiKey;
+
+    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timedOut = false;
+    var timer = setTimeout(function () {
+      timedOut = true;
+      if (controller) controller.abort();
+    }, timeoutMs || BOX_TIMEOUT_MS);
+    function done() { clearTimeout(timer); }
+
+    function fetchError(e) {
+      if (timedOut || (e && e.name === "AbortError")) return ssdError("timeout", "timeout");
+      return ssdError("network", (e && e.message) || "network error");
+    }
+
     return fetch(endpoint, {
       method: "POST",
       headers: headers,
       body: JSON.stringify(payload),
       redirect: "error",
-    }).then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.errors) throw new Error(JSON.stringify(data.errors));
-        return data.data;
+      signal: controller ? controller.signal : undefined,
+    }).catch(function (e) {
+      throw fetchError(e);
+    }).then(function (r) {
+      if (!r.ok) {
+        var kind = (r.status === 401 || r.status === 403) ? "auth" : "blocked";
+        throw ssdError(kind, "HTTP " + r.status);
+      }
+      return r.json().catch(function (e) {
+        if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
+        throw ssdError("parse", "non-JSON response");
       });
+    }).then(function (data) {
+      done();
+      if (data && data.errors) throw ssdError("graphql", JSON.stringify(data.errors));
+      return data.data;
+    }).catch(function (e) {
+      done();
+      if (e && e.ssdKind) throw e;
+      throw ssdError("unknown", (e && e.message) || String(e));
+    });
   }
 
   // ─── Config ───────────────────────────────────────────────────────────────
@@ -177,6 +239,34 @@
     localSceneKeys: {},
     loading: false,
     loadError: "",
+    // ── fallback state panel ──
+    viewState: "",             // "" | loading | content | empty | net-fail | no-ids | no-box | fatal | no-match
+    errorKind: "",             // fatal | no-box | no-ids (message lives in loadError)
+    loadInitiated: false,      // a load already ran for this performer (no silent re-scan on tab re-entry)
+    allBoxes: [],              // every configured stash-box (incl. ones the performer has no ID for)
+    performerStashIds: [],     // local performer's stash_ids [{endpoint, stash_id}]
+    boxFailed: {},             // endpoint -> failed this round (retried on the next load)
+    boxStatus: {},             // endpoint -> { ok:bool, kind:string }
+    boxFetched: {},            // endpoint -> scenes fetched this round (loading panel rows)
+    droppedByWindow: 0,        // scenes dropped by the recent/preview window this round
+    windowRelaxed: false,      // "unlimited time range (this session)"
+    preferredFallback: false,  // preferred box had no ID → queried the others instead
+    preferredBoxLabel: "",     // brand/raw name of the preferred box (notice text)
+    cfgRecentDays: 180,        // configured values = restore target
+    cfgPreviewDays: 7,
+    findOpen: false,           // "find on source" block expanded
+    findState: "idle",         // idle | loading | done | empty | fail
+    findResults: [],           // [{box, boxName, candidate}]
+    findTerm: "",
+    findFailures: [],          // [{name, kind}]
+    findMessage: "",           // result/notice line shown inside the block
+    findExpandedKey: "",       // accordion: row key of the one expanded result
+    findImageIdx: 0,           // image index of the expanded result (last viewed = selected)
+    findBusyKey: "",           // row key with an in-flight link/overwrite write
+    findRowMsg: {},            // row key -> {kind, text} (per-row action feedback)
+    editWatching: false,       // waiting for the native edit panel to add a stash_id
+    editWatchMissing: false,   // native edit button not found — guidance only
+    _editTimer: null,
     modal: null,
     modalDetail: null,
     modalLoading: false,
@@ -385,8 +475,11 @@
     }
     _state.loadingPage = true;
 
+    // A source that failed this round pauses too — otherwise a dead box would
+    // be retried on every recursive call.  The next load (retry button / window
+    // change / tab re-entry) clears the flag and queries it again.
     var activeBoxes = _state.queryBoxes.filter(function (b) {
-      return !_state.boxExhausted[b.endpoint];
+      return !_state.boxExhausted[b.endpoint] && !_state.boxFailed[b.endpoint];
     });
 
     if (activeBoxes.length === 0) {
@@ -401,6 +494,9 @@
       var pageNum = _state.boxCursors[b.endpoint] || 1;
       return fetchBoxPage(b, sid, pageNum).then(function (result) {
         _state.boxCursors[b.endpoint] = pageNum + 1;
+        delete _state.boxFailed[b.endpoint];
+        _state.boxStatus[b.endpoint] = { ok: true };
+        _state.boxFetched[b.endpoint] = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
         if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
         // Window early-stop: the page's boundary date crossed the window,
         // every later page is outside it as well
@@ -408,25 +504,33 @@
         if (result.count && !_state.boxTotalCount) _state.boxTotalCount = result.count;
         return result.scenes;
       }).catch(function (e) {
-        console.warn("[SSD] Box page failed for", b.name, e.message);
-        _state.boxExhausted[b.endpoint] = true;
+        var kind = (e && e.ssdKind) || "unknown";
+        console.warn("[SSD] Box page failed for", b.name, kind, (e && e.message) || "");
+        // Record the failure for the state panel instead of silently showing
+        // an empty tab ("looks frozen" if the performer has no linked DB)
+        _state.boxFailed[b.endpoint] = true;
+        _state.boxStatus[b.endpoint] = { ok: false, kind: kind };
         return [];
       });
     })).then(function (pageResults) {
       var newItems = [];
       pageResults.forEach(function (list) { newItems = newItems.concat(list); });
 
-      // Filter owned + window
+      // Filter owned + window. Scenes dropped by the window are counted so the
+      // empty panel can offer "unlimited time range (this session)" instead of
+      // pretending there is nothing left on the source.
       var recentCut = recentCutoffDate(_state.recentDays);
       var previewCut = previewCutoffDate(_state.previewDays);
+      var droppedNow = 0;
       var filtered = newItems.filter(function (item) {
         if (isSceneOwned(item)) return false;
         var rd = item.scene.release_date;
         if (!rd) return true;
-        if (recentCut && rd < recentCut) return false;
-        if (previewCut && rd > previewCut) return false;
+        if (recentCut && rd < recentCut) { droppedNow++; return false; }
+        if (previewCut && rd > previewCut) { droppedNow++; return false; }
         return true;
       });
+      _state.droppedByWindow += droppedNow;
 
       // Dedup by code (merge with existing cache)
       var seenCodes = {};
@@ -466,7 +570,7 @@
       }
 
       var anyActive = _state.queryBoxes.some(function (b) {
-        return !_state.boxExhausted[b.endpoint];
+        return !_state.boxExhausted[b.endpoint] && !_state.boxFailed[b.endpoint];
       });
       if (!anyActive) _state.allLoaded = true;
 
@@ -521,14 +625,23 @@
     if (!performerId) return Promise.resolve();
 
     _state.loading = true;
+    _state.loadInitiated = true;
+    _state.viewState = "loading";
     _state.loadError = "";
+    _state.errorKind = "";
     _state.currentPage = 1;
     _state.cachedMissing = [];
     _state.boxCursors = {};
     _state.boxExhausted = {};
+    _state.boxFailed = {};
+    _state.boxStatus = {};
+    _state.boxFetched = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
+    _state.droppedByWindow = 0;
+    _state.preferredFallback = false;
+    _state.preferredBoxLabel = "";
     _state.allLoaded = false;
     _state.loadingPage = false;
     renderTabContent();
@@ -544,10 +657,12 @@
       var boxes = results[2];
       var settings = results[3];
 
-      if (!performer) throw new Error(tc("未找到演员", "Performer not found"));
+      if (!performer) throw ssdError("fatal", tc("未找到演员", "Performer not found"));
 
       _state.performerName = performer.name || "";
       _state.localSceneKeys = localKeys;
+      _state.performerStashIds = performer.stash_ids || [];
+      _state.allBoxes = boxes;
 
       var stashIdMap = {};
       (performer.stash_ids || []).forEach(function (sid) {
@@ -558,7 +673,7 @@
       _state.localStashIds = stashIdMap;
 
       if (boxes.length === 0) {
-        throw new Error(tc("未配置 stash-box 实例，请在 设置 → 元数据提供者 中添加",
+        throw ssdError("no-box", tc("未配置 stash-box 实例，请在 设置 → 元数据提供者 中添加",
           "No stash-box configured. Add one in Settings → Metadata Providers."));
       }
 
@@ -569,11 +684,22 @@
         if (preferred && ep.indexOf(preferred) === -1) return false;
         return true;
       });
-      if (queryBoxes.length === 0) {
-        queryBoxes = boxes.filter(function (b) { return !!stashIdMap[b.endpoint.toLowerCase()]; });
+      if (queryBoxes.length === 0 && preferred) {
+        // Preferred source has no ID for this performer → fall back to every
+        // source that does. Flag it so the UI can say so; a silent fallback
+        // reads as "the Preferred box setting does nothing".
+        var fallback = boxes.filter(function (b) { return !!stashIdMap[b.endpoint.toLowerCase()]; });
+        if (fallback.length > 0) {
+          queryBoxes = fallback;
+          _state.preferredFallback = true;
+          var preferredBox = boxes.filter(function (b) {
+            return b.endpoint.toLowerCase().indexOf(preferred) !== -1;
+          })[0];
+          _state.preferredBoxLabel = preferredBox ? sourceLabel(preferredBox) : (settings.preferredBox || "");
+        }
       }
       if (queryBoxes.length === 0) {
-        throw new Error(tc("该演员未关联任何 stash-box ID，请先在演员编辑页添加 stash_id",
+        throw ssdError("no-ids", tc("该演员未关联任何 stash-box ID，请先在演员编辑页添加 stash_id",
           "This performer has no stash-box IDs. Add a stash_id in the performer edit page first."));
       }
 
@@ -581,6 +707,12 @@
       if (isNaN(recentDays)) recentDays = 180;
       var previewDays = parseInt(settings.previewDays, 10);
       if (isNaN(previewDays)) previewDays = 7;
+
+      // Configured window = restore target. "Unlimited (this session)" lifts it
+      // for the current view only — the settings are never written from here.
+      _state.cfgRecentDays = recentDays;
+      _state.cfgPreviewDays = previewDays;
+      if (_state.windowRelaxed) { recentDays = 0; previewDays = 0; }
 
       _state.recentDays = recentDays;
       _state.previewDays = previewDays;
@@ -591,6 +723,10 @@
         boxStashIds[b.endpoint] = stashIdMap[b.endpoint.toLowerCase()];
       });
       _state.boxStashIds = boxStashIds;
+
+      // Re-render now that the sources are known: the first loading frame is
+      // drawn before the box list is resolved, so it would have no source rows
+      renderTabContent();
 
       // Local performer maps (box performer id → local performer) for card badges
       _state.localPerformerMaps = {};
@@ -607,12 +743,15 @@
         return ensureMissingLoaded(_state.perPage);
       }).then(function () {
         _state.loading = false;
+        _state.viewState = computeResultViewState();
         renderTabContent();
       });
     }).catch(function (e) {
       console.error("[SSD] load error:", e);
       _state.loading = false;
       _state.loadError = e.message || String(e);
+      _state.errorKind = (e && e.ssdKind) || "";
+      _state.viewState = _state.errorKind || "fatal";
       renderTabContent();
     });
   }
@@ -658,9 +797,11 @@
       return;
     }
     _state.loading = true;
+    _state.viewState = "loading";
     renderTabContent();
     ensureMissingLoaded(needed).then(function () {
       _state.loading = false;
+      _state.viewState = computeResultViewState();
       renderTabContent();
     });
   }
@@ -690,20 +831,28 @@
     _state.cachedMissing = [];
     _state.boxCursors = {};
     _state.boxExhausted = {};
+    _state.boxFailed = {};
+    _state.boxStatus = {};
+    _state.boxFetched = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
+    _state.droppedByWindow = 0;
     _state.allLoaded = false;
     _state.loading = true;
+    _state.viewState = "loading";
     renderTabContent();
 
     ensureMissingLoaded(_state.perPage).then(function () {
       _state.loading = false;
+      _state.viewState = computeResultViewState();
       renderTabContent();
     }).catch(function (e) {
       console.error("[SSD] re-sort query failed:", e);
       _state.loading = false;
       _state.loadError = e.message || String(e);
+      _state.errorKind = (e && e.ssdKind) || "";
+      _state.viewState = _state.errorKind || "fatal";
       renderTabContent();
     });
   }
@@ -857,7 +1006,9 @@
     pane.classList.add("active", "show");
     pane.style.display = "";
 
-    if (!_state.loading && _state.cachedMissing.length === 0 && !_state.loadError) {
+    // Load once per performer. Error/empty states carry their own retry button —
+    // silently re-scanning on every tab click would just repeat the same query.
+    if (!_state.loading && !_state.loadInitiated) {
       loadMissingScenes();
     }
   }
@@ -899,6 +1050,1182 @@
     });
   }
 
+  // ─── Fallback state panel ─────────────────────────────────────────────────
+  // Every non-content state (scanning / unreachable source / performer without a
+  // linked stash-box ID / nothing left to discover) renders as one panel instead
+  // of bare text, so the tab never just looks frozen.  Convention: solid buttons
+  // are actions, outlined chips are status.
+
+  var ICON_WARN = "M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z";
+  var ICON_INFO = "M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM216 336l24 0 0-64-24 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l48 0c13.3 0 24 10.7 24 24l0 88 8 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-80 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zm40-208a32 32 0 1 1 0 64 32 32 0 1 1 0-64z";
+  var ICON_DANGER = "M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm0-384c13.3 0 24 10.7 24 24l0 112c0 13.3-10.7 24-24 24s-24-10.7-24-24l0-112c0-13.3 10.7-24 24-24zM224 352a32 32 0 1 1 64 0 32 32 0 1 1 -64 0z";
+
+  // Result of a finished load: cards, a dead-source panel or a genuine empty run
+  function computeResultViewState() {
+    if (_state.cachedMissing.length > 0) return "content";
+    var boxes = _state.queryBoxes || [];
+    if (boxes.length > 0) {
+      var allFailed = boxes.every(function (b) {
+        var st = _state.boxStatus[b.endpoint];
+        return st && !st.ok;
+      });
+      if (allFailed) return "net-fail";
+    }
+    return "empty";
+  }
+
+  function resolveViewState() {
+    if (_state.viewState) return _state.viewState;
+    return _state.loadInitiated ? "empty" : "idle";
+  }
+
+  // Sources that failed in the current round (name + failure kind)
+  function failedSources() {
+    var out = [];
+    (_state.queryBoxes || []).forEach(function (b) {
+      var st = _state.boxStatus[b.endpoint];
+      if (st && !st.ok) {
+        out.push({ name: sourceLabel(b), kind: st.kind });
+      }
+    });
+    return out;
+  }
+
+  function sourceLabel(box) {
+    return brandNameForEndpoint(box.endpoint, box.name || box.endpoint);
+  }
+
+  function makeChip(text, kind) {
+    var el = document.createElement("span");
+    el.className = "ssd-chip" + (kind ? " ssd-chip--" + kind : "");
+    el.textContent = text;
+    return el;
+  }
+
+  function makePanelBtn(label, kind, size) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "ssd-btn " + (size === "sm" ? "ssd-btn-sm" : (size === "md" ? "ssd-btn-md" : "ssd-btn-lg"))
+      + " ssd-btn-" + (kind || "secondary");
+    b.textContent = label;
+    return b;
+  }
+
+  // "Unlimited time range (this session)" — a viewing aid, never a setting write
+  function setWindowRelaxed(on) {
+    _state.windowRelaxed = !!on;
+    loadMissingScenes();
+  }
+
+  function retryLoad() {
+    loadMissingScenes();
+  }
+
+  function openBoxPerformer(box) {
+    var sid = _state.boxStashIds[box.endpoint];
+    if (!sid) return;
+    window.open(boxWebBase(box.endpoint) + "/performers/" + sid, "_blank", "noopener,noreferrer");
+  }
+
+  function panelVariant(vs) {
+    if (vs === "loading" || vs === "idle") return "loading";
+    if (vs === "net-fail" || vs === "no-box" || vs === "no-ids") return "warn";
+    if (vs === "fatal") return "danger";
+    return "neutral";
+  }
+
+  var PANEL_TITLES = {
+    loading: ["正在扫描源…", "Scanning sources…"],
+    "net-fail": ["无法访问 stash-box", "Can't reach the stash-box"],
+    "no-box": ["未配置 stash-box", "No stash-box configured"],
+    "no-ids": ["该演员未关联 stash-box ID", "This performer has no stash-box ID"],
+    "no-match": ["没有匹配的场景", "No matching scenes"],
+    fatal: ["加载失败", "Loading failed"],
+  };
+
+  function panelTitle(vs) {
+    if (vs === "empty") {
+      if (_state.droppedByWindow > 0) {
+        return tc("当前时间窗口内没有剩余场景", "Nothing left inside the time window");
+      }
+      return tc("源上没有待发现的场景", "Nothing left to discover on the source");
+    }
+    var pair = PANEL_TITLES[vs] || PANEL_TITLES.loading;
+    return isZh() ? pair[0] : pair[1];
+  }
+
+  function panelIcon(kind) {
+    var path = kind === "warn" ? ICON_WARN : (kind === "danger" ? ICON_DANGER : ICON_INFO);
+    var span = document.createElement("span");
+    span.className = "ssd-panel-icon ssd-panel-icon--" + kind;
+    span.innerHTML = '<svg viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="'
+      + path + '"></path></svg>';
+    return span;
+  }
+
+  function panelDesc(text) {
+    var el = document.createElement("div");
+    el.className = "ssd-panel-desc";
+    el.textContent = text;
+    return el;
+  }
+
+  function panelNote(text, withSpinner, isError) {
+    var el = document.createElement("div");
+    el.className = "ssd-find-note" + (isError ? " ssd-find-note--error" : "");
+    if (withSpinner) {
+      var sp = document.createElement("div");
+      sp.className = "ssd-spinner ssd-spinner-sm";
+      el.appendChild(sp);
+    }
+    var t = document.createElement("span");
+    t.textContent = text;
+    el.appendChild(t);
+    return el;
+  }
+
+  // One row per source: dot + name + status text
+  function buildSourceRow(name, dotKind, statusText, statusWarn) {
+    var row = document.createElement("div");
+    row.className = "ssd-src-row";
+    var dot = document.createElement("span");
+    dot.className = "ssd-src-dot ssd-src-dot--" + dotKind;
+    var nm = document.createElement("span");
+    nm.className = "ssd-src-name";
+    nm.textContent = name;
+    var st = document.createElement("span");
+    st.className = "ssd-src-status" + (statusWarn ? " ssd-src-status--warn" : "");
+    st.textContent = statusText;
+    row.appendChild(dot);
+    row.appendChild(nm);
+    row.appendChild(st);
+    return row;
+  }
+
+  // Scanning panel body: indeterminate bar + per-source progress rows
+  function buildScanProgress() {
+    var frag = document.createDocumentFragment();
+    var bar = document.createElement("div");
+    bar.className = "ssd-progress";
+    bar.appendChild(document.createElement("i"));
+    frag.appendChild(bar);
+
+    var boxes = _state.queryBoxes || [];
+    if (boxes.length) {
+      var list = document.createElement("div");
+      list.className = "ssd-src-list";
+      boxes.forEach(function (b) {
+        var st = _state.boxStatus[b.endpoint];
+        var fetched = _state.boxFetched[b.endpoint] || 0;
+        list.appendChild(buildSourceRow(
+          sourceLabel(b),
+          (st && !st.ok) ? "warn" : (st && st.ok ? "ok" : "pending"),
+          (st && !st.ok)
+            ? tc("失败 · ", "Failed · ") + boxErrText(st.kind, isZh())
+            : (st && st.ok)
+              ? tc("已获取 " + fetched + " 条", fetched + " fetched")
+              : tc("正在查询…", "Querying…"),
+          !!(st && !st.ok)
+        ));
+      });
+      frag.appendChild(list);
+    }
+    return frag;
+  }
+
+  function buildStatePanel(vs) {
+    var panel = document.createElement("div");
+    panel.className = "ssd-panel ssd-panel--" + panelVariant(vs);
+
+    var head = document.createElement("div");
+    head.className = "ssd-panel-head";
+    if (vs === "loading" || vs === "idle") {
+      var sp = document.createElement("div");
+      sp.className = "ssd-spinner ssd-spinner-sm";
+      head.appendChild(sp);
+    } else {
+      head.appendChild(panelIcon(vs === "fatal" ? "danger" : (panelVariant(vs) === "warn" ? "warn" : "info")));
+    }
+    var title = document.createElement("div");
+    title.className = "ssd-panel-title";
+    title.textContent = panelTitle(vs);
+    head.appendChild(title);
+    panel.appendChild(head);
+
+    var body = document.createElement("div");
+    body.className = "ssd-panel-body";
+    panel.appendChild(body);
+
+    var actions = document.createElement("div");
+    actions.className = "ssd-actions";
+
+    if (vs === "loading" || vs === "idle") {
+      body.appendChild(buildScanProgress());
+
+    } else if (vs === "net-fail") {
+      body.appendChild(panelDesc(tc(
+        "网络请求失败，没有取到任何场景。检查网络或代理后重试。",
+        "The request failed and no scenes could be fetched. Check your connection or proxy, then retry.")));
+      var failed = failedSources();
+      if (failed.length) {
+        var list = document.createElement("div");
+        list.className = "ssd-src-list";
+        failed.forEach(function (f) {
+          list.appendChild(buildSourceRow(f.name, "warn", boxErrText(f.kind, isZh()), true));
+        });
+        body.appendChild(list);
+      }
+      var retryBtn = makePanelBtn(tc("重试", "Retry"), "primary");
+      retryBtn.onclick = retryLoad;
+      actions.appendChild(retryBtn);
+      var setBtn = makePanelBtn(tc("打开设置", "Open settings"), "secondary");
+      setBtn.onclick = function () { window.open("/settings", "_blank", "noopener,noreferrer"); };
+      actions.appendChild(setBtn);
+
+    } else if (vs === "no-box") {
+      body.appendChild(panelDesc(tc(
+        "本插件从已配置的 stash-box 读取场景。请在 设置 → 元数据提供者 中添加至少一个实例，然后重试。",
+        "Scenes are read from configured stash-boxes. Add at least one in Settings → Metadata Providers, then retry.")));
+      var retryBtn2 = makePanelBtn(tc("重试", "Retry"), "primary");
+      retryBtn2.onclick = retryLoad;
+      actions.appendChild(retryBtn2);
+      var setBtn2 = makePanelBtn(tc("打开设置", "Open settings"), "secondary");
+      setBtn2.onclick = function () { window.open("/settings", "_blank", "noopener,noreferrer"); };
+      actions.appendChild(setBtn2);
+
+    } else if (vs === "no-ids") {
+      body.appendChild(panelDesc(tc(
+        "本插件按 stash-box 编号查询场景。在演员编辑面板的「Stash IDs」区点「添加Stash编号」，为下列源各填入一个编号；写入后会自动重新查询。",
+        "Scenes are queried by stash-box ID. Open the performer edit panel, click \"Add Stash ID\" in the \"Stash IDs\" section and fill in one ID for each source below — the tab re-queries automatically once it is saved.")));
+      var boxList = document.createElement("div");
+      boxList.className = "ssd-src-list";
+      (_state.allBoxes || []).forEach(function (b) {
+        boxList.appendChild(buildSourceRow(sourceLabel(b), "warn", tc("未关联", "Not linked"), true));
+      });
+      if (boxList.children.length) body.appendChild(boxList);
+      if (_state.editWatching) {
+        body.appendChild(panelNote(tc("已打开编辑面板，正在等待编号写入…",
+          "Edit panel opened — waiting for an ID to be saved…"), true, false));
+      }
+      if (_state.editWatchMissing) {
+        body.appendChild(panelNote(tc("没找到编辑按钮，请手动点开页面右上角的编辑（铅笔）图标。",
+          "Edit button not found — open the edit (pencil) icon at the top right manually."), false, true));
+      }
+
+      var findBtn = findEntryBtn("lg", "primary");
+      actions.appendChild(findBtn);
+
+      var editBtn = makePanelBtn(tc("打开编辑面板", "Open edit panel"), "secondary");
+      editBtn.onclick = openPerformerEditor;
+      actions.appendChild(editBtn);
+
+      var retryBtn3 = makePanelBtn(tc("重试", "Retry"), "secondary");
+      retryBtn3.onclick = retryLoad;
+      actions.appendChild(retryBtn3);
+
+    } else if (vs === "empty") {
+      var dropped = _state.droppedByWindow;
+      var failedN = failedSources();
+      var lines = [];
+      if (dropped > 0) {
+        lines.push(tc(dropped + " 个场景被时间窗口过滤掉了。",
+          dropped + " scene(s) were filtered out by the time window."));
+      } else {
+        lines.push(tc("该演员在源上的场景都已在本库中。",
+          "Every scene this performer has on the sources is already in your library."));
+      }
+      if (failedN.length) {
+        lines.push(tc("部分源查询失败，结果可能不完整。",
+          "Some sources failed — the result may be incomplete."));
+      }
+      if (_state.preferredFallback) {
+        lines.push(tc("首选源 " + _state.preferredBoxLabel + " 没有该演员的编号，已改查其他有编号的源。",
+          "The preferred source " + _state.preferredBoxLabel + " has no ID for this performer, so the other sources that do were queried."));
+      }
+      body.appendChild(panelDesc(lines.join(" ")));
+      if (failedN.length) {
+        var list2 = document.createElement("div");
+        list2.className = "ssd-src-list";
+        failedN.forEach(function (f) {
+          list2.appendChild(buildSourceRow(f.name, "warn", boxErrText(f.kind, isZh()), true));
+        });
+        body.appendChild(list2);
+      }
+
+      (_state.queryBoxes || []).forEach(function (b, i) {
+        var viewBtn = appendExtIcon(makePanelBtn(sourceLabel(b),
+          (dropped > 0 || i > 0) ? "secondary" : "primary"));
+        viewBtn.title = tc("在源上打开该演员页面", "Open this performer on the source");
+        viewBtn.onclick = (function (box) { return function () { openBoxPerformer(box); }; })(b);
+        actions.appendChild(viewBtn);
+      });
+      if (dropped > 0) {
+        var relaxBtn = makePanelBtn(tc("不限时间（本次）", "Unlimited time (this session)"), "primary");
+        relaxBtn.title = tc("临时放开近期/预告时间窗口", "Temporarily lift the recent/preview window");
+        relaxBtn.onclick = function () { setWindowRelaxed(true); };
+        actions.appendChild(relaxBtn);
+      }
+      var retryBtn4 = makePanelBtn(tc("重试", "Retry"), "secondary");
+      retryBtn4.onclick = retryLoad;
+      actions.appendChild(retryBtn4);
+      if (findEntryVisible("empty")) actions.appendChild(findEntryBtn("lg", "info"));
+
+    } else if (vs === "no-match") {
+      var found = _state.cachedMissing.length;
+      body.appendChild(panelDesc(tc("清除搜索可查看已发现的全部场景（共 " + found + " 个）。",
+        "Clear the search to see all " + found + " discovered scene(s).")));
+      var clearBtn = makePanelBtn(tc("清除搜索", "Clear search"), "primary");
+      clearBtn.onclick = function () {
+        _state.searchQuery = "";
+        _state.currentPage = 1;
+        renderTabContent();
+      };
+      actions.appendChild(clearBtn);
+      if (findEntryVisible("no-match")) actions.appendChild(findEntryBtn("lg", "info"));
+
+    } else {
+      // fatal
+      body.appendChild(panelDesc(_state.loadError || tc("未知错误", "Unknown error")));
+      var retryBtn5 = makePanelBtn(tc("重试", "Retry"), "primary");
+      retryBtn5.onclick = retryLoad;
+      actions.appendChild(retryBtn5);
+    }
+
+    if (actions.children.length) panel.appendChild(actions);
+    // The inline lookup expands inside any panel that offers its entry button
+    if (_state.findOpen && (vs === "no-ids" || vs === "empty" || vs === "no-match")) {
+      panel.appendChild(buildFindBlock());
+    }
+    return panel;
+  }
+
+  // ─── "Look them up on the source" (inline block) ──────────────────────────
+  // Searches every configured box by performer name so an unlinked performer can
+  // be linked without leaving the page.  Expanding inline (no popup layer) keeps
+  // it consistent with the rest of the panel system.
+
+  var SEARCH_PERFORMER_QUERY =
+    "query($term:String!){searchPerformer(term:$term){id name disambiguation aliases deleted " +
+    "gender country birth_date death_date urls{url} images{url} height cup_size band_size waist_size hip_size " +
+    "career_start_year career_end_year ethnicity hair_color eye_color tattoos{location description} " +
+    "piercings{location description} scene_count}}";
+
+  // Local performer fields the link/overwrite actions compare and merge against
+  var LOCAL_PERF_FIELDS = PERFORMER_FIELDS +
+    " alias_list urls image_path gender country birthdate death_date height_cm measurements" +
+    " career_length ethnicity hair_color eye_color tattoos piercings";
+
+  var PERF_UPDATE_MUTATION = "mutation($input:PerformerUpdateInput!){performerUpdate(input:$input){id}}";
+
+  function normalizedName(s) {
+    return String(s || "").normalize("NFC").toLowerCase().replace(/\s+/g, "");
+  }
+
+  function loadLocalPerformerFull(id) {
+    return callGQL("query($id:ID!){findPerformer(id:$id){" + LOCAL_PERF_FIELDS + "}}", { id: id })
+      .then(function (data) { return data.findPerformer; });
+  }
+
+  // ── Field mapping (mirrors JavStashLinker: box performer → PerformerUpdateInput) ──
+
+  function emptyVal(v) { return v === undefined || v === null || v === ""; }
+
+  // Stash-box enum value (e.g. MIDDLE_EASTERN) -> Stash display string (e.g. Middle Eastern)
+  function enumToDisplay(v) {
+    return String(v).toLowerCase().replace(/(^|_)([a-z])/g, function (_, p, c) {
+      return (p ? " " : "") + c.toUpperCase();
+    });
+  }
+
+  // stash-box body modifications [{location, description}] -> Stash free-text string
+  function modsToString(list) {
+    return (list || []).map(function (t) {
+      return t.location + (t.description ? ": " + t.description : "");
+    }).join("; ");
+  }
+
+  var GENDER_TEXT = {
+    FEMALE: ["女", "Female"],
+    MALE: ["男", "Male"],
+    TRANSGENDER_MALE: ["跨性别男", "Trans male"],
+    TRANSGENDER_FEMALE: ["跨性别女", "Trans female"],
+    INTERSEX: ["间性", "Intersex"],
+    NON_BINARY: ["非二元", "Non-binary"],
+  };
+
+  function genderText(v) {
+    var pair = GENDER_TEXT[String(v || "").toUpperCase()];
+    return pair ? (isZh() ? pair[0] : pair[1]) : "";
+  }
+
+  function boxUrls(p) {
+    var out = [];
+    (p.urls || []).forEach(function (u) {
+      var s = typeof u === "string" ? u : (u && u.url) || "";
+      if (s) out.push(s);
+    });
+    return out;
+  }
+
+  function urlHost(u) {
+    try { return new URL(u).host.replace(/^www\./i, ""); } catch (e) { return String(u || ""); }
+  }
+
+  // Case-insensitive trim/dedupe — keeps the first spelling seen
+  function dedupeStrings(arr) {
+    var seen = {}, out = [];
+    (arr || []).forEach(function (v) {
+      var s = (v === undefined || v === null) ? "" : String(v).trim();
+      if (!s) return;
+      var k = s.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push(s);
+    });
+    return out;
+  }
+
+  function boxMeasurements(p) {
+    var parts = [];
+    var bust = String(p.band_size || "") + String(p.cup_size || "");
+    if (bust) parts.push(bust);
+    if (!emptyVal(p.waist_size)) parts.push(p.waist_size);
+    if (!emptyVal(p.hip_size)) parts.push(p.hip_size);
+    return parts.join("-");
+  }
+
+  function boxCareer(p) {
+    var s = p.career_start_year, e = p.career_end_year;
+    if (!emptyVal(s) && !emptyVal(e)) return s + " - " + e;
+    if (!emptyVal(s) || !emptyVal(e)) return String(s || e);
+    return "";
+  }
+
+  // Local performer has a custom image unless image_path carries "default=true"
+  function hasCustomImage(localPerf) {
+    var ip = (localPerf && localPerf.image_path) || "";
+    return !!ip && ip.indexOf("default=true") === -1;
+  }
+
+  function mergeStashIds(existing, endpoint, newId) {
+    var ep = String(endpoint || "").toLowerCase();
+    var out = [];
+    var replaced = false;
+    (existing || []).forEach(function (s) {
+      if (!s || !s.endpoint) return;
+      if (String(s.endpoint).toLowerCase() === ep) {
+        out.push({ endpoint: s.endpoint, stash_id: newId });
+        replaced = true;
+      } else {
+        out.push({ endpoint: s.endpoint, stash_id: s.stash_id });
+      }
+    });
+    if (!replaced) out.push({ endpoint: endpoint, stash_id: newId });
+    return out;
+  }
+
+  // Box performer → detail fields. overwrite=false fills blanks only (identical
+  // values never written); overwrite=true lets any box value replace the local one
+  // (local-only fields are never cleared — they are simply not part of the input).
+  function buildPerfDetailInput(localPerf, p, overwrite) {
+    function need(localVal, jsVal) {
+      return !emptyVal(jsVal) && (overwrite || emptyVal(localVal)) && jsVal !== localVal;
+    }
+    var d = {};
+    if (need(localPerf.gender, p.gender)) d.gender = p.gender;
+    if (need(localPerf.birthdate, p.birth_date)) d.birthdate = p.birth_date;
+    if (need(localPerf.death_date, p.death_date)) d.death_date = p.death_date;
+    if (need(localPerf.country, p.country)) d.country = p.country;
+    var eth = !emptyVal(p.ethnicity) ? enumToDisplay(p.ethnicity) : undefined;
+    if (need(localPerf.ethnicity, eth)) d.ethnicity = eth;
+    var hair = !emptyVal(p.hair_color) ? enumToDisplay(p.hair_color) : undefined;
+    if (need(localPerf.hair_color, hair)) d.hair_color = hair;
+    var eye = !emptyVal(p.eye_color) ? enumToDisplay(p.eye_color) : undefined;
+    if (need(localPerf.eye_color, eye)) d.eye_color = eye;
+    if (need(localPerf.height_cm, p.height)) d.height_cm = p.height;
+    var ms = boxMeasurements(p);
+    if (ms && (overwrite || emptyVal(localPerf.measurements)) && ms !== localPerf.measurements) {
+      d.measurements = ms;
+    }
+    var cl = boxCareer(p);
+    if (cl && (overwrite || emptyVal(localPerf.career_length)) && cl !== localPerf.career_length) {
+      d.career_length = cl;
+    }
+    if (p.tattoos && p.tattoos.length) {
+      var tv = modsToString(p.tattoos);
+      if ((overwrite || emptyVal(localPerf.tattoos)) && tv !== localPerf.tattoos) d.tattoos = tv;
+    }
+    if (p.piercings && p.piercings.length) {
+      var pv = modsToString(p.piercings);
+      if ((overwrite || emptyVal(localPerf.piercings)) && pv !== localPerf.piercings) d.piercings = pv;
+    }
+    return d;
+  }
+
+  // Entry button for the inline lookup — shared by the no-ids panel, the
+  // empty/no-match panels and the content-state fallback row.
+  function findEntryBtn(size, kind) {
+    var btn = makePanelBtn(tc("在源上查找 TA", "Look them up on the source"), kind || "primary", size || "lg");
+    btn.title = tc("按名字在各源搜索该演员", "Search this performer by name on the sources");
+    btn.onclick = function () {
+      _state.findOpen = !_state.findOpen;
+      if (!_state.findOpen) {
+        _state.findState = "idle";
+        _state.findMessage = "";
+        _state.findExpandedKey = "";
+      }
+      renderTabContent();
+    };
+    return btn;
+  }
+
+  // Where the entry button is offered. "Single vs multi source" counts the
+  // configured boxes (_state.allBoxes) — the Preferred-box restriction is not
+  // a source limit, so it never turns a multi-source setup into a single one.
+  function findEntryVisible(vs) {
+    var multi = (_state.allBoxes || []).length > 1;
+    if (vs === "no-ids") return true;
+    if (vs === "empty") return multi || _state.preferredFallback;
+    if (vs === "no-match" || vs === "content") return _state.preferredFallback;
+    return false;
+  }
+
+  function buildFindBlock() {
+    var wrap = document.createElement("div");
+    wrap.className = "ssd-find";
+
+    var row = document.createElement("div");
+    row.className = "ssd-find-row";
+
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "clearable-text-field form-control";
+    input.placeholder = tc("演员名", "Performer name");
+    input.value = _state.findTerm || _state.performerName || "";
+
+    function submit() {
+      var term = (input.value || "").trim();
+      if (!term) { input.focus(); return; }
+      _state.findTerm = term;
+      _state.findState = "loading";
+      _state.findMessage = "";
+      renderTabContent();
+      runFindPerformer(term);
+    }
+
+    var goBtn = makePanelBtn(tc("查找", "Search"), "primary", "sm");
+    goBtn.onclick = submit;
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); submit(); }
+    });
+
+    row.appendChild(input);
+    row.appendChild(goBtn);
+    wrap.appendChild(row);
+
+    if (_state.findState === "loading") {
+      wrap.appendChild(panelNote(tc("正在各源搜索…", "Searching the sources…"), true, false));
+    } else if (_state.findState === "fail") {
+      wrap.appendChild(panelNote(tc("搜索失败：", "Search failed: ") + (_state.findMessage || ""), false, true));
+    } else if (_state.findState === "empty") {
+      wrap.appendChild(panelNote(tc("在源上没找到同名演员。可换一个名字或别名再试，也可以手动在编辑面板里填编号。",
+        "No performer with that name on the sources. Try another name or alias, or fill the ID in the edit panel yourself."), false, false));
+    } else if (_state.findResults.length) {
+      var list = document.createElement("div");
+      list.className = "ssd-find-list";
+      _state.findResults.forEach(function (r) { list.appendChild(buildFindRow(r)); });
+      wrap.appendChild(list);
+    }
+    return wrap;
+  }
+
+  // Accordion key: one expanded result at a time
+  function findRowKey(r) {
+    return String(r.box.endpoint).toLowerCase() + ":" + String(r.candidate.id);
+  }
+
+  // Currently viewed image of the expanded result — "last viewed = selected"
+  function selectedImageUrl(r) {
+    var imgs = r.candidate.images || [];
+    if (!imgs.length) return "";
+    var i = (_state.findExpandedKey === findRowKey(r)) ? (_state.findImageIdx || 0) : 0;
+    if (i < 0 || i >= imgs.length) i = 0;
+    return imgs[i] ? (imgs[i].url || "") : "";
+  }
+
+  var FIND_CARET_SVG =
+    '<svg viewBox="0 0 320 512" aria-hidden="true"><path fill="currentColor" d="' +
+    'M140.3 376.8c12.6 10.2 31.1 9.5 42.8-2.2l128-128c9.2-9.2 11.9-22.9 6.9-34.9S301.4 192 288.5 192' +
+    'l-256 0c-12.9 0-24.6 7.8-29.6 19.8S.7 237.5 9.9 246.6l128 128 2.4 2.2z"></path></svg>';
+
+  // "Opens on the source" glyph — the classic external-link mark (box + arrow
+  // leaving the top-right corner) instead of a bare ↗ text character.
+  var FIND_EXT_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>' +
+    '<polyline points="15 3 21 3 21 9"></polyline>' +
+    '<line x1="10" y1="14" x2="21" y2="3"></line></svg>';
+
+  // Append the external-link glyph after a button's label
+  function appendExtIcon(btn) {
+    var ic = document.createElement("span");
+    ic.className = "ssd-btn-icon";
+    ic.innerHTML = FIND_EXT_SVG;
+    btn.appendChild(ic);
+    return btn;
+  }
+
+  function makeCountryFlag(cc, cls) {
+    var img = document.createElement("img");
+    img.className = cls || "ssd-find-flag";
+    img.src = "https://flagcdn.com/w40/" + cc.toLowerCase() + ".png";
+    img.alt = cc;
+    img.onerror = function () { img.replaceWith(document.createTextNode(cc)); };
+    return img;
+  }
+
+  function countryCodeOf(v) {
+    var s = String(v || "").toUpperCase().replace(/[^A-Z]/g, "");
+    return s.length === 2 ? s : "";
+  }
+
+  // ISO-2 → localized region name (reuses the browser's own translations)
+  function regionName(cc) {
+    try {
+      if (typeof Intl !== "undefined" && Intl.DisplayNames) {
+        return new Intl.DisplayNames([isZh() ? "zh-CN" : "en"], { type: "region" }).of(cc) || cc;
+      }
+    } catch (e) { /* unsupported — fall back to the code */ }
+    return cc;
+  }
+
+  // Small outlined badge for overflow counts (+N) and numeric values
+  function makeFindBadge(text) {
+    var el = document.createElement("span");
+    el.className = "ssd-find-badge";
+    el.textContent = text;
+    return el;
+  }
+
+  // Local performer's stash_id for a given box ("" when not linked to that box)
+  function localStashIdForBox(r) {
+    var hit = (_state.performerStashIds || []).filter(function (sid) {
+      return sid.endpoint && r.box.endpoint
+        && String(sid.endpoint).toLowerCase() === String(r.box.endpoint).toLowerCase();
+    })[0];
+    return hit ? String(hit.stash_id || "") : "";
+  }
+
+  // Collapsed row: thumb + name + aliases/gender/flag, source badge, caret.
+  // Clicking anywhere on the row toggles the inline detail (accordion).
+  function buildFindRow(r) {
+    var key = findRowKey(r);
+    var expanded = _state.findExpandedKey === key;
+    var item = document.createElement("div");
+    item.className = "ssd-find-item" + (expanded ? " is-open" : "");
+
+    var main = document.createElement("div");
+    main.className = "ssd-find-main";
+    main.setAttribute("role", "button");
+    main.setAttribute("aria-expanded", expanded ? "true" : "false");
+
+    var imgs = r.candidate.images || [];
+    var thumbUrl = imgs.length && imgs[0] ? imgs[0].url : "";
+    if (thumbUrl) {
+      var img = document.createElement("img");
+      img.className = "ssd-find-avatar";
+      img.src = thumbUrl;
+      img.alt = "";
+      img.loading = "lazy";
+      main.appendChild(img);
+    } else {
+      var ph = document.createElement("div");
+      ph.className = "ssd-find-avatar ssd-find-avatar--empty";
+      ph.textContent = String(r.candidate.name || "?").slice(0, 1).toUpperCase();
+      main.appendChild(ph);
+    }
+
+    var info = document.createElement("div");
+    info.className = "ssd-find-info";
+    // Name line: name · flag · gender · age. Only the name is bold/full size;
+    // the metadata behind it is small (same size as the alias line) and
+    // vertically centred on the name.
+    var name = document.createElement("div");
+    name.className = "ssd-find-name";
+    var nameMain = document.createElement("span");
+    nameMain.className = "ssd-find-name-main";
+    nameMain.textContent = r.candidate.name || "";
+    name.appendChild(nameMain);
+    var meta = document.createElement("span");
+    meta.className = "ssd-find-meta";
+    var cc = countryCodeOf(r.candidate.country);
+    if (cc) {
+      meta.appendChild(document.createTextNode(" · "));
+      meta.appendChild(makeCountryFlag(cc));
+    }
+    var gender = genderText(r.candidate.gender);
+    if (gender) meta.appendChild(document.createTextNode(" · " + gender));
+    var age = birthDateToAge(r.candidate.birth_date);
+    if (age) meta.appendChild(document.createTextNode(" · " + tc(age + " 岁", age + "yo")));
+    if (meta.childNodes.length) name.appendChild(meta);
+    info.appendChild(name);
+
+    // Aliases only, with the hidden count as an outlined badge
+    var aliases = r.candidate.aliases || [];
+    if (aliases.length) {
+      var sub = document.createElement("div");
+      sub.className = "ssd-find-sub";
+      sub.appendChild(document.createTextNode(aliases.slice(0, 3).join(" / ")));
+      if (aliases.length > 3) {
+        sub.appendChild(document.createTextNode(" "));
+        sub.appendChild(makeFindBadge("+" + (aliases.length - 3)));
+      }
+      info.appendChild(sub);
+    }
+    main.appendChild(info);
+
+    // Source badge: same ID = linked (green); same box but another ID = already
+    // has one (grey); box not linked at all = plain box label (grey)
+    var right = document.createElement("div");
+    right.className = "ssd-find-right";
+    var localId = localStashIdForBox(r);
+    if (localId && localId.toLowerCase() === String(r.candidate.id).toLowerCase()) {
+      right.appendChild(makeChip(tc("已关联 " + r.boxName, "Linked · " + r.boxName), "ok"));
+    } else if (localId) {
+      right.appendChild(makeChip(tc("已有 " + r.boxName, "Has ID · " + r.boxName), "muted"));
+    } else {
+      right.appendChild(makeChip(r.boxName, "muted"));
+    }
+    main.appendChild(right);
+
+    var caret = document.createElement("span");
+    caret.className = "ssd-find-caret";
+    caret.innerHTML = FIND_CARET_SVG;
+    main.appendChild(caret);
+
+    main.onclick = function () {
+      _state.findExpandedKey = expanded ? "" : key;
+      _state.findImageIdx = 0;
+      renderTabContent();
+    };
+    item.appendChild(main);
+
+    if (expanded) item.appendChild(buildFindDetail(r, key));
+    return item;
+  }
+
+  function findField(label, valueNode) {
+    var row = document.createElement("div");
+    row.className = "ssd-find-field";
+    var l = document.createElement("span");
+    l.className = "ssd-find-field-label";
+    l.textContent = label;
+    row.appendChild(l);
+    row.appendChild(valueNode);
+    return row;
+  }
+
+  function findFieldText(label, text) {
+    var v = document.createElement("span");
+    v.className = "ssd-find-field-value";
+    v.textContent = text;
+    return findField(label, v);
+  }
+
+  // Expanded detail: big photo viewer (arrows outside, lazy) + fields + actions
+  function buildFindDetail(r, key) {
+    var p = r.candidate;
+    var detail = document.createElement("div");
+    detail.className = "ssd-find-detail";
+
+    // ── Photo column ──
+    var imgs = (p.images || []).filter(function (i) { return i && i.url; });
+    var idx = _state.findImageIdx || 0;
+    if (idx < 0 || idx >= imgs.length) idx = 0;
+
+    var photo = document.createElement("div");
+    photo.className = "ssd-find-photo";
+
+    var frame = document.createElement("div");
+    frame.className = "ssd-find-photo-frame";
+    var photoImg = null;
+    if (imgs.length) {
+      photoImg = document.createElement("img");
+      photoImg.className = "ssd-find-photo-img";
+      photoImg.alt = "";
+      photoImg.src = imgs[idx].url;
+      frame.appendChild(photoImg);
+    } else {
+      var empty = document.createElement("div");
+      empty.className = "ssd-find-photo-empty";
+      empty.textContent = tc("源无图片", "No image on the source");
+      frame.appendChild(empty);
+    }
+
+    var counter = document.createElement("span");
+    counter.className = "ssd-find-photo-count";
+    counter.textContent = imgs.length ? (idx + 1) + " / " + imgs.length : "";
+    frame.appendChild(counter);
+
+    var navs = [];
+    function navBtn(dir) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "ssd-find-photo-nav";
+      b.textContent = dir < 0 ? "\u2039" : "\u203a";
+      b.title = dir < 0 ? tc("上一张", "Previous") : tc("下一张", "Next");
+      b.disabled = (dir < 0 ? idx <= 0 : idx >= imgs.length - 1);
+      b.onclick = function (e) {
+        e.stopPropagation();
+        var next = idx + dir;
+        if (next < 0 || next >= imgs.length) return;
+        idx = next;
+        _state.findImageIdx = idx;
+        if (photoImg) photoImg.src = imgs[idx].url;
+        counter.textContent = (idx + 1) + " / " + imgs.length;
+        navs.forEach(function (nb) {
+          nb.disabled = (nb._ssdDir < 0) ? idx <= 0 : idx >= imgs.length - 1;
+        });
+      };
+      b._ssdDir = dir;
+      navs.push(b);
+      return b;
+    }
+
+    if (imgs.length > 1) photo.appendChild(navBtn(-1));
+    photo.appendChild(frame);
+    if (imgs.length > 1) photo.appendChild(navBtn(1));
+    detail.appendChild(photo);
+
+    // ── Fields column ──
+    var col = document.createElement("div");
+    col.className = "ssd-find-detail-col";
+
+    var fields = document.createElement("div");
+    fields.className = "ssd-find-fields";
+
+    var gender = genderText(p.gender);
+    if (gender) fields.appendChild(findFieldText(tc("性别", "Gender"), gender));
+
+    var cc = countryCodeOf(p.country);
+    if (cc) {
+      var cv = document.createElement("span");
+      cv.className = "ssd-find-field-value";
+      cv.appendChild(makeCountryFlag(cc));
+      cv.appendChild(document.createTextNode(regionName(cc)));
+      fields.appendChild(findField(tc("国籍", "Country"), cv));
+    } else if (!emptyVal(p.country)) {
+      fields.appendChild(findFieldText(tc("国籍", "Country"), String(p.country)));
+    }
+
+    if (!emptyVal(p.birth_date)) fields.appendChild(findFieldText(tc("生日", "Birthdate"), p.birth_date));
+    if (!emptyVal(p.height)) fields.appendChild(findFieldText(tc("身高", "Height"), p.height + " cm"));
+    var ms = boxMeasurements(p);
+    if (ms) fields.appendChild(findFieldText(tc("三围", "Measurements"), ms));
+    var cl = boxCareer(p);
+    if (cl) fields.appendChild(findFieldText(tc("生涯", "Career"), cl));
+    if ((p.aliases || []).length) {
+      fields.appendChild(findFieldText(tc("别名", "Aliases"), (p.aliases || []).join(" / ")));
+    }
+    if (!emptyVal(p.disambiguation)) {
+      fields.appendChild(findFieldText(tc("消歧说明", "Disambiguation"), p.disambiguation));
+    }
+
+    var urls = boxUrls(p);
+    if (urls.length) {
+      var uv = document.createElement("span");
+      uv.className = "ssd-find-field-value ssd-find-links";
+      urls.slice(0, 3).forEach(function (u) {
+        var a = document.createElement("a");
+        a.className = "ssd-find-link";
+        a.href = u;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = urlHost(u);
+        a.title = u;
+        a.onclick = function (e) { e.stopPropagation(); };
+        uv.appendChild(a);
+      });
+      if (urls.length > 3) {
+        uv.appendChild(makeFindBadge("+" + (urls.length - 3)));
+      }
+      fields.appendChild(findField(tc("外部链接", "External links"), uv));
+    }
+
+    if (!emptyVal(p.scene_count)) {
+      var scv = document.createElement("span");
+      scv.className = "ssd-find-field-value";
+      scv.appendChild(makeFindBadge(String(p.scene_count)));
+      fields.appendChild(findField(tc("源参演数", "Scenes on source"), scv));
+    }
+
+    col.appendChild(fields);
+
+    // ── Row feedback (after an action) ──
+    var msg = _state.findRowMsg[key];
+    if (msg) {
+      var mEl = document.createElement("div");
+      mEl.className = "ssd-find-rowmsg" + (msg.kind === "error" ? " ssd-find-rowmsg--error" : "");
+      mEl.textContent = msg.text;
+      col.appendChild(mEl);
+    }
+
+    // ── Actions: source link / Link (append) / Overwrite (replace) ──
+    var actions = document.createElement("div");
+    actions.className = "ssd-find-actions";
+    var busy = _state.findBusyKey === key;
+
+    var openBtn = appendExtIcon(makePanelBtn(r.boxName, "secondary", "md"));
+    openBtn.title = tc("在源上打开该演员页面", "Open this performer on the source");
+    openBtn.disabled = busy;
+    openBtn.onclick = function (e) {
+      e.stopPropagation();
+      window.open(boxWebBase(r.box.endpoint) + "/performers/" + p.id, "_blank", "noopener,noreferrer");
+    };
+    actions.appendChild(openBtn);
+
+    var linkBtn = makePanelBtn(tc("关联", "Link"), "primary", "md");
+    linkBtn.title = tc("写好编号，并把本地空缺的字段和别名补上（不改名、不覆盖已有值）",
+      "Write the ID and fill the local blanks (aliases/fields) without overwriting existing values");
+    linkBtn.disabled = busy;
+    linkBtn.onclick = function (e) {
+      e.stopPropagation();
+      runFindAction(r, "link", linkBtn);
+    };
+    actions.appendChild(linkBtn);
+
+    var owBtn = makePanelBtn(tc("覆盖", "Overwrite"), "accent", "md");
+    owBtn.title = tc("以源为准覆盖本地别名、图片与字段（本地独有的信息不会删除）",
+      "Replace local aliases, image and fields with the source (local-only values are kept)");
+    owBtn.disabled = busy;
+    owBtn.onclick = function (e) {
+      e.stopPropagation();
+      armConfirm(owBtn, tc("覆盖", "Overwrite"), tc("确认覆盖？", "Confirm overwrite?"), function () {
+        runFindAction(r, "overwrite", owBtn);
+      });
+    };
+    actions.appendChild(owBtn);
+
+    if (busy) {
+      var spin = document.createElement("div");
+      spin.className = "ssd-spinner ssd-spinner-sm";
+      actions.appendChild(spin);
+    }
+
+    col.appendChild(actions);
+    detail.appendChild(col);
+    return detail;
+  }
+
+  // Red two-step confirm (same pattern as the scene "Add to Library" button)
+  function armConfirm(btn, labelIdle, labelArmed, run) {
+    if (btn.getAttribute("data-ssd-armed") !== "1") {
+      btn.setAttribute("data-ssd-armed", "1");
+      btn.classList.add("ssd-btn-danger");
+      btn.textContent = labelArmed;
+      clearTimeout(btn._ssdArmTimer);
+      btn._ssdArmTimer = setTimeout(function () {
+        if (!btn.isConnected) return;
+        btn.removeAttribute("data-ssd-armed");
+        btn.classList.remove("ssd-btn-danger");
+        btn.textContent = labelIdle;
+      }, 4000);
+      return;
+    }
+    clearTimeout(btn._ssdArmTimer);
+    btn.removeAttribute("data-ssd-armed");
+    btn.classList.remove("ssd-btn-danger");
+    run();
+  }
+
+  // ─── Actions: Link (append) / Overwrite (source wins) ─────────────────────
+
+  function runFindAction(r, mode, btn) {
+    var key = findRowKey(r);
+    if (_state.findBusyKey) return;
+    _state.findBusyKey = key;
+    delete _state.findRowMsg[key];
+    btn.disabled = true;
+    btn.textContent = tc("写入中…", "Writing…");
+
+    var p = r.candidate;
+    loadLocalPerformerFull(_state.performerId).then(function (local) {
+      if (!local) throw new Error(tc("未找到演员", "Performer not found"));
+
+      var input = { id: _state.performerId };
+      input.stash_ids = mergeStashIds(local.stash_ids, r.box.endpoint, p.id);
+
+      if (mode === "overwrite") {
+        // Source is authoritative: aliases replaced wholesale, urls replaced,
+        // image replaced (unless the source has none)
+        input.alias_list = dedupeStrings([p.name].concat(p.aliases || []));
+        input.urls = boxUrls(p);
+        var selOw = selectedImageUrl(r);
+        if (selOw) input.image = selOw;
+      } else {
+        // Append-only: aliases/urls merged and deduped, blank fields filled,
+        // image only when the local performer has none
+        input.alias_list = dedupeStrings((local.alias_list || []).concat([p.name]).concat(p.aliases || []));
+        input.urls = dedupeStrings((local.urls || []).concat(boxUrls(p)));
+        if (!hasCustomImage(local)) {
+          var sel = selectedImageUrl(r);
+          if (sel) input.image = sel;
+        }
+      }
+
+      var details = buildPerfDetailInput(local, p, mode === "overwrite");
+      Object.keys(details).forEach(function (k) { input[k] = details[k]; });
+
+      return callGQL(PERF_UPDATE_MUTATION, { input: input }).then(function () {
+        return { local: local, details: details };
+      });
+    }).then(function (res) {
+      // Optimistic local update so the row badge flips to "linked" right away
+      _state.performerStashIds = mergeStashIds(_state.performerStashIds, r.box.endpoint, p.id);
+      _state.findBusyKey = "";
+      var filled = Object.keys(res.details).length;
+      _state.findRowMsg[key] = {
+        kind: "ok",
+        text: mode === "overwrite"
+          ? tc("已覆盖：别名/图片/链接以源为准，补充字段 " + filled + " 项，正在重新查询…",
+            "Overwritten from the source — " + filled + " field(s) written. Re-querying…")
+          : tc("已关联：补充字段 " + filled + " 项（不改名、不覆盖已有值），正在重新查询…",
+            "Linked — " + filled + " blank field(s) filled (name and existing values untouched). Re-querying…"),
+      };
+      renderTabContent();
+      setTimeout(loadMissingScenes, 900);
+    }).catch(function (e) {
+      _state.findBusyKey = "";
+      _state.findRowMsg[key] = {
+        kind: "error",
+        text: tc("写入失败：", "Write failed: ") + (e && e.message ? e.message : String(e)),
+      };
+      renderTabContent();
+    });
+  }
+
+  function runFindPerformer(term) {
+    var boxes = (_state.allBoxes && _state.allBoxes.length) ? _state.allBoxes : _state.queryBoxes;
+    boxes = (boxes || []).filter(function (b) { return b && b.endpoint; });
+    if (boxes.length === 0) {
+      _state.findState = "fail";
+      _state.findMessage = tc("没有可查询的源", "no source to search");
+      renderTabContent();
+      return;
+    }
+
+    var results = [];
+    var failures = [];
+    var jobs = boxes.map(function (b) {
+      return _boxRateLimiter.submit(function () {
+        return callBoxGQL(b.endpoint, b.api_key, SEARCH_PERFORMER_QUERY, { term: term }, 12000);
+      }).then(function (data) {
+        var list = (data && data.searchPerformer) || [];
+        list.forEach(function (p) {
+          if (!p || p.deleted) return;
+          results.push({ box: b, boxName: sourceLabel(b), candidate: p });
+        });
+      }).catch(function (e) {
+        failures.push({ name: sourceLabel(b), kind: (e && e.ssdKind) || "unknown" });
+      });
+    });
+
+    Promise.all(jobs).then(function () {
+      var norm = normalizedName(term);
+      results.sort(function (a, b) {
+        var ra = normalizedName(a.candidate.name) === norm ? 0 : 1;
+        var rb = normalizedName(b.candidate.name) === norm ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        return String(a.candidate.name || "").localeCompare(String(b.candidate.name || ""));
+      });
+      _state.findResults = results;
+      _state.findFailures = failures;
+      if (results.length) {
+        _state.findState = "done";
+      } else if (failures.length === boxes.length) {
+        _state.findState = "fail";
+        _state.findMessage = failures.map(function (f) {
+          return f.name + " " + boxErrText(f.kind, isZh());
+        }).join(isZh() ? "；" : "; ");
+      } else {
+        _state.findState = "empty";
+      }
+      renderTabContent();
+    });
+  }
+
+  // ─── "Open edit panel" + watch for a newly written stash-box ID ───────────
+  // The plugin already sits on the performer page, so the manual path is the
+  // native edit overlay itself: open it and poll until an ID shows up, then
+  // re-query on our own instead of asking the user to come back and refresh.
+
+  function openPerformerEditor() {
+    // Native detail-header edit button (class "edit" is stable across locales)
+    var btn = document.querySelector(".detail-header button.edit")
+      || document.querySelector("button.edit.btn-primary")
+      || document.querySelector("a[href$='/edit']");
+    if (!btn) {
+      _state.editWatchMissing = true;
+      renderTabContent();
+      return;
+    }
+    _state.editWatchMissing = false;
+    btn.click();
+    _state.editWatching = true;
+    startEditWatch();
+    renderTabContent();
+  }
+
+  function startEditWatch() {
+    stopEditWatch();
+    var ticks = 0;
+    var seenOpen = false;
+    // The edit overlay replaces the whole detail view, so the pane is unmounted
+    // while it is up; poll the performer instead and re-query once an ID lands.
+    _state._editTimer = setInterval(function () {
+      ticks++;
+      if (ticks > 90 || !_state.performerId || !isPerformerPage()) {
+        stopEditWatch();
+        _state.editWatching = false;
+        if (isPerformerPage()) renderTabContent();
+        return;
+      }
+      var editing = !!document.querySelector(".detail-header.edit")
+        || !!document.querySelector(".modal.show");
+      if (editing) seenOpen = true;
+      loadLocalPerformer(_state.performerId).then(function (p) {
+        if (p) {
+          _state.performerStashIds = p.stash_ids || [];
+          var linked = (_state.allBoxes || []).some(function (b) {
+            return (_state.performerStashIds || []).some(function (sid) {
+              return sid.endpoint && sid.stash_id && sid.endpoint.toLowerCase() === b.endpoint.toLowerCase();
+            });
+          });
+          if (linked) {
+            stopEditWatch();
+            _state.editWatching = false;
+            loadMissingScenes();
+            return;
+          }
+        }
+        // Overlay closed without an ID → stop instead of nagging for 3 minutes
+        if (seenOpen && !editing) {
+          stopEditWatch();
+          _state.editWatching = false;
+          renderTabContent();
+        }
+      }).catch(function () { /* transient — keep polling */ });
+    }, 2000);
+  }
+
+  function stopEditWatch() {
+    if (_state._editTimer) {
+      clearInterval(_state._editTimer);
+      _state._editTimer = null;
+    }
+  }
+
   // ─── Scene rendering (grid / list) ───────────────────────────────────────
 
   function renderTabContent() {
@@ -908,6 +2235,11 @@
     var pane = document.querySelector(".ssd-tab-pane");
     if (!pane) return;
     pane.innerHTML = "";
+
+    // The filter toolbar only means something when there are cards to filter or
+    // lay out; the fallback panels carry their own actions instead
+    var panelState = resolveViewState();
+    var showToolbar = panelState === "content" || panelState === "no-match";
 
     // ── Filter toolbar (1:1 Stash native .filtered-list-toolbar) ──
     var toolbar = document.createElement("div");
@@ -1038,13 +2370,6 @@
     refreshBtn.textContent = tc("刷新", "Refresh");
     refreshBtn.title = tc("重新查询 stash-box", "Re-query stash-box");
     refreshBtn.onclick = function () {
-      _state.cachedMissing = [];
-      _state.boxCursors = {};
-      _state.boxExhausted = {};
-      _state.boxTotalCount = 0;
-      _state.allLoaded = false;
-      _state.currentPage = 1;
-      _state.loadError = "";
       _state.searchQuery = "";
       loadMissingScenes();
     };
@@ -1102,9 +2427,9 @@
       toolbar.appendChild(zoomWrap);
     }
 
-    pane.appendChild(toolbar);
+    if (showToolbar) pane.appendChild(toolbar);
 
-    if (_state.refocusSearch) {
+    if (showToolbar && _state.refocusSearch) {
       _state.refocusSearch = false;
       // Restore caret position (focus() alone jumps the caret to the end)
       var caret = _state.searchCaret;
@@ -1114,35 +2439,82 @@
       }
     }
 
-    if (_state.loadError) {
-      var errDiv = document.createElement("div");
-      errDiv.className = "ssd-error";
-      errDiv.textContent = _state.loadError;
-      pane.appendChild(errDiv);
+    // ── Non-content states → a single panel instead of bare text ──
+    // (scanning / unreachable source / performer without an ID / empty run / fatal)
+    var vs = panelState;
+    if (vs !== "content") {
+      pane.appendChild(buildStatePanel(vs));
       return;
     }
 
-    if (_state.loading) {
-      var loadingDiv = document.createElement("div");
-      loadingDiv.className = "ssd-loading";
-      loadingDiv.innerHTML = '<div class="ssd-spinner"></div>';
-      pane.appendChild(loadingDiv);
-      return;
-    }
-
+    // The search filtered the discovered cache down to nothing → the no-match
+    // panel. This has to be decided before the meta row / inline lookup block
+    // are appended, otherwise they stay behind above the panel (and the lookup
+    // block would be rendered a second time inside the panel).
     var filtered = getFilteredMissing();
     if (filtered.length === 0) {
-      var emptyDiv = document.createElement("div");
-      emptyDiv.className = "ssd-empty";
-      if ((_state.searchQuery || "").trim()) {
-        emptyDiv.textContent = tc("没有匹配 \"" + _state.searchQuery + "\" 的场景",
-          "No scenes matching \"" + _state.searchQuery + "\"");
-      } else {
-        emptyDiv.textContent = tc("该演员的所有 stash-box 场景均已在本地库中（或被近期/预告窗口过滤）",
-          "All stash-box scenes for this performer are already in the local library (or filtered by recent/preview window).");
-      }
-      pane.appendChild(emptyDiv);
+      pane.appendChild(buildStatePanel("no-match"));
       return;
+    }
+
+    // One meta row above the cards, always in this order: "time window relaxed"
+    // chip → its restore button → preferred-source fallback chip → inline lookup
+    // entry. Only the parts that apply are rendered. The four are grouped in
+    // pairs so a very narrow viewport wraps between them instead of overflowing.
+    if (_state.windowRelaxed || _state.preferredFallback) {
+      var metaRow = document.createElement("div");
+      metaRow.className = "ssd-window-row";
+
+      var winGroup = document.createElement("div");
+      winGroup.className = "ssd-window-group";
+      var fallbackGroup = document.createElement("div");
+      fallbackGroup.className = "ssd-window-group";
+
+      if (_state.windowRelaxed) {
+        winGroup.appendChild(makeChip(tc("时间窗口：不限 · 本次", "Time window: unlimited · this session"), "muted"));
+        var restoreBtn = makePanelBtn(tc("恢复默认 (" + _state.cfgRecentDays + "/" + _state.cfgPreviewDays + ")",
+          "Restore default (" + _state.cfgRecentDays + "/" + _state.cfgPreviewDays + ")"), "secondary", "sm");
+        restoreBtn.onclick = function () { setWindowRelaxed(false); };
+        winGroup.appendChild(restoreBtn);
+      }
+
+      // Preferred source had no ID → the others were queried. Say so; a silent
+      // fallback reads as "the Preferred box setting does nothing".
+      if (_state.preferredFallback) {
+        var fbChip = makeChip(tc(_state.preferredBoxLabel + " 无编号 · 已改查其他源",
+          _state.preferredBoxLabel + " has no ID · queried other sources"), "muted");
+        fbChip.title = tc("该演员在首选源没有编号，插件改为查询其他有编号的源。可在 设置 → 插件 → stashDiscover 中调整「首选源」。",
+          "This performer has no ID on the preferred source, so the other sources that do have one were queried. Change it in Settings → Plugins → stashDiscover.");
+        fallbackGroup.appendChild(fbChip);
+        if (findEntryVisible("content")) fallbackGroup.appendChild(findEntryBtn("sm", "secondary"));
+      }
+
+      if (winGroup.children.length) metaRow.appendChild(winGroup);
+      if (fallbackGroup.children.length) metaRow.appendChild(fallbackGroup);
+      pane.appendChild(metaRow);
+
+      // Only the content state renders the block here; the panels (no-ids /
+      // empty / no-match) render their own copy inside the panel body.
+      if (_state.findOpen) pane.appendChild(buildFindBlock());
+    }
+
+    // Partial failure: cards are shown, but name the source that is missing
+    var partialFail = failedSources();
+    if (partialFail.length) {
+      var noticeBar = document.createElement("div");
+      noticeBar.className = "ssd-notice-bar";
+      var noticeText = document.createElement("span");
+      noticeText.className = "ssd-notice-text";
+      noticeText.textContent = tc(
+        partialFail.map(function (f) { return f.name + " 查询失败（" + boxErrText(f.kind, true) + "）"; }).join("；")
+          + " · 结果可能不完整",
+        partialFail.map(function (f) { return f.name + " failed (" + boxErrText(f.kind, false) + ")"; }).join("; ")
+          + " — the result may be incomplete");
+      noticeBar.appendChild(noticeText);
+      var noticeRetry = makePanelBtn(tc("重试", "Retry"), "secondary", "sm");
+      noticeRetry.onclick = retryLoad;
+      noticeBar.appendChild(noticeRetry);
+      pane.appendChild(noticeBar);
     }
 
     // Current page slice (filtered by search query if active)
@@ -1798,7 +3170,8 @@
     var openBtn = document.createElement("button");
     openBtn.type = "button";
     openBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-lg";
-    openBtn.textContent = tc("在 JAVStash 查看", "View on JAVStash");
+    openBtn.textContent = brandNameForEndpoint(item.endpoint);
+    appendExtIcon(openBtn);
     openBtn.setAttribute("data-ssd-open-btn", "");
     openBtn.onclick = function () { handleOpenInBox(item); };
     btnRow.appendChild(openBtn);
@@ -1841,7 +3214,10 @@
     var btn = document.querySelector("[data-ssd-open-btn]");
     if (!btn) return;
     var brand = brandNameForEndpoint(item.endpoint);
-    btn.textContent = tc("在 " + brand + " 查看", "View on " + brand);
+    // textContent wipes any children, so the trailing glyph has to be rebuilt
+    // every time the label changes (otherwise the icon is silently dropped)
+    btn.textContent = brand;
+    appendExtIcon(btn);
   }
 
   // ─── DMM gallery screenshot probing ──────────────────────────────────────
@@ -1866,15 +3242,33 @@
     if (!code) return null;
     var m = String(code).trim().match(/^([A-Za-z]{2,10})-(\d{2,6})$/);
     if (!m) return null;
-    return m[1].toLowerCase() + String(m[2]).padStart(5, "0");
+    return padDmmContentId(m[1] + m[2]);
+  }
+
+  // DMM content ids zero-pad the numeric part to 5 digits ("OFJE-614" →
+  // "ofje00614"). r18.dev ids drop that padding, and an unpadded id makes every
+  // CDN shot number resolve to DMM's 90px "no image" placeholder.
+  function padDmmContentId(id) {
+    var m = String(id || "").match(/^([A-Za-z]+)(\d+)$/);
+    return m ? m[1].toLowerCase() + m[2].padStart(5, "0") : String(id || "");
   }
 
   function dmmGalleryUrl(contentId, n) {
     return DMM_GALLERY_BASE + "/" + contentId + "/" + contentId + "jp-" + n + ".jpg";
   }
 
-  function dmmGalleryUrlPics(contentId, n) {
-    return "https://pics.dmm.co.jp/digital/video/" + contentId + "/" + contentId + "jp-" + n + ".jpg";
+  // r18's gallery entries point at "<host>/<dir>/<cid>(jp)?-<n>.jpg" — the real
+  // full-size shots are always "<host>/<dir>/<cid>jp-<n>.jpg" beside them, while
+  // the id r18 was queried with is not reliable (r18 drops the CDN's zero
+  // padding: "ofje614" resolves every shot to DMM's 90px placeholder). So rebuild
+  // each shot from the entry's own directory + content id + number, which keeps
+  // the host/path right for every service and always carries the padding.
+  // Returns "" when the entry carries no shot name to work from.
+  function dmmShotUrl(entry) {
+    var u = String((entry && (entry.image_full || entry.image_thumb)) || "");
+    var m = u.match(/^(.*\/)(.+?)(?:jp)?-(\d+)\.jpg(\?.*)?$/i);
+    if (!m) return "";
+    return m[1] + m[2] + "jp-" + m[3] + ".jpg" + (m[4] || "");
   }
 
   // Primary: r18.dev JSON returns gallery[] in one request (CORS *).
@@ -1890,9 +3284,11 @@
         if (!Array.isArray(gallery) || gallery.length === 0) return null;
         var urls = [];
         for (var i = 0; i < gallery.length; i++) {
-          urls.push(dmmGalleryUrlPics(contentId, i + 1));
+          var shot = dmmShotUrl(gallery[i]);
+          if (shot) urls.push(shot);
         }
-        return urls;
+        // Nothing derivable → let the enumeration fallback probe the CDN instead
+        return urls.length ? urls : null;
       })
       .catch(function () { if (timer) clearTimeout(timer); return null; });
   }
@@ -1957,9 +3353,13 @@
   // Two-channel probe with session cache.
   function probeDmmGallery(contentId, onImage) {
     if (_dmmGalleryCache[contentId]) return _dmmGalleryCache[contentId];
+    // The enumeration fallback hits the CDN path directly, which keeps the zero
+    // padding r18 dropped. It size-filters every candidate, so a wrong padding
+    // guess can only lose shots — it can never add placeholder slides.
+    var dmmId = padDmmContentId(contentId);
     var p = fetchDmmGalleryJson(contentId).then(function (viaJson) {
       if (viaJson && viaJson.length) return viaJson;
-      return probeDmmByEnumeration(contentId, onImage);
+      return probeDmmByEnumeration(dmmId, onImage);
     });
     _dmmGalleryCache[contentId] = p;
     return p;
@@ -2947,16 +4347,54 @@
     window.addEventListener("popstate", onUrlChange);
   }
 
+  // Drop everything tied to the previous performer (including the edit-panel poll
+  // and the one-off "unlimited time" flag), so a new performer starts clean.
+  function resetPerformerState() {
+    stopEditWatch();
+    _state.performerId = null;
+    _state.cachedMissing = [];
+    _state.loadError = "";
+    _state.errorKind = "";
+    _state.viewState = "";
+    _state.loadInitiated = false;
+    _state.boxStatus = {};
+    _state.boxFailed = {};
+    _state.boxFetched = {};
+    _state.droppedByWindow = 0;
+    _state.windowRelaxed = false;
+    _state.preferredFallback = false;
+    _state.preferredBoxLabel = "";
+    _state.queryBoxes = [];
+    _state.allBoxes = [];
+    _state.performerStashIds = [];
+    _state.editWatching = false;
+    _state.editWatchMissing = false;
+    _state.findOpen = false;
+    _state.findState = "idle";
+    _state.findResults = [];
+    _state.findFailures = [];
+    _state.findMessage = "";
+    _state.findTerm = "";
+    _state.findExpandedKey = "";
+    _state.findImageIdx = 0;
+    _state.findBusyKey = "";
+    _state.findRowMsg = {};
+    // Dropped too, otherwise the lookup input would pre-fill with the previous
+    // performer's name until the new one finishes loading
+    _state.performerName = "";
+    _state.searchQuery = "";
+  }
+
   function onUrlChange() {
     if (!isPerformerPage()) {
       _tabInjected = false; _tabPerformerId = null;
-      _state.performerId = null; _state.cachedMissing = []; _state.loadError = "";
+      resetPerformerState();
       return;
     }
     var pid = getPerformerIdFromUrl();
     if (pid && pid !== _state.performerId) {
+      resetPerformerState();
       _state.performerId = pid;
-      _state.cachedMissing = []; _state.loadError = "";
       _tabInjected = false;
     }
     setTimeout(ensureTabInjected, 300);

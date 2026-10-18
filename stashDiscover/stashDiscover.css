@@ -13,8 +13,8 @@
   --ssd-info: #1c7ed6;
   --ssd-info-hover: #1971c2;
   --ssd-success: #37b24d;
+  --ssd-warning: #f59f00;
   --ssd-danger: #f03e3e;
-  --ssd-preview: #7950f2;
   --ssd-modal-bg: #2b2b2b;
   --ssd-modal-border: #444;
   --ssd-modal-text: #e0e0e0;
@@ -89,7 +89,12 @@
 }
 .ssd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* Trailing glyph inside a button label (external-link mark on source buttons) */
+.ssd-btn-icon { display: inline-flex; align-items: center; margin-left: 5px; }
+.ssd-btn-icon svg { display: block; width: 11px; height: 11px; }
+
 .ssd-btn-lg { padding: 6px 16px; font-size: 13px; }
+.ssd-btn-md { padding: 0 13px; font-size: 12px; height: 26px; line-height: 1; }
 .ssd-btn-sm { padding: 3px 10px; font-size: 11px; height: 22px; line-height: 1; }
 
 .ssd-btn-primary { background: var(--ssd-primary); color: #fff; }
@@ -105,11 +110,6 @@
 
 /* ─── States ─────────────────────────────────────────────────────────────── */
 
-.ssd-loading {
-  display: flex;
-  justify-content: center;
-  padding: 48px 0;
-}
 .ssd-spinner {
   width: 36px;
   height: 36px;
@@ -118,21 +118,416 @@
   border-radius: 50%;
   animation: ssd-spin 0.8s linear infinite;
 }
+.ssd-spinner-sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  flex-shrink: 0;
+}
 @keyframes ssd-spin { to { transform: rotate(360deg); } }
 
-.ssd-error {
-  background: rgba(240, 62, 62, 0.1);
-  border: 1px solid rgba(240, 62, 62, 0.3);
-  color: #ff8787;
-  padding: 12px 16px;
+/* ─── Fallback state panel ─────────────────────────────────────────────────
+   Surfaces/borders are theme-neutral greys so light and dark themes both work.
+   Only the left accent bar carries colour: green = in progress / main action,
+   yellow = needs you (recoverable), red = hard failure, grey = neutral info. */
+
+.ssd-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px auto;
+  max-width: 720px;
+  padding: 14px 16px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-left-width: 3px;
   border-radius: var(--ssd-radius);
-  font-size: 13px;
+  background: rgba(128, 128, 128, 0.06);
 }
-.ssd-empty {
-  text-align: center;
-  padding: 48px 16px;
-  color: var(--ssd-modal-muted);
+.ssd-panel--loading { border-left-color: var(--ssd-primary); }
+.ssd-panel--warn { border-left-color: var(--ssd-warning); background: rgba(245, 159, 0, 0.07); }
+.ssd-panel--danger { border-left-color: var(--ssd-danger); background: rgba(240, 62, 62, 0.07); }
+.ssd-panel--neutral { border-left-color: rgba(128, 128, 128, 0.45); }
+
+.ssd-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ssd-panel-title {
   font-size: 14px;
+  font-weight: 600;
+  line-height: 21px;
+}
+.ssd-panel-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.ssd-panel-icon svg { display: block; width: 16px; height: 16px; }
+.ssd-panel-icon--warn { color: var(--ssd-warning); }
+.ssd-panel-icon--info { color: var(--ssd-modal-muted); }
+.ssd-panel-icon--danger { color: var(--ssd-danger); }
+
+.ssd-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ssd-panel-desc {
+  font-size: 13px;
+  line-height: 20px;
+  opacity: 0.78;
+}
+
+/* Indeterminate progress bar (scanning — activity, not a known total) */
+.ssd-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(128, 128, 128, 0.22);
+  overflow: hidden;
+}
+.ssd-progress > i {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ssd-primary);
+  animation: ssd-progress 1.2s ease-in-out infinite;
+}
+@keyframes ssd-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* Per-source rows: status dot + source name + status text */
+.ssd-src-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ssd-src-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.ssd-src-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(128, 128, 128, 0.45);
+}
+.ssd-src-dot--ok { background: var(--ssd-success); }
+.ssd-src-dot--warn { background: var(--ssd-warning); }
+.ssd-src-name { font-weight: 600; }
+.ssd-src-status { opacity: 0.7; }
+.ssd-src-status--warn { color: var(--ssd-warning); opacity: 1; }
+
+/* Status chip — outlined on purpose: solid = action, outlined = status.
+   Height follows the small button tier (22px) so a chip and a small action
+   sit level in the same row (window row, find result rows). */
+.ssd-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ssd-chip--ok { border-color: rgba(55, 178, 77, 0.55); color: var(--ssd-success); }
+.ssd-chip--muted { opacity: 0.75; }
+
+.ssd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* "Unlimited time (this session)" marker above the cards. The four possible
+   items are grouped in pairs so a very narrow viewport wraps between them. */
+.ssd-window-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 4px 10px;
+}
+.ssd-window-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Partial-failure notice above the result count */
+.ssd-notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 10px;
+  padding: 6px 10px;
+  border: 1px solid rgba(245, 159, 0, 0.4);
+  border-radius: var(--ssd-radius);
+  background: rgba(245, 159, 0, 0.08);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ssd-notice-text { flex: 1 1 auto; }
+
+/* ─── "Look them up on the source" inline block ───────────────────────────── */
+
+.ssd-find {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Contained column, centred in whatever holds it. Capped at 685px so the
+     search row and result rows match the empty-state panel width instead of
+     stretching across the whole pane */
+  max-width: 685px;
+  /* width:100% so the capped width also applies inside the flex panel, where
+     auto margins alone would shrink the block to its content */
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  padding-top: 10px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+.ssd-find-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ssd-find-row .clearable-text-field { flex: 1 1 auto; min-width: 0; }
+/* Follow the native input's height (overrides .ssd-btn-sm's fixed 22px) —
+   same rule as .ssd-search-bar, so the row reads as one control */
+.ssd-find-row .ssd-btn { align-self: stretch; height: auto; font-size: 13px; padding: 0 14px; }
+.ssd-find-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  opacity: 0.8;
+}
+.ssd-find-note--error { color: var(--ssd-danger); opacity: 1; }
+.ssd-find-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ssd-find-item {
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: var(--ssd-radius);
+  background: rgba(128, 128, 128, 0.05);
+  overflow: hidden;
+}
+.ssd-find-item.is-open {
+  border-color: rgba(128, 128, 128, 0.4);
+  background: rgba(128, 128, 128, 0.09);
+}
+/* Collapsed row — the whole strip is the click target (toggles the detail) */
+.ssd-find-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.ssd-find-main:hover { background: rgba(128, 128, 128, 0.09); }
+.ssd-find-item.is-open .ssd-find-main { background: transparent; }
+/* Triangle caret: down when collapsed, up (rotated) when expanded */
+.ssd-find-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: transform 0.15s;
+}
+.ssd-find-caret svg { display: block; width: 10px; height: 10px; }
+.ssd-find-item.is-open .ssd-find-caret { transform: rotate(180deg); }
+.ssd-find-flag {
+  width: 16px;
+  height: 11px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  margin-right: 4px;
+}
+.ssd-find-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(128, 128, 128, 0.2);
+}
+.ssd-find-avatar--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+.ssd-find-info { flex: 1 1 auto; min-width: 0; }
+.ssd-find-name {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 19px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Only the performer name is emphasised and full size; flag/gender/age are
+   small (same size as the alias line) and share the name's baseline */
+.ssd-find-name-main { font-weight: 600; }
+.ssd-find-meta { font-size: 11px; }
+.ssd-find-name .ssd-find-flag { margin-right: 0; }
+.ssd-find-sub {
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssd-find-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ── Expanded detail: photo viewer (left) + fields/actions (right) ─────────── */
+
+.ssd-find-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+.ssd-find-photo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* Portrait skeleton keeps the layout stable before the image arrives */
+.ssd-find-photo-frame {
+  position: relative;
+  width: 132px;
+  height: 198px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(128, 128, 128, 0.14);
+}
+.ssd-find-photo-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ssd-find-photo-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 15px;
+  opacity: 0.6;
+}
+.ssd-find-photo-count {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+}
+.ssd-find-photo-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ssd-find-photo-nav:hover:not(:disabled) { background: rgba(128, 128, 128, 0.18); }
+.ssd-find-photo-nav:disabled { opacity: 0.3; cursor: default; }
+
+.ssd-find-detail-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ssd-find-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ssd-find-field {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.ssd-find-field-label {
+  flex-shrink: 0;
+  min-width: 56px;
+  opacity: 0.6;
+}
+.ssd-find-field-value { min-width: 0; word-break: break-word; }
+/* Outlined counter/tag used for hidden-item counts (+N) and numeric values */
+.ssd-find-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+.ssd-find-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ssd-find-link { color: var(--ssd-primary); text-decoration: none; }
+.ssd-find-link:hover { text-decoration: underline; }
+.ssd-find-rowmsg { font-size: 12px; line-height: 17px; color: var(--ssd-success); }
+.ssd-find-rowmsg--error { color: var(--ssd-danger); }
+.ssd-find-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ─── Native grid cards (1:1 Stash .scene-card.grid-card) ─────────────────── */
@@ -664,6 +1059,7 @@
 
 @media (max-width: 640px) {
   .ssd-meta-grid { grid-template-columns: repeat(2, 1fr); }
+  .ssd-find-detail { flex-direction: column; }
   .ssd-search-item {
     flex-direction: column;
     align-items: stretch;

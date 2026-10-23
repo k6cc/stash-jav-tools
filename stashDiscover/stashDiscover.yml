@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.0.1
+version: 2.1.0
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -41,6 +41,10 @@ settings:
     displayName: "Preferred stash-box"
     description: "Endpoint substring to prefer when multiple boxes are configured (e.g. javstash.org). Empty = query all."
     type: STRING
+  enableDiscoverPage:
+    displayName: "发现页入口 (Discover page)"
+    description: "顶部导航栏「发现」入口：聚合展示库中所有演员的未拥有场景（时间窗口沿用上方设置，每位演员最多展示 2 个，避免刷屏）。开启后需刷新浏览器生效；关闭时该模块代码完全不加载。On by default."
+    type: BOOLEAN
 
 exec:
   - python
@@ -63,6 +67,8 @@ ui:
     - stashDiscover.js
   css:
     - stashDiscover.css
+  assets:
+    /: .
   csp:
     connect-src:
       - "https://stashdb.org"

@@ -22,11 +22,14 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.0.1";
+  var PLUGIN_VERSION = "2.1.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
   var ERROR_MARKER = "[SSD_ERROR]";
+  // DOM event fired after a discover-page scene is saved to the library;
+  // discover.js listens and drops the card from its results
+  var SCENE_SAVED_EVENT = "ssd:scene-saved";
 
   // Brand display names for known stash-box hosts (simplified badges)
   var BRAND_MAP = {
@@ -46,7 +49,18 @@
       var React = api.React;
       function IntlBridge() {
         var intl = api.libraries.Intl.useIntl();
-        React.useEffect(function () { _intlLocale = intl.locale || ""; });
+        React.useEffect(function () {
+          var v = intl.locale || "";
+          if (v !== _intlLocale) {
+            _intlLocale = v;
+            // Static/early-rendered UI (e.g. the discover nav item renders
+            // before this effect fills the locale) re-renders on this event.
+            // setTimeout(0): sibling effects attach their listeners in tree
+            // order AFTER this one runs — dispatching synchronously here
+            // would fire before any listener exists.
+            try { setTimeout(function () { window.dispatchEvent(new CustomEvent("ssd:locale-changed")); }, 0); } catch (_) {}
+          }
+        });
         return null;
       }
       api.patch.before("App", function (props) {
@@ -235,6 +249,7 @@
   var _state = {
     performerId: null,
     performerName: "",
+    entityType: "performer",  // "performer" | "studio"（P7 工作室 tab 复用同一条渲染管线）
     localStashIds: {},
     localSceneKeys: {},
     loading: false,
@@ -312,6 +327,17 @@
     return /\/performers?\/\d+/.test(window.location.pathname + window.location.hash);
   }
 
+  function getStudioIdFromUrl() {
+    var m = window.location.pathname.match(/\/studios?\/(\d+)/);
+    if (m) return m[1];
+    m = window.location.hash.match(/\/studios?\/(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  function isStudioPage() {
+    return /\/studios?\/\d+/.test(window.location.pathname + window.location.hash);
+  }
+
   // ─── Box web URL (origin from GraphQL endpoint) ──────────────────────────
 
   function boxWebBase(endpoint) {
@@ -345,7 +371,17 @@
     ).then(function (data) { return data.findPerformer; });
   }
 
-  function loadLocalSceneKeys(performerId) {
+  // P7 工作室 tab：字段结构与演员一致（name + stash_ids），下游 stashIdMap 构建共用
+  function loadLocalStudio(studioId) {
+    return callGQL(
+      "query($id:ID!){findStudio(id:$id){id name stash_ids{endpoint stash_id}}}",
+      { id: studioId }
+    ).then(function (data) { return data.findStudio; });
+  }
+
+  // 按过滤条件收集本地场景键（endpoint:stash_id + code），演员/工作室共用：
+  // 演员传 {performers:{value:[id],...}}，工作室传 {studios:{value:[id],...}}
+  function loadLocalSceneKeys(sceneFilter) {
     var keys = {};
     var page = 1, perPage = 200;
 
@@ -354,7 +390,7 @@
         "query($f:FindFilterType!,$sf:SceneFilterType!){findScenes(filter:$f,scene_filter:$sf){count scenes{id code stash_ids{endpoint stash_id}}}}",
         {
           f: { page: page, per_page: perPage },
-          sf: { performers: { value: [performerId], modifier: "INCLUDES" } }
+          sf: sceneFilter
         }
       ).then(function (data) {
         var result = data.findScenes;
@@ -399,13 +435,18 @@
         box.endpoint, box.api_key,
         "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + BOX_SCENE_FIELDS + "}}}",
         {
-          input: {
-            performers: { value: [stashId], modifier: "INCLUDES" },
-            sort: "DATE",
-            direction: _state.sortDir,
-            page: pageNum,
-            per_page: boxPerPage,
-          }
+          input: Object.assign(
+            // P7：工作室 tab 按 studios INCLUDES 查（stash-box 层级匹配含母厂牌）
+            _state.entityType === "studio"
+              ? { studios: { value: [stashId], modifier: "INCLUDES" } }
+              : { performers: { value: [stashId], modifier: "INCLUDES" } },
+            {
+              sort: "DATE",
+              direction: _state.sortDir,
+              page: pageNum,
+              per_page: boxPerPage,
+            }
+          )
         }
       );
     }).then(function (data) {
@@ -609,13 +650,14 @@
     });
   }
 
-  function isSceneOwned(item) {
+  function isSceneOwned(item, keys) {
     var sc = item.scene;
+    var owned = keys || _state.localSceneKeys;
     var epKey = item.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase();
-    if (_state.localSceneKeys[epKey]) return true;
+    if (owned[epKey]) return true;
     if (sc.code) {
       var codeKey = "code:" + String(sc.code).trim().toLowerCase();
-      if (_state.localSceneKeys[codeKey]) return true;
+      if (owned[codeKey]) return true;
     }
     return false;
   }
@@ -646,18 +688,23 @@
     _state.loadingPage = false;
     renderTabContent();
 
+    var isStudio = _state.entityType === "studio";
     return Promise.all([
-      loadLocalPerformer(performerId),
-      loadLocalSceneKeys(performerId),
+      isStudio ? loadLocalStudio(performerId) : loadLocalPerformer(performerId),
+      loadLocalSceneKeys(isStudio
+        ? { studios: { value: [performerId], modifier: "INCLUDES" } }
+        : { performers: { value: [performerId], modifier: "INCLUDES" } }),
       getStashBoxes(),
       getPluginSettings(),
     ]).then(function (results) {
-      var performer = results[0];
+      var performer = results[0]; // 演员或工作室实体（name + stash_ids 结构一致）
       var localKeys = results[1];
       var boxes = results[2];
       var settings = results[3];
 
-      if (!performer) throw ssdError("fatal", tc("未找到演员", "Performer not found"));
+      if (!performer) throw ssdError("fatal", isStudio
+        ? tc("未找到工作室", "Studio not found")
+        : tc("未找到演员", "Performer not found"));
 
       _state.performerName = performer.name || "";
       _state.localSceneKeys = localKeys;
@@ -699,8 +746,11 @@
         }
       }
       if (queryBoxes.length === 0) {
-        throw ssdError("no-ids", tc("该演员未关联任何 stash-box ID，请先在演员编辑页添加 stash_id",
-          "This performer has no stash-box IDs. Add a stash_id in the performer edit page first."));
+        throw ssdError("no-ids", isStudio
+          ? tc("该工作室未关联任何 stash-box ID，请先在工作室编辑页添加 stash_id",
+            "This studio has no stash-box IDs. Add a stash_id in the studio edit page first.")
+          : tc("该演员未关联任何 stash-box ID，请先在演员编辑页添加 stash_id",
+            "This performer has no stash-box IDs. Add a stash_id in the performer edit page first."));
       }
 
       var recentDays = parseInt(settings.recentDays, 10);
@@ -901,12 +951,15 @@
   var _tabPerformerId = null;
 
   function ensureTabInjected() {
-    if (!isPerformerPage()) return;
-    var pid = getPerformerIdFromUrl();
+    var studioPage = isStudioPage();
+    if (!isPerformerPage() && !studioPage) return;
+    var pid = studioPage ? getStudioIdFromUrl() : getPerformerIdFromUrl();
     if (!pid) return;
+    _state.entityType = studioPage ? "studio" : "performer";
 
     var nav = document.querySelector(".performer-tabs .nav-tabs")
       || document.querySelector(".performer-page .nav-tabs")
+      || document.querySelector(".studio-tabs .nav-tabs")
       || document.querySelector(".main-content .nav-tabs")
       || document.querySelector(".nav-tabs");
     if (!nav) return;
@@ -974,6 +1027,14 @@
     }
 
     renderTabContent();
+
+    // 发现页 §8.1「发现 Tab」按钮跳转：sessionStorage 标记 → 自动激活 tab
+    try {
+      if (sessionStorage.getItem("SSD:dp:openTab") === String(pid)) {
+        sessionStorage.removeItem("SSD:dp:openTab");
+        setTimeout(activateTab, 60);
+      }
+    } catch (_) {}
   }
 
   var _ssdPrevLink = null;
@@ -1026,9 +1087,12 @@
     }
   }
 
-  // Close any open sort dropdown (outside click / Escape)
+  // Close any open sort dropdown (outside click / Escape) — covers both the
+  // performer tab pane and the discover page
   function closeSortDropdowns() {
-    document.querySelectorAll(".ssd-tab-pane .sort-by-select.show").forEach(function (g) {
+    document.querySelectorAll(
+      ".ssd-tab-pane .sort-by-select.show, .ssd-dp-page .sort-by-select.show"
+    ).forEach(function (g) {
       g.classList.remove("show");
       var m = g.querySelector(".dropdown-menu");
       if (m) m.classList.remove("show");
@@ -1042,7 +1106,7 @@
     if (_sortDismissBound) return;
     _sortDismissBound = true;
     document.addEventListener("click", function (e) {
-      if (e.target.closest && e.target.closest(".ssd-tab-pane .sort-by-select")) return;
+      if (e.target.closest && e.target.closest(".ssd-tab-pane .sort-by-select, .ssd-dp-page .sort-by-select")) return;
       closeSortDropdowns();
     });
     document.addEventListener("keydown", function (e) {
@@ -1339,8 +1403,10 @@
           "Some sources failed — the result may be incomplete."));
       }
       if (_state.preferredFallback) {
-        lines.push(tc("首选源 " + _state.preferredBoxLabel + " 没有该演员的编号，已改查其他有编号的源。",
-          "The preferred source " + _state.preferredBoxLabel + " has no ID for this performer, so the other sources that do were queried."));
+        var entZh = _state.entityType === "studio" ? "该工作室" : "该演员";
+        var entEn = _state.entityType === "studio" ? "studio" : "performer";
+        lines.push(tc("首选源 " + _state.preferredBoxLabel + " 没有" + entZh + "的编号，已改查其他有编号的源。",
+          "The preferred source " + _state.preferredBoxLabel + " has no ID for this " + entEn + ", so the other sources that do were queried."));
       }
       body.appendChild(panelDesc(lines.join(" ")));
       if (failedN.length) {
@@ -1583,6 +1649,7 @@
   // configured boxes (_state.allBoxes) — the Preferred-box restriction is not
   // a source limit, so it never turns a multi-source setup into a single one.
   function findEntryVisible(vs) {
+    if (_state.entityType === "studio") return false; // "在源上查找"为演员专属功能（P7 工作室 tab 隐藏）
     var multi = (_state.allBoxes || []).length > 1;
     if (vs === "no-ids") return true;
     if (vs === "empty") return multi || _state.preferredFallback;
@@ -2559,6 +2626,7 @@
     } else {
       var grid = document.createElement("div");
       grid.className = "ssd-card-grid";
+      grid.setAttribute("data-zoom", String(_state.zoom));
       pageItems.forEach(function (item, idx) {
         grid.appendChild(buildSceneCard(item, start + idx));
       });
@@ -2642,16 +2710,21 @@
   //   cardWidth = maxUsable / cols - 10   (cards carry 5px margins → 10px gap)
   var ZOOM_WIDTHS = [280, 340, 480, 640];
 
+  // Layout every rendered card grid (performer tab + discover page). Each
+  // grid records its own zoom in data-zoom at render time, so one call —
+  // including from the window resize handler — relayouts them all.
   function layoutCardGrid() {
-    var grid = document.querySelector(".ssd-card-grid");
-    if (!grid) return;
-    var maxUsable = Math.max(120, grid.clientWidth - 30);
-    var cols = Math.max(1, Math.ceil(maxUsable / ZOOM_WIDTHS[_state.zoom]));
-    var cardW = maxUsable / cols - 10;
-    var cards = grid.querySelectorAll(".scene-card");
-    for (var i = 0; i < cards.length; i++) {
-      cards[i].style.width = cardW + "px";
-    }
+    document.querySelectorAll(".ssd-card-grid").forEach(function (grid) {
+      var zoom = parseInt(grid.getAttribute("data-zoom"), 10);
+      if (isNaN(zoom)) zoom = _state.zoom;
+      var maxUsable = Math.max(120, grid.clientWidth - 30);
+      var cols = Math.max(1, Math.ceil(maxUsable / ZOOM_WIDTHS[zoom]));
+      var cardW = maxUsable / cols - 10;
+      var cards = grid.querySelectorAll(".scene-card");
+      for (var i = 0; i < cards.length; i++) {
+        cards[i].style.width = cardW + "px";
+      }
+    });
   }
 
   // ── List view — 1:1 native .table-list.scene-table (scene list table) ──
@@ -2801,14 +2874,17 @@
     return tr;
   }
 
-  function buildSceneCard(item, idx) {
+  // ctx (optional): view state override for the discover page —
+  // { zoom, queryBoxes, localPerformerMaps }. Defaults to the performer tab's.
+  function buildSceneCard(item, idx, ctx) {
+    var st = ctx || _state;
     var sc = item.scene;
 
     // Native Stash grid-card structure (themes apply automatically):
     //   .scene-card.grid-card.card > .video-section (.scene-card-preview +
     //   .studio-overlay + .scene-specs-overlay) + .card-section (title/date/desc)
     var card = document.createElement("div");
-    card.className = "scene-card zoom-" + _state.zoom + " grid-card card ssd-scene-card";
+    card.className = "scene-card zoom-" + st.zoom + " grid-card card ssd-scene-card";
 
     var videoSection = document.createElement("div");
     videoSection.className = "video-section thumbnail-section";
@@ -2828,7 +2904,7 @@
 
     // Box source pill — bottom-left corner (native has no fixed content there),
     // only meaningful with multiple stash-boxes
-    if (_state.queryBoxes.length > 1) {
+    if (st.queryBoxes.length > 1) {
       var boxBadge = document.createElement("span");
       boxBadge.className = "ssd-overlay-box";
       boxBadge.textContent = item.boxName;
@@ -2934,7 +3010,7 @@
         perfBtn.title = tc("演员", "Performers");
         perfBtn.innerHTML = SSD_ICON_USER + "<span>" + performers.length + "</span>";
         attachHoverPopover(perfBtn, function () {
-          return buildPerformerPopoverContent(performers, item.endpoint);
+          return buildPerformerPopoverContent(performers, item.endpoint, st.localPerformerMaps);
         });
         perfCount.appendChild(perfBtn);
         popovers.appendChild(perfCount);
@@ -3030,9 +3106,9 @@
     return frag;
   }
 
-  function buildPerformerPopoverContent(performers, endpoint) {
+  function buildPerformerPopoverContent(performers, endpoint, localMaps) {
     var frag = document.createDocumentFragment();
-    var localMap = (_state.localPerformerMaps || {})[(endpoint || "").toLowerCase()] || {};
+    var localMap = (localMaps || _state.localPerformerMaps || {})[(endpoint || "").toLowerCase()] || {};
 
     var local = [];
     var remote = [];
@@ -3843,8 +3919,12 @@
           if (localP) ids.push(localP.id);
         }
       });
-      // Ensure current performer is included even if stash_id mapping misses
-      if (ids.indexOf(_state.performerId) === -1) ids.push(_state.performerId);
+      // Ensure current performer is included even if stash_id mapping misses.
+      // Discover-page items (item._dp) have no "current performer" — the
+      // scene's own cast mapping is the only attribution source there.
+      if (!item._dp && _state.performerId && ids.indexOf(_state.performerId) === -1) {
+        ids.push(_state.performerId);
+      }
       return ids;
     });
 
@@ -3908,9 +3988,14 @@
       if (created && created.id) {
         btn.textContent = tc("已加入 ✓", "Added ✓");
         btn.classList.add("ssd-btn-success");
-        var idx = _state.cachedMissing.indexOf(item);
-        if (idx !== -1) _state.cachedMissing.splice(idx, 1);
-        setTimeout(function () { if (_modalEl) renderTabContent(); }, 1500);
+        if (item._dp) {
+          // Discover page owns this item — let it drop the card and re-render
+          document.dispatchEvent(new CustomEvent(SCENE_SAVED_EVENT, { detail: { item: item } }));
+        } else {
+          var idx = _state.cachedMissing.indexOf(item);
+          if (idx !== -1) _state.cachedMissing.splice(idx, 1);
+          setTimeout(function () { if (_modalEl) renderTabContent(); }, 1500);
+        }
       }
     }).catch(function (e) {
       console.error("[SSD] save failed:", e);
@@ -4334,7 +4419,7 @@
   function setupObservers() {
     var target = document.querySelector(".main-content") || document.querySelector("#root") || document.body;
     var observer = new MutationObserver(function () {
-      if (!isPerformerPage()) { _tabInjected = false; _tabPerformerId = null; return; }
+      if (!isPerformerPage() && !isStudioPage()) { _tabInjected = false; _tabPerformerId = null; return; }
       clearTimeout(_observerTimer);
       _observerTimer = setTimeout(ensureTabInjected, 200);
     });
@@ -4352,6 +4437,7 @@
   function resetPerformerState() {
     stopEditWatch();
     _state.performerId = null;
+    _state.entityType = "performer";
     _state.cachedMissing = [];
     _state.loadError = "";
     _state.errorKind = "";
@@ -4386,12 +4472,12 @@
   }
 
   function onUrlChange() {
-    if (!isPerformerPage()) {
+    if (!isPerformerPage() && !isStudioPage()) {
       _tabInjected = false; _tabPerformerId = null;
       resetPerformerState();
       return;
     }
-    var pid = getPerformerIdFromUrl();
+    var pid = isStudioPage() ? getStudioIdFromUrl() : getPerformerIdFromUrl();
     if (pid && pid !== _state.performerId) {
       resetPerformerState();
       _state.performerId = pid;
@@ -4399,6 +4485,379 @@
     }
     setTimeout(ensureTabInjected, 300);
     setTimeout(ensureTabInjected, 800);
+  }
+
+  // ─── Shared API for the discover-page module ─────────────────────────────
+  // discover.js (the "发现" nav page) is a SEPARATE file loaded on demand via
+  // the enableDiscoverPage setting — see maybeLoadDiscover below. Everything
+  // it needs from this closure is exported here once; when the switch is off
+  // the module never loads and this object is simply never read.
+  window.SSD = {
+    version: PLUGIN_VERSION,
+    // GraphQL
+    callGQL: callGQL,
+    callBoxGQL: callBoxGQL,
+    boxRateLimiter: _boxRateLimiter,
+    // config
+    getStashBoxes: getStashBoxes,
+    getPluginSettings: getPluginSettings,
+    // i18n / dates
+    tc: tc,
+    isZh: isZh,
+    localDateStr: localDateStr,
+    recentCutoffDate: recentCutoffDate,
+    previewCutoffDate: previewCutoffDate,
+    // boxes
+    brandNameForEndpoint: brandNameForEndpoint,
+    boxSceneUrl: boxSceneUrl,
+    boxWebBase: boxWebBase,
+    BOX_SCENE_FIELDS: BOX_SCENE_FIELDS,
+    BOX_TIMEOUT_MS: BOX_TIMEOUT_MS,
+    boxErrText: boxErrText,
+    // rendering (buildSceneCard/isSceneOwned accept a ctx/keys override)
+    buildSceneCard: buildSceneCard,
+    buildSceneTable: buildSceneTable,
+    layoutCardGrid: layoutCardGrid,
+    openModal: openModal,
+    isSceneOwned: isSceneOwned,
+    // UI atoms
+    makeChip: makeChip,
+    makePanelBtn: makePanelBtn,
+    panelIcon: panelIcon,
+    panelDesc: panelDesc,
+    panelNote: panelNote,
+    buildSourceRow: buildSourceRow,
+    // events
+    SCENE_SAVED_EVENT: SCENE_SAVED_EVENT,
+  };
+
+  // ─── Discover nav entry + route shell (synchronous top-level registration) ─
+  // The nav button and the /plugins/stashDiscover route MUST be registered in
+  // the same wave as every other plugin's patches (synchronously at plugin-
+  // script load, before React's first render — the pattern LockdownI18n and
+  // stash-curator use). discover.js loads one settings-fetch later and would
+  // lose that race intermittently, so the MAIN JS owns the registration and a
+  // lightweight React shell; discover.js only supplies the page component via
+  // window.SSD.discoverMount + the "ssd:discover-ready" event.
+  // The enableDiscoverPage yml setting is cached in localStorage so this
+  // synchronous decision matches the last known state; maybeLoadDiscover's
+  // async fetch refreshes the cache and corrects within one load.
+  var DISCOVER_CACHE_KEY = "SSD:discoverOn";
+
+  function discoverCachedOn() {
+    try { return localStorage.getItem(DISCOVER_CACHE_KEY) !== "0"; } catch (_) { return true; }
+  }
+
+  // ─── Follow polling (§6.4) ─────────────────────────────────────────────────
+  // Opening Stash (any page) triggers one lightweight check, throttled to one
+  // per 6h across sessions (poll.v1). It queries ONLY followed performers
+  // (follow.v1, grouped one query per endpoint), counts unread new scenes with
+  // the same performer×scene semantics as the discover page, then writes the
+  // badge cache (unread.v1) and fires "ssd:unread-changed". The discover
+  // page's full pipeline stays the source of truth — opening it re-syncs the
+  // badge at zero extra cost. The poll deliberately skips library-ownership
+  // filtering (heavy); the page corrects the number on next open.
+  var DP_FOLLOW_KEY = "SSD:dp:follow.v1";
+  var DP_READ_KEY = "SSD:dp:read.v1";
+  var DP_POLL_KEY = "SSD:dp:poll.v1";
+  var DP_UNREAD_KEY = "SSD:dp:unread.v1";
+  var DP_NOTIFY_KEY = "SSD:dp:notify"; // "0" = muted (P6 settings UI writes it)
+  var DP_POLL_MIN_MS = 6 * 3600 * 1000;
+
+  function dpCachedUnread() {
+    try {
+      var o = JSON.parse(localStorage.getItem(DP_UNREAD_KEY) || "null");
+      return (o && typeof o.n === "number") ? o.n : 0;
+    } catch (_) { return 0; }
+  }
+
+  function dpWriteUnread(n) {
+    try { localStorage.setItem(DP_UNREAD_KEY, JSON.stringify({ n: n, at: Date.now() })); } catch (_) {}
+    try { window.dispatchEvent(new CustomEvent("ssd:unread-changed", { detail: n })); } catch (_) {}
+  }
+
+  function notifyMuted() {
+    try { return localStorage.getItem(DP_NOTIFY_KEY) === "0"; } catch (_) { return false; }
+  }
+
+  function dpPollFollowed(force) {
+    var proceed = false;
+    try {
+      if (!discoverCachedOn()) return Promise.resolve(0);
+      if (notifyMuted()) return Promise.resolve(0); // §6.4: muted → skip poll, hide badge
+      var last = 0;
+      try { last = ((JSON.parse(localStorage.getItem(DP_POLL_KEY) || "null") || {}).lastAt) || 0; } catch (_) {}
+      proceed = force || !last || Date.now() - last >= DP_POLL_MIN_MS;
+    } catch (_) {}
+    if (!proceed) return Promise.resolve(dpCachedUnread());
+
+    var follow = {};
+    try { follow = JSON.parse(localStorage.getItem(DP_FOLLOW_KEY) || "{}") || {}; } catch (_) {}
+    var list = (follow && follow.performers) || {};
+    var ids = Object.keys(list);
+    var stamp = function (n) {
+      try { localStorage.setItem(DP_POLL_KEY, JSON.stringify({ lastAt: Date.now() })); } catch (_) {}
+      dpWriteUnread(n);
+      return n;
+    };
+    if (!ids.length) return Promise.resolve(stamp(0));
+
+    return Promise.all([getStashBoxes(), getPluginSettings()]).then(function (res) {
+      var boxes = res[0] || [];
+      var settings = res[1] || {};
+      var recentDays = parseInt(settings.recentDays, 10);
+      if (!(recentDays > 0)) recentDays = 30; // §4.2 default lookback
+      var cutoff = localDateStr(new Date(Date.now() - recentDays * 86400000));
+
+      var byEndpoint = {};
+      ids.forEach(function (k) {
+        var f = list[k] || {};
+        var ep = String(f.endpoint || "").toLowerCase();
+        if (!ep) return;
+        (byEndpoint[ep] = byEndpoint[ep] || []).push(String(f.stashId || k));
+      });
+      var boxByEp = {};
+      boxes.forEach(function (b) { boxByEp[String(b.endpoint).toLowerCase()] = b; });
+
+      // One query per endpoint, first 100 scenes — a light channel; the page's
+      // full pipeline paginates properly and corrects the badge.
+      return Promise.all(Object.keys(byEndpoint).map(function (ep) {
+        var box = boxByEp[ep];
+        if (!box) return Promise.resolve(null);
+        return _boxRateLimiter.submit(function () {
+          return callBoxGQL(box.endpoint, box.apiKey,
+            "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{id date performers{id}}}}",
+            {
+              input: {
+                date: { value: cutoff, modifier: "GREATER_THAN" },
+                performers: { value: byEndpoint[ep], modifier: "INCLUDES" },
+                sort: "DATE", direction: "DESC",
+                page: 1, per_page: 100,
+              },
+            }
+          );
+        }).then(function (data) {
+          return { ep: ep, ids: byEndpoint[ep], scenes: (((data || {}).queryScenes || {}).scenes) || [] };
+        }).catch(function () { return null; }); // a failed box keeps its cached count next round
+      }));
+    }).then(function (results) {
+      var marks = {};
+      try { marks = ((JSON.parse(localStorage.getItem(DP_READ_KEY) || "null") || {}).marks) || {}; } catch (_) {}
+      var n = 0;
+      (results || []).forEach(function (r) {
+        if (!r) return;
+        var set = {};
+        r.ids.forEach(function (id) { set[String(id)] = true; });
+        (r.scenes || []).forEach(function (sc) {
+          if (marks[r.ep + ":" + String(sc.id || "").toLowerCase()]) return;
+          ((sc.performers || [])).forEach(function (pf) { if (set[String(pf.id)]) n++; });
+        });
+      });
+      return stamp(n);
+    }).catch(function (e) {
+      console.warn("[SSD] follow poll failed:", e);
+      return dpCachedUnread();
+    });
+  }
+
+  (function registerDiscoverEntry() {
+    if (!discoverCachedOn()) return;
+    var Api = window.PluginApi;
+    if (!Api || !Api.register || typeof Api.register.route !== "function" || !Api.React) return;
+    var React = Api.React;
+    var Nav = Api.libraries.Bootstrap.Nav;
+    var NavLink = Api.libraries.ReactRouterDOM.NavLink;
+    var FontAwesomeIcon = Api.libraries.ReactFontAwesome.FontAwesomeIcon;
+    var FAS = Api.libraries.FontAwesomeSolid || {};
+
+    // faSatelliteDish inline fallback, path from FA6 solid/satellite-dish.svg
+    var SATELLITE_SVG =
+      '<svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true" style="width:1em;height:1em;display:inline-block;vertical-align:-0.125em">' +
+      '<path d="M192 32c0-17.7 14.3-32 32-32C383.1 0 512 128.9 512 288c0 17.7-14.3 32-32 32s-32-14.3-32-32C448 164.3 347.7 64 224 64c-17.7 0-32-14.3-32-32zM60.6 220.6L164.7 324.7l28.4-28.4c-.7-2.6-1.1-5.4-1.1-8.3c0-17.7 14.3-32 32-32s32 14.3 32 32s-14.3 32-32 32c-2.9 0-5.6-.4-8.3-1.1l-28.4 28.4L291.4 451.4c14.5 14.5 11.8 38.8-7.3 46.3C260.5 506.9 234.9 512 208 512C93.1 512 0 418.9 0 304c0-26.9 5.1-52.5 14.4-76.1c7.5-19 31.8-21.8 46.3-7.3zM224 96c106 0 192 86 192 192c0 17.7-14.3 32-32 32s-32-14.3-32-32c0-70.7-57.3-128-128-128c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></svg>';
+
+    var _navUnread = dpCachedUnread(); // §10: restore the badge from the poll cache on hard refresh
+
+    function navIcon(className) {
+      if (FAS.faSatelliteDish) {
+        return React.createElement(FontAwesomeIcon, { icon: FAS.faSatelliteDish, className: className });
+      }
+      return React.createElement("span", {
+        className: "fa-icon nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0",
+        dangerouslySetInnerHTML: { __html: SATELLITE_SVG },
+      });
+    }
+
+    // Nav item with unread badge; hides itself on "ssd:discover-disabled"
+    // (stale localStorage cache said on, settings fetch corrected to off);
+    // re-renders on "ssd:locale-changed" (first paint may precede locale init)
+    // and "ssd:notify-changed" (§6.4 mute toggle hides the badge instantly).
+    function DiscoverNavItem() {
+      var s = React.useState(_navUnread);
+      var lc = React.useState(0); // bump to re-render after locale/mute init
+      React.useEffect(function () {
+        var h = function (e) { _navUnread = (e && e.detail) || 0; s[1](_navUnread); };
+        var off = function () { s[1](-1); };
+        var loc = function () { lc[1](function (v) { return v + 1; }); }; // functional bump: the closure's lc[0] goes stale after the first fire
+        window.addEventListener("ssd:unread-changed", h);
+        window.addEventListener("ssd:discover-disabled", off);
+        window.addEventListener("ssd:locale-changed", loc);
+        window.addEventListener("ssd:notify-changed", loc);
+        return function () {
+          window.removeEventListener("ssd:unread-changed", h);
+          window.removeEventListener("ssd:discover-disabled", off);
+          window.removeEventListener("ssd:locale-changed", loc);
+          window.removeEventListener("ssd:notify-changed", loc);
+        };
+      }, []);
+      var unread = s[0];
+      if (unread < 0) return null; // disabled mid-session
+      var muted = notifyMuted();
+      var showBadge = unread > 0 && !muted;
+      var to = "/plugins/stashDiscover" + (showBadge ? "?view=follow" : "");
+      return React.createElement(
+        Nav.Link,
+        { as: "div", eventKey: "/plugins/stashDiscover", className: "col-4 col-sm-3 col-md-2 col-lg-auto" },
+        React.createElement(
+          NavLink,
+          {
+            exact: true,
+            to: to,
+            activeClassName: "active",
+            className: "btn minimal p-4 p-xl-2 d-flex d-xl-inline-block flex-column justify-content-between align-items-center ssd-nav-item",
+          },
+          navIcon("fa-icon nav-menu-icon d-block d-xl-inline mb-2 mb-xl-0"),
+          React.createElement("span", null, tc("发现", "Discover")),
+          showBadge
+            ? React.createElement("span", { className: "ssd-nav-badge" }, unread > 99 ? "99+" : String(unread))
+            : null
+        )
+      );
+    }
+
+    // Route shell: renders the real page from window.SSD.discoverMount once
+    // discover.js signals ready; loading dots before that; a note if the
+    // setting turned out to be off. Readiness has TWO channels: the
+    // "ssd:discover-ready" event (fast path) and a direct flag poll (safety
+    // net) — React runs passive effects after commit, so on a hard refresh
+    // the event can fire in that gap, before the listener attaches, and the
+    // shell would wait forever. The poll also degrades to an error + retry
+    // if the module never arrives (~20s) and keeps watching, so a retry
+    // that lands still flips the page.
+    function DiscoverRouteShell() {
+      var s = React.useState(SSD.discoverMount ? 1 : 0);
+      var att = React.useState(0); // retry counter: re-arms the poll
+      React.useEffect(function () {
+        var ready = function () { s[1](SSD.discoverMount ? 1 : 0); };
+        var off = function () { s[1](-1); };
+        window.addEventListener("ssd:discover-ready", ready);
+        window.addEventListener("ssd:discover-disabled", off);
+        var ticks = 0;
+        var poll = setInterval(function () {
+          if (SSD.discoverMount) { s[1](1); return; }
+          if (++ticks > 100) s[1](function (v) { return v === -1 ? v : -2; }); // never downgrade the "disabled" note
+        }, 200);
+        return function () {
+          clearInterval(poll);
+          window.removeEventListener("ssd:discover-ready", ready);
+          window.removeEventListener("ssd:discover-disabled", off);
+        };
+      }, [att[0]]);
+      var st = s[0];
+      if (st < 0) {
+        if (st === -2 && !SSD.discoverMount) {
+          var retry = function () { s[1](0); att[1](function (v) { return v + 1; }); injectDiscoverScript(true); };
+          return React.createElement(
+            "div",
+            { className: "ssd-dp-page" },
+            React.createElement(
+              "div",
+              { className: "ssd-dp-state" },
+              tc("发现页模块加载失败（详见控制台）。", "The Discover page module failed to load (see console)."),
+              React.createElement("button", { className: "ssd-dp-retry", onClick: retry }, tc("重试", "Retry"))
+            )
+          );
+        }
+        return React.createElement(
+          "div",
+          { className: "ssd-dp-page" },
+          React.createElement("div", { className: "ssd-dp-state" }, tc("发现页已在设置中关闭，刷新浏览器后入口不再显示。", "The Discover page is disabled in settings; the entry disappears after a browser refresh."))
+        );
+      }
+      if (st === 0 || !SSD.discoverMount) {
+        return React.createElement(
+          "div",
+          { className: "ssd-dp-page" },
+          React.createElement("div", {
+            className: "ssd-dp-state",
+            dangerouslySetInnerHTML: {
+              __html: '<span class="ssd-dp-loading-dots"><i></i><i></i><i></i></span>',
+            },
+          })
+        );
+      }
+      return React.createElement(SSD.discoverMount);
+    }
+
+    try {
+      Api.patch.after("MainNavBar.MenuItems", function () {
+        var args = Array.prototype.slice.call(arguments, 1);
+        var result = args[args.length - 1]; // after-hook: result is always last
+        if (!React.isValidElement(result)) return result;
+        var children = React.Children.toArray(result.props.children);
+        var has = children.some(function (c) { return c && c.type === DiscoverNavItem; });
+        if (!has) children.push(React.createElement(DiscoverNavItem, { key: "ssd-discover" }));
+        return React.cloneElement(result, {}, children);
+      });
+      Api.register.route("/plugins/stashDiscover", DiscoverRouteShell);
+    } catch (e) {
+      console.warn("[SSD] discover entry registration failed:", e);
+    }
+  })();
+
+  // ─── Discover page: switch-gated dynamic load ────────────────────────────
+  // discover.js is injected ONLY when the enableDiscoverPage setting is on, so
+  // a disabled install pays nothing for it: no script parse, no page code, no
+  // queries. The nav entry + route shell above are registered synchronously
+  // from the localStorage cache (fast path); the async settings fetch below
+  // refreshes the cache and corrects within one load. URL note: Stash only
+  // serves plugin files declared in yml ui.* — discover.js goes through the
+  // ui.assets root mapping at /plugin/{id}/assets/discover.js with the
+  // correct JS MIME type (tagMerge/oStats precedent).
+  var _discoverInjected = false;
+
+  function injectDiscoverScript(force) {
+    if (_discoverInjected && !force) return;
+    _discoverInjected = true;
+    var s = document.createElement("script");
+    s.src = "/plugin/" + PLUGIN_ID + "/assets/discover.js" + (force ? "?retry=" + Date.now() : "");
+    s.onerror = function () {
+      console.warn("[SSD] discover.js failed to load — check the plugin directory");
+    };
+    document.head.appendChild(s);
+  }
+
+  function maybeLoadDiscover() {
+    var cachedOn = discoverCachedOn();
+    if (cachedOn) injectDiscoverScript(); // immediate: lands in the early script wave
+    getPluginSettings().then(function (settings) {
+      var on = settings && settings.enableDiscoverPage;
+      // Stash only records plugin settings the user has touched: a fresh
+      // install (or a never-touched switch) has no entry at all, and the yml
+      // default is true — treat missing as ON, matching "On by default".
+      if (on === undefined || on === null) on = true;
+      if (on === "true") on = true;   // defensive: some Stash versions map booleans to strings
+      if (on === "false") on = false;
+      try { localStorage.setItem(DISCOVER_CACHE_KEY, on ? "1" : "0"); } catch (_) {}
+      if (on) {
+        if (!cachedOn) injectDiscoverScript(); // cache was stale-off; entry shows after next reload
+      } else if (cachedOn) {
+        // cache said on but the switch is off: hide the already-registered
+        // entry now; next load skips registration entirely.
+        window.dispatchEvent(new CustomEvent("ssd:discover-disabled"));
+      }
+    }).catch(function (e) {
+      console.warn("[SSD] discover setting check failed:", e);
+    });
   }
 
   function initPlugin() {
@@ -4413,6 +4872,8 @@
       setTimeout(ensureTabInjected, 300);
       setTimeout(ensureTabInjected, 1000);
     }
+    maybeLoadDiscover();
+    dpPollFollowed(); // §6.4: follow-up check on Stash open, 6h-throttled inside
   }
 
   if (document.readyState === "loading") {

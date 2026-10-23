@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="stash-dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>发现 · stashDiscover v0 原型</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════
+ * P3 v0 原型 — 演示三主题跟随（Stash 深色 / Stash 浅色 / Flexoki）
+ * token 命名与 discover.js suiteTheme() 输出一致（--sx-*），
+ * 类名与 stashDiscover.css P0.3 骨架一致（.ssd-dp-*）。
+ * 右下角悬浮主题切换器为原型专用（真实插件由 Stash 主题驱动）。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* ── 主题 token（运行时由 suiteTheme 采样派生；此处静态示例）── */
+[data-theme="stash-dark"] {
+  --sx-bg: #202B33; --sx-bg2: #1A232A; --sx-ui: #30404D; --sx-ui2: #3A4C5B; --sx-ui3: #4A5D6D;
+  --sx-raise: #35485A; --sx-edge: #55697A; --sx-line: #16202A; --sx-line2: #1A232A;
+  --sx-deep: #0E151B; --sx-slab: #26333D;
+  --sx-tx: #F5F8FA; --sx-tx1b: #DEE5EA; --sx-tx2: #BFCCD6; --sx-tx2b: #9FB0BC; --sx-tx3: #8299A8;
+  --sx-hi: #FFFFFF; --sx-grey: #A8B8C4; --sx-paper: #FFFFFF; --sx-on: #0E151B;
+  --sx-acc: #137CBD; --sx-acc-tx: #FFFFFF;
+  --sx-re: #C4504C; --sx-re-tx: #F5D8D6; --sx-gr: #5C8A40; --sx-gr-tx: #D8ECD0;
+  --sx-ye: #C9A227; --sx-ye-tx: #F0E4B8; --sx-bl: #3F7FBF; --sx-bl-tx: #D4E5F4;
+  --sx-k: 1; --sx-scheme: dark;
+  --sx-sh: 0 1px 0 rgba(0,0,0,.7), 0 12px 24px -10px rgba(0,0,0,.65);
+}
+[data-theme="stash-light"] {
+  --sx-bg: #F5F8FA; --sx-bg2: #EDF1F4; --sx-ui: #FFFFFF; --sx-ui2: #F0F4F7; --sx-ui3: #E2E9EE;
+  --sx-raise: #FFFFFF; --sx-edge: #C9D4DC; --sx-line: #DCE3E9; --sx-line2: #E6EBF0;
+  --sx-deep: #B7C3CC; --sx-slab: #F0F4F7;
+  --sx-tx: #1C2127; --sx-tx1b: #2E3842; --sx-tx2: #4E5B66; --sx-tx2b: #66727D; --sx-tx3: #7C8894;
+  --sx-hi: #000000; --sx-grey: #5E6B76; --sx-paper: #FFFFFF; --sx-on: #FFFFFF;
+  --sx-acc: #137CBD; --sx-acc-tx: #FFFFFF;
+  --sx-re: #B3423E; --sx-re-tx: #7C2D2A; --sx-gr: #4C7434; --sx-gr-tx: #35551F;
+  --sx-ye: #9A7B1E; --sx-ye-tx: #6B540F; --sx-bl: #2D6CA8; --sx-bl-tx: #1F4E7C;
+  --sx-k: 0.25; --sx-scheme: light;
+  --sx-sh: 0 1px 0 rgba(16,24,32,.12), 0 12px 24px -10px rgba(16,24,32,.18);
+}
+[data-theme="flexoki"] {
+  --sx-bg: #100F0F; --sx-bg2: #1C1B1A; --sx-ui: #282726; --sx-ui2: #343331; --sx-ui3: #403E3C;
+  --sx-raise: #2D2C2A; --sx-edge: #48463F; --sx-line: #0D0C0C; --sx-line2: #0B0A0A;
+  --sx-deep: #000000; --sx-slab: #232120;
+  --sx-tx: #CECDC3; --sx-tx1b: #B7B5AC; --sx-tx2: #878580; --sx-tx2b: #6F6E69; --sx-tx3: #575653;
+  --sx-hi: #E6E4D9; --sx-grey: #9F9D96; --sx-paper: #FFFCF0; --sx-on: #100F0F;
+  --sx-acc: #DA702C; --sx-acc-tx: #100F0F;
+  --sx-re: #D14D41; --sx-re-tx: #E8705F; --sx-gr: #879A39; --sx-gr-tx: #A9BA5A;
+  --sx-ye: #D0A215; --sx-ye-tx: #DFB431; --sx-bl: #4385BE; --sx-bl-tx: #66A0C8;
+  --sx-k: 1; --sx-scheme: dark;
+  --sx-sh: 0 1px 0 rgba(0,0,0,.7), 0 12px 24px -10px rgba(0,0,0,.65);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--sx-bg);
+  color: var(--sx-tx);
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background .25s, color .25s;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 页面根（§3.1）── */
+.ssd-dp-page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 1rem 4rem;
+  color: var(--sx-tx);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-height: 60vh;
+}
+
+/* ── 页头行：标题 + meta chips + 刷新 + 相对时间（§3.1.1）── */
+.ssd-dp-head {
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+  padding-top: .5rem;
+}
+.ssd-dp-title {
+  display: flex; align-items: center; gap: .6rem;
+  font-size: 1.6rem; font-weight: 700; color: var(--sx-hi); margin: 0;
+}
+.ssd-dp-title svg { width: 1.15em; height: 1.15em; color: var(--sx-acc); }
+.ssd-dp-chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  color: var(--sx-tx2);
+  background: color-mix(in srgb, var(--sx-ui) 55%, transparent);
+  border: 1px solid var(--sx-line2);
+  white-space: nowrap;
+}
+.ssd-dp-chip b { color: var(--sx-tx); font-weight: 600; }
+.ssd-dp-head .ssd-dp-refresh { margin-left: auto; }
+.ssd-dp-refresh {
+  display: inline-flex; align-items: center; gap: .4rem;
+  padding: 5px 12px; border-radius: 9px;
+  border: 1px solid var(--sx-line2); border-top-color: var(--sx-ui3);
+  background: linear-gradient(180deg, var(--sx-ui2), var(--sx-ui));
+  color: var(--sx-tx); font-size: 12px; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,calc(.5 * var(--sx-k)));
+  transition: color .15s, border-color .15s;
+}
+.ssd-dp-refresh:hover { color: var(--sx-hi); border-top-color: var(--sx-edge); }
+.ssd-dp-refresh svg { width: 13px; height: 13px; }
+.ssd-dp-updated { font-size: 12px; color: var(--sx-tx3); white-space: nowrap; }
+
+/* ── 滑动开关组（§3.1.2，InsightsI18n .ins-tabs 胶囊风格）── */
+.ssd-dp-tabs {
+  display: flex; gap: 4px; flex-wrap: wrap; padding: 4px;
+  border-radius: 11px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-deep); border-bottom-color: var(--sx-ui2);
+  width: fit-content; max-width: 100%;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,calc(.4 * var(--sx-k)));
+}
+.ssd-dp-tab {
+  position: relative;
+  display: inline-flex; align-items: center; gap: .4rem;
+  background: none; border: 1px solid transparent;
+  color: var(--sx-tx1b); padding: 5px 12px; border-radius: 7px;
+  cursor: pointer; font-size: 12.5px; font-weight: 500; white-space: nowrap;
+  transition: color .15s, background .15s;
+  font-family: inherit;
+}
+.ssd-dp-tab svg { width: 1em; height: 1em; flex: none; }
+.ssd-dp-tab:hover { color: var(--sx-hi); }
+.ssd-dp-tab.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 26%, var(--sx-ui2));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08),
+    0 1px 2px rgba(0,0,0,calc(.4 * var(--sx-k)));
+}
+.ssd-dp-tab-dot {
+  position: absolute; top: 4px; right: 5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--sx-re); box-shadow: 0 0 6px var(--sx-re);
+}
+@media (max-width: 720px) {
+  .ssd-dp-tabs { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); width: 100%; }
+  .ssd-dp-tab { justify-content: center; }
+}
+
+/* ── 筛选行（§3.1.3）── */
+.ssd-dp-toolbar {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  padding: 6px 10px; border-radius: 9px;
+  background: var(--sx-bg2); border: 1px solid var(--sx-line2);
+}
+.ssd-dp-toolbar input, .ssd-dp-toolbar select {
+  background: var(--sx-ui); border: 1px solid var(--sx-line2);
+  color: var(--sx-tx); border-radius: 7px; padding: 4px 10px;
+  font-size: 12.5px; min-width: 0; font-family: inherit;
+}
+.ssd-dp-toolbar input:focus, .ssd-dp-toolbar select:focus {
+  outline: 1px solid var(--sx-acc); border-color: var(--sx-acc);
+}
+.ssd-dp-toolbar .grow { flex: 0 1 300px; min-width: 180px; max-width: 320px; }
+.ssd-dp-tool-label { font-size: 12px; color: var(--sx-tx2); white-space: nowrap; }
+.ssd-dp-viewtoggle {
+  display: inline-flex; border: 1px solid var(--sx-line2); border-radius: 7px; overflow: hidden;
+}
+.ssd-dp-viewtoggle button {
+  background: var(--sx-ui); border: 0; color: var(--sx-tx2);
+  padding: 4px 9px; cursor: pointer; font-size: 12px; font-family: inherit;
+}
+.ssd-dp-viewtoggle button.on {
+  color: var(--sx-hi); background: color-mix(in srgb, var(--sx-acc) 26%, var(--sx-ui2));
+}
+.ssd-dp-viewtoggle svg { width: 13px; height: 13px; vertical-align: -2px; }
+
+/* ── 分页开关组（§3.1.4，仅钻取视图）── */
+.ssd-dp-pager { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.ssd-dp-pg {
+  min-width: 30px; height: 28px; padding: 0 8px; border-radius: 7px;
+  border: 1px solid var(--sx-line2); background: var(--sx-ui); color: var(--sx-tx2);
+  font-size: 12px; cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ssd-dp-pg:hover:not(:disabled) { color: var(--sx-hi); border-color: var(--sx-edge); }
+.ssd-dp-pg.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 24%, var(--sx-ui2));
+  border-color: var(--sx-acc);
+}
+.ssd-dp-pg:disabled { opacity: .4; cursor: default; }
+
+/* ── 模块段（§3.2 总览）── */
+.ssd-dp-sec { display: flex; flex-direction: column; gap: .6rem; }
+.ssd-dp-sec-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+.ssd-dp-sec-title {
+  font-size: 15px; font-weight: 650; color: var(--sx-hi);
+  display: inline-flex; align-items: center; gap: .45rem; margin: 0;
+}
+.ssd-dp-sec-title svg { width: 1em; height: 1em; color: var(--sx-acc); }
+.ssd-dp-sec-count { font-size: 12px; color: var(--sx-tx2); }
+.ssd-dp-sec-more {
+  margin-left: auto; display: inline-flex; align-items: center; gap: .3rem;
+  background: none; border: 0; color: var(--sx-acc);
+  font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px;
+  border-radius: 6px; font-family: inherit;
+  transition: color .15s, background .15s;
+}
+.ssd-dp-sec-more:hover { color: var(--sx-hi); background: color-mix(in srgb, var(--sx-acc) 12%, transparent); }
+.ssd-dp-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+@media (max-width: 900px) { .ssd-dp-duo { grid-template-columns: 1fr; } }
+
+/* ── 网格（真实插件复用 Stash 原生 .grid）── */
+.ssd-dp-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+.ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+
+/* ── 原生场景卡 1:1 结构模拟（真实插件直接用 Stash 自带样式）── */
+.scene-card.grid-card.card {
+  position: relative; overflow: hidden;
+  background: var(--sx-ui);
+  border: 1px solid var(--sx-line);
+  border-top-color: var(--sx-edge);
+  border-radius: .25rem;
+  box-shadow: var(--sx-sh);
+  transition: transform .12s, box-shadow .12s;
+}
+.scene-card.grid-card.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 1px 0 rgba(0,0,0,calc(.7 * var(--sx-k))), 0 16px 32px -10px rgba(0,0,0,calc(.7 * var(--sx-k)));
+}
+.video-section { position: relative; }
+.scene-card-preview {
+  position: relative; aspect-ratio: 16/9; overflow: hidden;
+  background: var(--sx-bg2);
+}
+.scene-card-preview-image {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.studio-overlay {
+  position: absolute; top: .5rem; right: .5rem; max-width: 65%;
+  font-size: .8rem; font-weight: 700;
+}
+.studio-overlay a {
+  color: var(--sx-paper); text-decoration: none;
+  background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: .25rem;
+  display: inline-block; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.scene-specs-overlay {
+  position: absolute; bottom: .5rem; right: .5rem;
+  font-size: .75rem; color: var(--sx-paper);
+}
+.overlay-duration {
+  background: rgba(0,0,0,.7); padding: 1px 6px; border-radius: .2rem;
+  font-variant-numeric: tabular-nums;
+}
+.ssd-overlay-box {
+  position: absolute; bottom: .5rem; left: .5rem;
+  font-size: 11px; font-weight: 700; color: var(--sx-paper);
+  background: color-mix(in srgb, var(--sx-acc) 82%, #000);
+  padding: 1px 7px; border-radius: 999px;
+}
+.ssd-overlay-preview {
+  position: absolute; top: .5rem; left: .5rem;
+  font-size: 11px; font-weight: 700;
+  color: var(--sx-on);
+  background: color-mix(in srgb, var(--sx-ye) 85%, #fff);
+  padding: 1px 7px; border-radius: 999px;
+}
+.ssd-overlay-days {
+  position: absolute; top: .5rem; left: .5rem;
+  font-size: 11px; font-weight: 700; color: var(--sx-on);
+  background: color-mix(in srgb, var(--sx-gr) 80%, #fff);
+  padding: 1px 7px; border-radius: 999px;
+}
+.card-section { padding: .5rem .75rem .6rem; }
+.card-section-title { font-size: 1rem; margin: 0 0 .2rem; font-weight: 500; }
+.TruncatedText {
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+}
+.scene-card__details { display: flex; flex-direction: column; gap: .15rem; }
+.scene-card__date { font-size: .8rem; color: var(--sx-tx2); }
+.scene-card__description { font-size: .8rem; color: var(--sx-tx3); }
+.card-popovers { display: flex; gap: .35rem; margin-top: .45rem; }
+.card-popovers .tag-count, .card-popovers .performer-count {
+  font-size: .75rem; color: var(--sx-tx2);
+  border: 1px solid var(--sx-line2); border-radius: .25rem;
+  padding: 0 .4rem; background: var(--sx-bg2);
+}
+.card-popovers svg { width: 11px; height: 11px; vertical-align: -1px; }
+.ssd-card-new {
+  outline: 2px solid var(--sx-re); outline-offset: -2px; border-radius: .25rem;
+}
+
+/* ── 迷你演员卡（§3.2 模块 1/6）── */
+.ssd-dp-mini {
+  position: relative; display: flex; align-items: center; gap: .55rem;
+  padding: 8px 10px; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(180deg, var(--sx-raise) 0, var(--sx-ui) 52px);
+  border: 1px solid var(--sx-line); border-top-color: var(--sx-edge);
+  transition: border-color .15s, transform .12s;
+  min-width: 0;
+}
+.ssd-dp-mini:hover { border-color: var(--sx-acc); transform: translateY(-1px); }
+.ssd-dp-mini img {
+  width: 42px; height: 42px; border-radius: 50%; object-fit: cover; flex: none;
+  background: var(--sx-bg2); border: 1px solid var(--sx-edge);
+}
+.ssd-dp-mini-name {
+  font-size: 13px; font-weight: 600; color: var(--sx-tx);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ssd-dp-mini-sub { font-size: 11.5px; color: var(--sx-tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ssd-dp-mini-badge {
+  position: absolute; top: -6px; right: 8px;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--sx-on);
+  background: var(--sx-acc);
+  padding: 1px 7px; border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0,0,0,calc(.5 * var(--sx-k)));
+}
+.ssd-dp-mini-badge.co { background: var(--sx-bl); }
+.ssd-dp-mini-badge.hot { background: var(--sx-ye); }
+.ssd-dp-mini-badge .in-lib { background: var(--sx-gr); }
+.ssd-dp-mini .ssd-mini-heart {
+  position: absolute; bottom: 6px; right: 8px; width: 14px; height: 14px;
+  color: var(--sx-re);
+}
+.ssd-mini-src {
+  display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 4px;
+  background: color-mix(in srgb, var(--sx-bl) 18%, transparent);
+  color: var(--sx-bl-tx); margin-left: 4px; vertical-align: 1px;
+}
+
+/* ── 原型专用：悬浮主题切换器 + 顶部提示条（真实插件无此物）── */
+#proto-theme-bar {
+  position: fixed; right: 14px; bottom: 14px; z-index: 99;
+  display: flex; gap: 4px; padding: 5px; border-radius: 11px;
+  background: var(--sx-slab); border: 1px solid var(--sx-edge);
+  box-shadow: var(--sx-sh);
+}
+#proto-theme-bar button {
+  border: 1px solid transparent; background: none; color: var(--sx-tx2);
+  font-size: 11.5px; padding: 4px 10px; border-radius: 7px;
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+#proto-theme-bar button.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 30%, var(--sx-ui2));
+  border-color: var(--sx-acc);
+}
+#proto-note {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 98;
+  font-size: 11px; color: var(--sx-tx3);
+  background: color-mix(in srgb, var(--sx-bg) 80%, transparent);
+  border: 1px solid var(--sx-line2); border-radius: 999px;
+  padding: 3px 12px; white-space: nowrap; backdrop-filter: blur(4px);
+}
+@media (max-width: 760px) { #proto-note { display: none; } }
+</style>
+</head>
+<body>
+<div id="proto-note">P3 v0 原型 · 右下角切换主题演示跟随效果（真实插件由 Stash 主题自动驱动）</div>
+<div id="proto-theme-bar">
+  <button data-t="stash-dark" class="on">Stash 深色</button>
+  <button data-t="stash-light">Stash 浅色</button>
+  <button data-t="flexoki">Flexoki</button>
+</div>
+
+<div class="ssd-dp-page">
+
+  <!-- §3.1.1 页头行 -->
+  <div class="ssd-dp-head">
+    <h1 class="ssd-dp-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l6 3 3 6"/><path d="M11.5 21C7 18.7 3.3 15 1 10.5L15.5 3l2 2-7 14"/><path d="M18 6.5c.8-2 .4-4.2-1-5.5"/><path d="M12 9l3 3"/></svg>
+      发现
+    </h1>
+    <span class="ssd-dp-chip"><b>24</b> 个新场景</span>
+    <span class="ssd-dp-chip"><b>16</b> 位关联演员</span>
+    <span class="ssd-dp-chip">数据源 <b>StashDB</b></span>
+    <button class="ssd-dp-refresh" onclick="protoRefresh(this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg>
+      刷新
+    </button>
+    <span class="ssd-dp-updated">2 小时前更新</span>
+  </div>
+
+  <!-- §3.1.2 滑动开关组 -->
+  <div class="ssd-dp-tabs">
+    <button class="ssd-dp-tab on">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+      总览
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.5-9-9c-1.5-3.5 1-7 4.5-7 2 0 3.5 1 4.5 2.5C13 5 14.5 4 16.5 4 20 4 22.5 7.5 21 11c-2 4.5-9 9-9 9z"/></svg>
+      关注
+      <i class="ssd-dp-tab-dot"></i>
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      最新
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-5 .5 1.5 1.5 2 2.5 2C11 7 11 5 12 3z"/></svg>
+      热门
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg>
+      预告
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.8 1.2 2 2 3.5 2s2.7-.8 3.5-2"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
+      发现演员
+    </button>
+    <button class="ssd-dp-tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      工作室
+    </button>
+    <button class="ssd-dp-tab" style="margin-left: 6px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+      设置
+    </button>
+  </div>
+
+  <!-- §3.1.3 筛选行 -->
+  <div class="ssd-dp-toolbar">
+    <input type="search" class="grow" placeholder="搜索场景 / 演员 / 工作室…">
+    <span class="ssd-dp-tool-label">排序</span>
+    <select><option>发布日期 ↓</option><option>发布日期 ↑</option><option>热门度</option><option>标题</option></select>
+    <span class="ssd-dp-tool-label">每页</span>
+    <select><option>24</option><option>48</option><option>96</option></select>
+    <div class="ssd-dp-viewtoggle">
+      <button class="on" title="网格">▦</button>
+      <button title="列表">☰</button>
+    </div>
+    <span class="ssd-dp-tool-label">数据源</span>
+    <select><option>StashDB</option><option>JAVStash</option><option>TPDB</option></select>
+  </div>
+
+  <!-- §3.2 模块 1：★ 有新发布的演员（1 行迷你卡） -->
+  <section class="ssd-dp-sec">
+    <div class="ssd-dp-sec-head">
+      <h2 class="ssd-dp-sec-title">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2l-6.1 3.4 1.4-6.8L2.2 9.1l6.9-.8z"/></svg>
+        有新发布的演员
+      </h2>
+      <span class="ssd-dp-sec-count">3 位演员 · 7 部新作品 · 回看 30 天</span>
+      <button class="ssd-dp-sec-more">查看更多 →</button>
+    </div>
+    <div class="ssd-dp-grid mini">
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%20smiling%2C%20studio%20lighting%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">奏音かのん</div>
+          <div class="ssd-dp-mini-sub">Kawaii · 本地已关联</div>
+        </div>
+        <span class="ssd-dp-mini-badge">2 部新作品</span>
+        <svg class="ssd-mini-heart" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20s-7-4.5-9-9c-1.5-3.5 1-7 4.5-7 2 0 3.5 1 4.5 2.5C13 5 14.5 4 16.5 4 20 4 22.5 7.5 21 11c-2 4.5-9 9-9 9z"/></svg>
+      </div>
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%20with%20long%20hair%2C%20natural%20light%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">未唯ニャン</div>
+          <div class="ssd-dp-mini-sub">S1 · 本地已关联</div>
+        </div>
+        <span class="ssd-dp-mini-badge">2 部新作品</span>
+      </div>
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%20with%20short%20hair%2C%20soft%20light%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">森山結来</div>
+          <div class="ssd-dp-mini-sub">IDEAPOCKET · 本地已关联</div>
+        </div>
+        <span class="ssd-dp-mini-badge">2 部新作品</span>
+      </div>
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%20looking%20away%2C%20golden%20hour%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">宮下玲奈</div>
+          <div class="ssd-dp-mini-sub">Faleno Star · 本地已关联</div>
+        </div>
+        <span class="ssd-dp-mini-badge">1 部新作品</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- §3.2 模块 2：◷ 最新发布（2 行原生场景卡） -->
+  <section class="ssd-dp-sec">
+    <div class="ssd-dp-sec-head">
+      <h2 class="ssd-dp-sec-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+        最新发布
+      </h2>
+      <span class="ssd-dp-sec-count">7 部未拥有 · 每人最多 2 部</span>
+      <button class="ssd-dp-sec-more">查看更多 →</button>
+    </div>
+    <div class="ssd-dp-grid">
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20neon%20lit%20hotel%20room%20at%20night%2C%20moody%20atmosphere&image_size=landscape_16_9" alt="KAVR-531">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">FALENO GROUP</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">150 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">KAVR-531</div></h5>
+          <div class="scene-card__details">
+            <span class="scene-card__date">2026-10-14</span>
+            <div class="TruncatedText scene-card__description" style="-webkit-line-clamp:3">插件会在发现页为库中所有有关联的演员聚合展示 stash-box 上未拥有的新场景…</div>
+          </div>
+          <hr>
+          <div role="group" class="card-popovers btn-group">
+            <div class="performer-count">👤 2</div>
+            <div class="tag-count"># 5</div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20rainy%20tokyo%20street%20at%20night%2C%20neon%20reflections&image_size=landscape_16_9" alt="START-636">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">S1</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">120 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">START-636</div></h5>
+          <div class="scene-card__details">
+            <span class="scene-card__date">2026-10-08</span>
+            <div class="TruncatedText scene-card__description" style="-webkit-line-clamp:3">每位演员最多展示 2 部新场景，避免单人多产刷屏，总览保持信息密度…</div>
+          </div>
+          <hr>
+          <div role="group" class="card-popovers btn-group">
+            <div class="performer-count">👤 1</div>
+            <div class="tag-count"># 3</div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20sunlit%20bedroom%20with%20white%20curtains%2C%20soft%20morning%20light&image_size=landscape_16_9" alt="IPX-925">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">IDEAPOCKET</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">130 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">IPX-925</div></h5>
+          <div class="scene-card__details">
+            <span class="scene-card__date">2026-10-05</span>
+            <div class="TruncatedText scene-card__description" style="-webkit-line-clamp:3">已拥有的场景按 stash_id 与番号双重匹配自动排除，跨源去重…</div>
+          </div>
+          <hr>
+          <div role="group" class="card-popovers btn-group">
+            <div class="performer-count">👤 2</div>
+            <div class="tag-count"># 4</div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20modern%20apartment%20interior%20at%20dusk%2C%20city%20view&image_size=landscape_16_9" alt="SSIS-982">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">S1</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">118 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">SSIS-982</div></h5>
+          <div class="scene-card__details">
+            <span class="scene-card__date">2026-10-01</span>
+            <div class="TruncatedText scene-card__description" style="-webkit-line-clamp:3">点击卡片打开详情弹窗：场景信息、保存到 Stash、Jackett 搜索下载…</div>
+          </div>
+          <hr>
+          <div role="group" class="card-popovers btn-group">
+            <div class="performer-count">👤 1</div>
+            <div class="tag-count"># 6</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- §3.2 模块 3+4：▲ 热门 ∥ ▷ 即将发布（并排，窄屏堆叠） -->
+  <div class="ssd-dp-duo">
+    <section class="ssd-dp-sec">
+      <div class="ssd-dp-sec-head">
+        <h2 class="ssd-dp-sec-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-5 .5 1.5 1.5 2 2.5 2C11 7 11 5 12 3z"/></svg>
+          热门
+        </h2>
+        <span class="ssd-dp-sec-count">StashDB 全站 · 不限库内</span>
+        <button class="ssd-dp-sec-more">查看更多 →</button>
+      </div>
+      <div class="ssd-dp-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+        <div class="scene-card zoom-0 grid-card card">
+          <div class="video-section thumbnail-section">
+            <div class="scene-card-preview">
+              <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20outdoor%20poolside%20in%20summer%2C%20bright%20sunlight&image_size=landscape_16_9" alt="trending 1">
+            </div>
+            <div class="studio-overlay"><a href="javascript:void(0)">Prestige</a></div>
+            <div class="scene-specs-overlay"><span class="overlay-duration">125 min</span></div>
+          </div>
+          <div class="card-section">
+            <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">Birthday Nuru Massage</div></h5>
+            <div class="scene-card__details"><span class="scene-card__date">2026-10-16</span></div>
+          </div>
+        </div>
+        <div class="scene-card zoom-0 grid-card card">
+          <div class="video-section thumbnail-section">
+            <div class="scene-card-preview">
+              <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20recording%20studio%20with%20warm%20lamp%20light&image_size=landscape_16_9" alt="trending 2">
+            </div>
+            <div class="studio-overlay"><a href="javascript:void(0)">VR</a></div>
+            <div class="scene-specs-overlay"><span class="overlay-duration">90 min</span></div>
+          </div>
+          <div class="card-section">
+            <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">SIVR-514</div></h5>
+            <div class="scene-card__details"><span class="scene-card__date">2026-10-15</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="ssd-dp-sec">
+      <div class="ssd-dp-sec-head">
+        <h2 class="ssd-dp-sec-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg>
+          即将发布
+        </h2>
+        <span class="ssd-dp-sec-count">未来 7 天 · 3 部</span>
+        <button class="ssd-dp-sec-more">查看更多 →</button>
+      </div>
+      <div class="ssd-dp-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+        <div class="scene-card zoom-0 grid-card card">
+          <div class="video-section thumbnail-section">
+            <div class="scene-card-preview">
+              <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20traditional%20japanese%20room%20with%20tatami%2C%20evening&image_size=landscape_16_9" alt="upcoming 1">
+              <span class="ssd-overlay-days">3 天后上映</span>
+            </div>
+            <div class="studio-overlay"><a href="javascript:void(0)">Kawaii</a></div>
+          </div>
+          <div class="card-section">
+            <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">KAAN-102</div></h5>
+            <div class="scene-card__details"><span class="scene-card__date">2026-10-26</span></div>
+          </div>
+        </div>
+        <div class="scene-card zoom-0 grid-card card">
+          <div class="video-section thumbnail-section">
+            <div class="scene-card-preview">
+              <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20luxury%20bathroom%20with%20marble%2C%20soft%20light&image_size=landscape_16_9" alt="upcoming 2">
+              <span class="ssd-overlay-days">6 天后上映</span>
+            </div>
+            <div class="studio-overlay"><a href="javascript:void(0)">Faleno Star</a></div>
+          </div>
+          <div class="card-section">
+            <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">FCHN-088</div></h5>
+            <div class="scene-card__details"><span class="scene-card__date">2026-10-29</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- §3.2 模块 5：▣ 工作室新发布（收藏工作室，每工作室 cap 2） -->
+  <section class="ssd-dp-sec">
+    <div class="ssd-dp-sec-head">
+      <h2 class="ssd-dp-sec-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        工作室新发布
+      </h2>
+      <span class="ssd-dp-sec-count">2 个收藏工作室 · 每工作室最多 2 部</span>
+      <button class="ssd-dp-sec-more">查看更多 →</button>
+    </div>
+    <div class="ssd-dp-grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));">
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20neon%20lit%20hotel%20room%20at%20night%2C%20moody%20atmosphere&image_size=landscape_16_9" alt="SSIS-990">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">S1</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">121 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">SSIS-990</div></h5>
+          <div class="scene-card__details"><span class="scene-card__date">2026-10-12</span></div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20rainy%20tokyo%20street%20at%20night%2C%20neon%20reflections&image_size=landscape_16_9" alt="SSIS-991">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">S1</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">119 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">SSIS-991</div></h5>
+          <div class="scene-card__details"><span class="scene-card__date">2026-10-09</span></div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20sunlit%20bedroom%20with%20white%20curtains%2C%20soft%20morning%20light&image_size=landscape_16_9" alt="KAWD-566">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">Kawaii</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">135 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">KAWD-566</div></h5>
+          <div class="scene-card__details"><span class="scene-card__date">2026-10-07</span></div>
+        </div>
+      </div>
+      <div class="scene-card zoom-0 grid-card card">
+        <div class="video-section thumbnail-section">
+          <div class="scene-card-preview">
+            <img class="scene-card-preview-image" src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=cinematic%20film%20still%2C%20modern%20apartment%20interior%20at%20dusk%2C%20city%20view&image_size=landscape_16_9" alt="KAWD-567">
+            <span class="ssd-overlay-box">stashdb</span>
+          </div>
+          <div class="studio-overlay"><a href="javascript:void(0)">Kawaii</a></div>
+          <div class="scene-specs-overlay"><span class="overlay-duration">128 min</span></div>
+        </div>
+        <div class="card-section">
+          <h5 class="card-section-title flex-aligned"><div class="TruncatedText" style="-webkit-line-clamp:2">KAWD-567</div></h5>
+          <div class="scene-card__details"><span class="scene-card__date">2026-10-03</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- §3.2 模块 6：☺ 发现演员（共同出演 ∥ 热门榜） -->
+  <section class="ssd-dp-sec">
+    <div class="ssd-dp-sec-head">
+      <h2 class="ssd-dp-sec-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.8 1.2 2 2 3.5 2s2.7-.8 3.5-2"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
+        发现演员
+      </h2>
+      <span class="ssd-dp-sec-count">不在库 · 与库内演员共演</span>
+      <button class="ssd-dp-sec-more">查看更多 →</button>
+    </div>
+    <div class="ssd-dp-grid mini">
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%20with%20a%20hat%2C%20studio%20light%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">八掛うみ</div>
+          <div class="ssd-dp-mini-sub">共演 2 次 · 20 部作品</div>
+        </div>
+        <span class="ssd-dp-mini-badge co">共同出演 ×2</span>
+      </div>
+      <div class="ssd-dp-mini">
+        <img src="https://trae-api-cn.mchost.guru/api/ide/v1/tool_text_to_image?prompt=portrait%20photo%20of%20a%20young%20woman%2C%20evening%20bokeh%20background%2C%20headshot&image_size=square_hd" alt="">
+        <div style="min-width:0">
+          <div class="ssd-dp-mini-name">森山結来 NHC</div>
+          <div class="ssd-dp-mini-sub">最近有新作 · 156 部作品</div>
+        </div>
+        <span class="ssd-dp-mini-badge hot">热门榜 #1</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+// 原型专用脚本（真实插件为 React + vanilla 挂载，无此文件）
+// 占位图：图片 API 需鉴权、浏览器不可达，真实插件用 stash-box 场景封面
+// 与演员头像的真实 URL（item.images[0].url），此处用程序化 SVG 代替。
+(function placeholderArt() {
+  var PALETTES = [
+    ["#1a2a3a", "#2d4a66"], ["#2a1a2e", "#533558"], ["#122a24", "#2c5546"],
+    ["#301a1a", "#663535"], ["#1f1a2e", "#3f3566"], ["#2e2a14", "#5c5330"],
+  ];
+  function hash(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function cover(code, studio) {
+    var p = PALETTES[hash(code) % PALETTES.length];
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">'
+      + '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+      + '<stop offset="0" stop-color="' + p[1] + '"/><stop offset="1" stop-color="' + p[0] + '"/></linearGradient>'
+      + '<radialGradient id="r" cx=".3" cy=".25" r=".9">'
+      + '<stop offset="0" stop-color="#ffffff" stop-opacity=".14"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>'
+      + '<pattern id="p" width="40" height="40" patternUnits="userSpaceOnUse">'
+      + '<path d="M0 40L40 0" stroke="#ffffff" stroke-opacity=".05"/></pattern></defs>'
+      + '<rect width="640" height="360" fill="url(#g)"/><rect width="640" height="360" fill="url(#r)"/>'
+      + '<rect width="640" height="360" fill="url(#p)"/>'
+      + '<text x="32" y="200" font-family="Segoe UI, sans-serif" font-size="52" font-weight="700" fill="#ffffff" fill-opacity=".92">' + esc(code) + '</text>'
+      + (studio ? '<text x="34" y="240" font-family="Segoe UI, sans-serif" font-size="20" fill="#ffffff" fill-opacity=".55">' + esc(studio) + '</text>' : "")
+      + '<circle cx="560" cy="70" r="46" fill="#ffffff" fill-opacity=".07"/>'
+      + '</svg>';
+    return "data:image/svg+xml," + encodeURIComponent(svg);
+  }
+  function avatar(name) {
+    var p = PALETTES[hash(name) % PALETTES.length];
+    var ch = (name || "?").trim().charAt(0);
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">'
+      + '<defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1">'
+      + '<stop offset="0" stop-color="' + p[1] + '"/><stop offset="1" stop-color="' + p[0] + '"/></linearGradient></defs>'
+      + '<rect width="96" height="96" fill="url(#a)"/>'
+      + '<circle cx="48" cy="38" r="17" fill="#ffffff" fill-opacity=".65"/>'
+      + '<path d="M18 88c4-19 14-28 30-28s26 9 30 28z" fill="#ffffff" fill-opacity=".65"/>'
+      + '<text x="48" y="56" font-family="Segoe UI, sans-serif" font-size="26" font-weight="700" fill="#fff" fill-opacity=".9" text-anchor="middle">' + esc(ch) + '</text>'
+      + '</svg>';
+    return "data:image/svg+xml," + encodeURIComponent(svg);
+  }
+  document.querySelectorAll("img.scene-card-preview-image").forEach(function (img) {
+    var card = img.closest(".scene-card");
+    var st = card && card.querySelector(".studio-overlay a");
+    img.src = cover(img.alt || "SCENE", st ? st.textContent : "");
+  });
+  document.querySelectorAll(".ssd-dp-mini img").forEach(function (img) {
+    var nm = img.parentElement.querySelector(".ssd-dp-mini-name");
+    img.src = avatar(nm ? nm.textContent : "?");
+  });
+})();
+
+function protoRefresh(btn) {
+  var svg = btn.querySelector("svg");
+  svg.classList.add("spinning");
+  btn.disabled = true;
+  setTimeout(function () {
+    svg.classList.remove("spinning");
+    btn.disabled = false;
+    document.querySelector(".ssd-dp-updated").textContent = "刚刚更新";
+  }, 1200);
+}
+document.querySelectorAll("#proto-theme-bar button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.documentElement.setAttribute("data-theme", b.dataset.t);
+    document.querySelectorAll("#proto-theme-bar button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+  });
+});
+document.querySelectorAll(".ssd-dp-tabs .ssd-dp-tab").forEach(function (t) {
+  t.addEventListener("click", function () {
+    document.querySelectorAll(".ssd-dp-tabs .ssd-dp-tab").forEach(function (x) { x.classList.remove("on"); });
+    t.classList.add("on");
+  });
+});
+document.querySelectorAll(".ssd-dp-viewtoggle button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll(".ssd-dp-viewtoggle button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+  });
+});
+</script>
+<style>.ssd-dp-refresh svg.spinning { animation: protoSpin .9s linear infinite; }
+@keyframes protoSpin { to { transform: rotate(360deg); } }</style>
+</body>
+</html>

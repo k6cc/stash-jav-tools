@@ -207,3 +207,23 @@
   是 box 侧行为，非插件 bug（P4 记录）。
 - chrome-devtools resize_page 不跨 reload 持久，窄屏验证用 emulate viewport
   覆盖（测试环境怪癖，与插件无关）。
+
+## 2026-10-23 真实浏览器样式修复轮（用户反馈：角标错位/搜索居中/duo 多行）
+
+| # | 问题 | 修复 | 验证 |
+|---|---|---|---|
+| S1 | 场景卡角标错位：来源 pill 与原生 specs 基线差 5px（挂载点 .scene-card-preview 比原生 .thumbnail-section 矮 5px——margin-bottom:5px）；days/inlib pill 用 0.5rem 与 studio 0.7rem 不齐 | CSS：.ssd-overlay-box `bottom: calc(1rem - 5px)`；days/inlib `top/left: 0.7rem` | specs.bottom − boxPill.bottom = 0；daysVsStudioTop = 0（预告卡实测） |
+| S2 | 搜索框要求居中（原左对齐） | 工具栏改 grid 三列（1fr auto 1fr）：搜索框中列几何居中、控件组包 .ssd-dp-tools 右列靠右；≤1020px 回退 flex wrap（720 以下搜索满宽） | 1550px：searchCenterOffset=0；900/375px 正常换行 0 溢出 |
+| S3 | 热门/即将发布默认 1 行但不同窗口宽度出现多行 | 三重修复：a) colsOf 加 half 参数（duo 半宽列数）；b) 场景网格容器从 flex-wrap 改 CSS grid（minmax(230px,1fr)——列结构不依赖图片加载）；c) trimRows 渲染后按真实列数截断 + window resize 监听（debounce 200ms 重渲染总览） | 1550：duo 热门 3 卡 1 行；900：duo 堆叠单列 latest 3+1 两行（rows=2 允许）；375：1 列 2 行；resize 切换自动重算 |
+| S4 | （S3 调试中发现的隐藏 bug）flex-wrap 容器在 .ssd-dp-sec 里塌缩到内容宽（margin:0 auto 吞掉 stretch；图片加载前卡片被瞬时拉到整行宽 1466px） | 同 S3-b：CSS grid 容器根治；duo 列改 `minmax(0,1fr)`（含 900px 媒体查询）防内层 grid min-content 撑爆（曾现 2150px 溢出 2810px） | 全宽度 0 横向溢出 |
+
+### 走查记录（1550 / 900 / 375px + 默认主题）
+
+- 角标：boxPill↔specs 底边差 0、days↔studio 顶边差 0、左侧 left 全等；
+  inlib 与 days 同 CSS 规则（同基线）。
+- 工具栏：桌面搜索框几何居中 + 控件右对齐；窄屏满宽换行。
+- 网格：latest 4 卡（数据量）、duo 热门 trim 后 3 卡 1 行、预告 1 卡、
+  工作室 3 卡；mini 网格 3/8 卡各 1 行。
+- 视图：follow 红框卡 2 张、settings 9 行 2 面板、trending 钻取正常。
+- 主题 token --sx-bg #202B33（默认主题跟随正常）。
+- node --check 通过，工作副本与实装目录已同步。

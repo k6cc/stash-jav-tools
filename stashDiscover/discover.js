@@ -1241,9 +1241,25 @@
     }
     return out;
   }
-  function colsOf(min) {
+  function colsOf(min, half) {
     var w = _dp.refs.content ? _dp.refs.content.clientWidth : 1200;
-    return Math.max(1, Math.floor(w / (min || 260)));
+    // duo（热门∥预告）并排时每列只有半宽（减去 1.1rem 列间距）
+    if (half) w = Math.max(0, (w - 17) / 2);
+    return Math.max(1, Math.floor(w / (min || 240)));
+  }
+  // 渲染后按真实列数截断：数第一行卡数 C，只保留 n 行（对窗口宽度/缩放/卡宽
+  // 变化免疫——colsOf 只是预过滤上限，行数最终以实际布局为准）
+  function trimRows(grid, n) {
+    if (!grid || !grid.children.length) return;
+    var kids = Array.prototype.slice.call(grid.children);
+    var top0 = kids[0].offsetTop;
+    var cols = 0;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].offsetTop === top0) cols++; else break;
+    }
+    if (cols < 1) cols = 1;
+    var keep = cols * n;
+    if (kids.length > keep) kids.slice(keep).forEach(function (k) { k.remove(); });
   }
   function stateBox(kind, msg, retryFn) {
     var b = el("div", "ssd-dp-state");
@@ -1465,12 +1481,13 @@
     var i = 0;
     while (i < order.length) {
       var id = order[i], nxt = order[i + 1];
-      // 热门∥即将发布相邻时并排（duo），被排序拆开则各自全宽
+      // 热门∥即将发布相邻时并排（duo），被排序拆开则各自全宽。
+      // duo 先入文档再渲染模块——trimRows 需要真实布局才能数列数
       if ((id === "trending" && nxt === "preview") || (id === "preview" && nxt === "trending")) {
         var duo = el("div", "ssd-dp-duo");
+        c.appendChild(duo);
         renderModule(id, duo, rows);
         renderModule(nxt, duo, rows);
-        c.appendChild(duo);
         i += 2;
       } else {
         renderModule(id, c, rows);
@@ -1497,7 +1514,7 @@
       else if (!(d.actorsWithNew || []).length) secBody(s1, null).appendChild(stateBox("empty", tc("回看期内没有新作品", "No new releases in the lookback window")));
       else {
         var g1 = el("div", "ssd-dp-grid mini");
-        d.actorsWithNew.slice(0, rows.actors * 8).forEach(function (grp) {
+        d.actorsWithNew.slice(0, rows.actors * 12).forEach(function (grp) {
           g1.appendChild(miniPerfCard({
             name: grp.performer.name,
             image: grp.performer.image,
@@ -1508,6 +1525,7 @@
           }));
         });
         s1.appendChild(g1);
+        trimRows(g1, rows.actors);
       }
       return;
     }
@@ -1521,9 +1539,10 @@
       if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", null, retryLatest);
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
-        var g2 = sceneGrid(d.latest.slice(0, rows.latest * colsOf(260)));
+        var g2 = sceneGrid(d.latest.slice(0, rows.latest * colsOf(240) + rows.latest));
         g2.classList.add("ssd-dp-grid");
         s2.appendChild(g2);
+        trimRows(g2, rows.latest);
       }
       return;
     }
@@ -1536,9 +1555,10 @@
       if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", null, function () { retryDataset("trending"); });
       else if (!(t.items || []).length) secBody(s3, null).appendChild(stateBox("empty", tc("榜单暂无内容", "Empty list")));
       else {
-        var g3 = sceneGrid(t.items.slice(0, rows.trending * colsOf(220)), { inlib: true });
+        var g3 = sceneGrid(t.items.slice(0, rows.trending * colsOf(240, true) + rows.trending), { inlib: true });
         g3.classList.add("ssd-dp-grid");
         s3.appendChild(g3);
+        trimRows(g3, rows.trending);
       }
       return;
     }
@@ -1551,9 +1571,10 @@
       if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", null, retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
-        var g4 = sceneGrid(d.preview.slice(0, rows.preview * colsOf(220)), { days: true });
+        var g4 = sceneGrid(d.preview.slice(0, rows.preview * colsOf(240, true) + rows.preview), { days: true });
         g4.classList.add("ssd-dp-grid");
         s4.appendChild(g4);
+        trimRows(g4, rows.preview);
       }
       return;
     }
@@ -1567,9 +1588,10 @@
       if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", null, function () { retryDataset("studios"); });
       else if (!(st.items || []).length) secBody(s5, null).appendChild(stateBox("empty", tc("收藏的工作室暂无新作品", "No new releases from favorite studios")));
       else {
-        var g5 = sceneGrid(st.items.slice(0, rows.studios * colsOf(240)));
+        var g5 = sceneGrid(st.items.slice(0, rows.studios * colsOf(240) + rows.studios));
         g5.classList.add("ssd-dp-grid");
         s5.appendChild(g5);
+        trimRows(g5, rows.studios);
       }
       return;
     }
@@ -1583,7 +1605,7 @@
       if (!d || !tp) secBody(s6, "loading", null);
       else {
         var g6 = el("div", "ssd-dp-grid mini");
-        buildCoStars().slice(0, rows.performers * 8).forEach(function (cs) {
+        buildCoStars().slice(0, rows.performers * 12).forEach(function (cs) {
           g6.appendChild(miniPerfCard({
             name: cs.meta.name,
             sub: tc("共同出演 ×" + cs.scenes, "co-starred ×" + cs.scenes),
@@ -1591,9 +1613,9 @@
             onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, scenes: cs.scenes, items: cs.items }); },
           }));
         });
-        trendingPerfMinis({ limit: Math.max(0, rows.performers * 8 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
+        trendingPerfMinis({ limit: Math.max(0, rows.performers * 12 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
         if (!g6.children.length) s6.appendChild(stateBox("empty", tc("暂无可发现的演员", "No performers to discover")));
-        else s6.appendChild(g6);
+        else { s6.appendChild(g6); trimRows(g6, rows.performers); }
       }
       return;
     }
@@ -2383,7 +2405,8 @@
     refs.tabs.appendChild(setBtn);
     root.appendChild(refs.tabs);
 
-    // ── 筛选行（§3.1.3 贯穿所有视图；搜索框限宽左对齐 — 用户 2026-10-23 确认）──
+    // ── 筛选行（§3.1.3 贯穿所有视图；搜索框限宽 + 居中 — 用户 2026-10-23 确认）──
+    // 布局：grid 三列（左空 | 搜索框居中 | 控件组靠右），见 stashDiscover.css
     var bar = el("div", "ssd-dp-toolbar");
     refs.search = document.createElement("input");
     refs.search.type = "search";
@@ -2401,7 +2424,8 @@
     });
     bar.appendChild(refs.search);
 
-    bar.appendChild(el("span", "ssd-dp-tool-label", tc("排序", "Sort")));
+    var tools = el("div", "ssd-dp-tools");
+    tools.appendChild(el("span", "ssd-dp-tool-label", tc("排序", "Sort")));
     refs.sort = document.createElement("select");
     [["date-desc", tc("发布日期 ↓", "Date ↓")], ["date-asc", tc("发布日期 ↑", "Date ↑")],
      ["title", tc("标题 A-Z", "Title A-Z")], ["hot", tc("原榜顺序", "List order")]].forEach(function (o) {
@@ -2417,9 +2441,9 @@
       dpSetPrefs({ sort: _dp.sort });
       render();
     });
-    bar.appendChild(refs.sort);
+    tools.appendChild(refs.sort);
 
-    bar.appendChild(el("span", "ssd-dp-tool-label", tc("每页", "Per page")));
+    tools.appendChild(el("span", "ssd-dp-tool-label", tc("每页", "Per page")));
     refs.perPage = document.createElement("select");
     [24, 48, 96].forEach(function (n) {
       var op = document.createElement("option");
@@ -2433,7 +2457,7 @@
       _dp.page = 1;
       render();
     });
-    bar.appendChild(refs.perPage);
+    tools.appendChild(refs.perPage);
 
     var vt = el("div", "ssd-dp-viewtoggle");
     var gBtn = el("button", null, I.grid), lBtn = el("button", null, I.list);
@@ -2443,10 +2467,11 @@
     gBtn.addEventListener("click", function () { _dp.mode = "grid"; dpSetPrefs({ mode: "grid" }); render(); });
     lBtn.addEventListener("click", function () { _dp.mode = "list"; dpSetPrefs({ mode: "list" }); render(); });
     vt.appendChild(gBtn); vt.appendChild(lBtn);
-    bar.appendChild(vt);
+    tools.appendChild(vt);
 
     refs.srcWrap = el("span");
-    bar.appendChild(refs.srcWrap);
+    tools.appendChild(refs.srcWrap);
+    bar.appendChild(tools);
     root.appendChild(bar);
     syncSourceSelect();
 
@@ -2454,8 +2479,26 @@
     refs.content = el("div", "ssd-dp-content");
     root.appendChild(refs.content);
 
+    bindResize();
     ensureData(viewDataKeys(_dp.view));
     render();
+  }
+
+  // 窗口宽度变化 → 总览模块行数重算（trimRows 依赖实际布局宽度）。
+  // 只绑一次；页面卸载后（content 脱离文档）监听自动变空操作。
+  var _resizeBound = false;
+  function bindResize() {
+    if (_resizeBound) return;
+    _resizeBound = true;
+    var t = 0;
+    window.addEventListener("resize", function () {
+      var c = _dp.refs.content;
+      if (!c || !c.isConnected) return;
+      clearTimeout(t);
+      t = setTimeout(function () {
+        if (_dp.refs.content && _dp.refs.content.isConnected && _dp.view === "overview") render();
+      }, 200);
+    });
   }
 
   function switchView(view) {

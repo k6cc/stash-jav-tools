@@ -183,14 +183,27 @@
 - 工作室 tab 窗口默认 180 天（与演员 tab 一致，read from settings
   recentDays/previewDays）；发现页导航页的 30 天回看是独立口径。
 
-## P8 收尾
+## P8 收尾 ✅ 2026-10-23
 
 | # | 任务 | 状态 | 产出 | 验证 |
 |---|---|---|---|---|
-| 8.1 | 全量回归（含窄屏 375px、主题切换） | ⬜ | — | 走查记录 |
-| 8.2 | README 更新 + 设计文档 §12 状态更新 | ⬜ | README.md | — |
-| 8.3 | git 分阶段提交（每 Phase 一个 commit） | ⬜ | git log | — |
+| 8.1 | 全量回归（含窄屏 375px、主题切换） | ✅ | — | 桌面 1550px：8 tab/6 模块默认顺序/15 卡/11 迷你卡/角标"2"/--sx-bg #202B33；emulate 375x812：0 横向溢出、工具栏 3 行 132px |
+| 8.2 | README 更新 + 设计文档 §12 状态更新 | ✅ | README.md（v2.1.0 三新章节+配置行+API 说明）+ discover-page-design.md §12（P0-P8 实施状态摘要） | — |
+| 8.3 | git 分阶段提交（每 Phase 一个 commit） | ✅ | 4 commits：`0b3ca6e` 设计+原型(P3) / `39d796a` 发现页本体(P0-P6) / `42681af` 主JS集成 v2.1.0(P1/P5/P7) / `b6aecf3` 文档(P8) | git log 确认，工作树 clean；同文件跨 Phase 改动按功能归属分组，message 标注 Phase |
+
+> 8.3 说明：discover.js/stashDiscover.js 等单文件的改动跨多个 Phase 且无中间
+> 快照，无法逐 Phase 拆分；采用功能归属分 4 个 commit，每个 message 明确
+> 标注覆盖的 Phase，保留阶段可读性。本地领先 origin/main 4 commits（未推送）。
 
 ## 遗留问题 / 技债
 
-（暂无）
+（无阻塞性技债。以下为已记录的已知行为决策，非遗留 bug：）
+
+- 轮询轻量通道刻意不做库内排除（重查询）；发现页全量管线是 source of
+  truth，打开页面即零成本修正角标（设计决策，见 P5 记录）。
+- 工作室 tab 的「在源上查找」入口由 findEntryVisible 守卫隐藏（findOpen
+  仅能由该入口置位，渲染路径自然失效）——如后续要彻底移除渲染分支可再收。
+- StashDB `studios INCLUDES` 按层级匹配（收藏 Kawaii 命中母厂牌 S1 场景）
+  是 box 侧行为，非插件 bug（P4 记录）。
+- chrome-devtools resize_page 不跨 reload 持久，窄屏验证用 emulate viewport
+  覆盖（测试环境怪癖，与插件无关）。

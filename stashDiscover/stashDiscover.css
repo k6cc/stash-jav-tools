@@ -1080,3 +1080,845 @@
   .ssd-carousel-hero { max-height: 280px; }
   .ssd-action-row .ssd-btn { flex: 1; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * discover.js — "发现"导航页（.ssd-dp-* 前缀）
+ * 主题跟随：颜色一律走 --sx-* token（discover.js 的 suiteTheme() 运行时从
+ * 页面采样派生并写入 .ssd-dp-page/.ssd-nav-item scope），换主题自动重算；
+ * 阴影 alpha 用 --sx-k、方案用 --sx-scheme。卡片类复用 Stash 原生
+ * .scene-card/.grid-card/.performer-card/.studio-card（设计文档 §7，硬性要求）。
+ * 自绘布局遵守 §7.2：窄屏无冲突/截断/重叠，flex-wrap 自动换行。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+.ssd-dp-page,
+.ssd-dp-page *,
+.ssd-dp-page *::before,
+.ssd-dp-page *::after {
+  box-sizing: border-box;
+}
+
+/* ─── 页面根（§3.1）──────────────────────────────────────────────────────── */
+
+.ssd-dp-page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 1rem 4rem;
+  color: var(--sx-tx);
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-height: 60vh;
+}
+
+/* ─── 页头行：标题 + meta chips + 刷新 + 相对时间（§3.1.1）──────────────── */
+
+.ssd-dp-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap; /* §7.2 窄屏换行 */
+  padding-top: 0.5rem;
+}
+
+.ssd-dp-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--sx-hi);
+  margin: 0;
+}
+
+.ssd-dp-title svg {
+  width: 1.15em;
+  height: 1.15em;
+  color: var(--sx-acc);
+}
+
+.ssd-dp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--sx-tx2);
+  background: color-mix(in srgb, var(--sx-ui) 55%, transparent);
+  border: 1px solid var(--sx-line2);
+  white-space: nowrap;
+}
+
+.ssd-dp-chip b { color: var(--sx-tx); font-weight: 600; }
+
+.ssd-dp-head .ssd-dp-refresh {
+  margin-left: auto;
+}
+
+.ssd-dp-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 5px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--sx-line2);
+  border-top-color: var(--sx-ui3);
+  background: linear-gradient(180deg, var(--sx-ui2), var(--sx-ui));
+  color: var(--sx-tx);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, calc(0.5 * var(--sx-k)));
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ssd-dp-refresh:hover { color: var(--sx-hi); border-top-color: var(--sx-edge); }
+.ssd-dp-refresh:disabled { opacity: 0.5; cursor: default; }
+
+.ssd-dp-refresh svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
+@keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
+
+.ssd-dp-updated {
+  font-size: 12px;
+  color: var(--sx-tx3);
+  white-space: nowrap;
+}
+
+/* ─── 滑动开关组（§3.1.2，InsightsI18n .ins-tabs 胶囊风格）───────────────── */
+
+.ssd-dp-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap; /* §7.2 */
+  padding: 4px;
+  border-radius: 11px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-deep);
+  border-bottom-color: var(--sx-ui2);
+  width: fit-content;
+  max-width: 100%;
+}
+
+.ssd-dp-tab {
+  position: relative; /* 角标定位锚 */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 0;
+  color: var(--sx-tx1b);
+  padding: 5px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ssd-dp-tab svg { width: 1em; height: 1em; flex: none; }
+
+.ssd-dp-tab:hover { color: var(--sx-hi); }
+
+.ssd-dp-tab.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 26%, var(--sx-ui2));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 2px rgba(0, 0, 0, calc(0.4 * var(--sx-k)));
+}
+
+/* 关注 tab 未读红点（§6.4） */
+.ssd-dp-tab-dot {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sx-re);
+  box-shadow: 0 0 6px var(--sx-re);
+}
+
+/* 窄屏降级：≤720px 开关组铺满、tab 均分两行（参考 ins-tabs @media） */
+@media (max-width: 720px) {
+  .ssd-dp-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100%;
+  }
+  .ssd-dp-tab { justify-content: center; }
+}
+
+/* ─── 筛选行（§3.1.3）────────────────────────────────────────────────────── */
+
+.ssd-dp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap; /* §7.2 */
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-line2);
+}
+
+.ssd-dp-toolbar input,
+.ssd-dp-toolbar select {
+  background: var(--sx-ui);
+  border: 1px solid var(--sx-line2);
+  color: var(--sx-tx);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.ssd-dp-toolbar input:focus,
+.ssd-dp-toolbar select:focus {
+  outline: 1px solid var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+
+/* ─── 分页开关组（§3.1.4，仅钻取视图）────────────────────────────────────── */
+
+.ssd-dp-pager {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap; /* §7.2 */
+}
+
+.ssd-dp-pg {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--sx-line2);
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ssd-dp-pg:hover:not(:disabled) { color: var(--sx-hi); border-color: var(--sx-edge); }
+.ssd-dp-pg.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 24%, var(--sx-ui2));
+  border-color: var(--sx-acc);
+}
+.ssd-dp-pg:disabled { opacity: 0.4; cursor: default; }
+
+/* ─── 模块段（§3.2 总览）─────────────────────────────────────────────────── */
+
+.ssd-dp-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ssd-dp-sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  flex-wrap: wrap; /* §7.2 */
+}
+
+.ssd-dp-sec-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--sx-hi);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.ssd-dp-sec-title svg { width: 1em; height: 1em; color: var(--sx-acc); }
+
+.ssd-dp-sec-count { font-size: 12px; color: var(--sx-tx2); }
+
+.ssd-dp-sec-more {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: 0;
+  color: var(--sx-acc);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ssd-dp-sec-more:hover { color: var(--sx-hi); background: color-mix(in srgb, var(--sx-acc) 12%, transparent); }
+
+/* 热门/预告并排（§3.2，窄屏自动堆叠） */
+.ssd-dp-duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.1rem;
+}
+
+@media (max-width: 900px) {
+  .ssd-dp-duo { grid-template-columns: 1fr; }
+}
+
+/* ─── 三态组件（§9.0：加载/错误/空）──────────────────────────────────────── */
+
+.ssd-dp-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 3rem 1rem;
+  border-radius: 12px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-line2);
+  color: var(--sx-tx2);
+  font-size: 13px;
+  text-align: center;
+}
+
+.ssd-dp-state svg { width: 26px; height: 26px; color: var(--sx-tx3); }
+
+.ssd-dp-state .ssd-dp-retry {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--sx-re);
+  background: none;
+  color: var(--sx-re-tx);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.ssd-dp-state .ssd-dp-retry:hover { background: color-mix(in srgb, var(--sx-re) 16%, transparent); }
+
+/* 加载动画（四点脉冲） */
+.ssd-dp-loading-dots { display: inline-flex; gap: 5px; }
+.ssd-dp-loading-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sx-tx2);
+  animation: ssd-dp-pulse 1.2s ease-in-out infinite;
+}
+.ssd-dp-loading-dots i:nth-child(2) { animation-delay: 0.15s; }
+.ssd-dp-loading-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ssd-dp-pulse { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+
+/* ─── 导航按钮（P1：MainNavBar 注入项 + 角标，§10）───────────────────────── */
+
+.ssd-nav-item { position: relative; }
+
+.ssd-nav-item .ssd-nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--sx-re);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 0 5px rgba(0, 0, 0, calc(0.5 * var(--sx-k)));
+}
+
+/* ─── P4 视图实现（设计 §3/§7/§8；原型 prototype/index.html 移植 + 扩展）── */
+
+/* 工具栏（§3.1.3 贯穿所有视图；搜索框限宽左对齐 — 用户 2026-10-23 确认）*/
+.ssd-dp-toolbar .grow {
+  flex: 0 1 300px;
+  min-width: 180px;
+  max-width: 320px;
+  padding: 7px 12px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.ssd-dp-toolbar .grow:focus { border-color: var(--sx-acc); }
+.ssd-dp-toolbar .grow::placeholder { color: var(--sx-tx3); }
+
+.ssd-dp-tool-label {
+  color: var(--sx-tx3);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ssd-dp-toolbar select {
+  padding: 7px 8px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+}
+.ssd-dp-toolbar select:focus { border-color: var(--sx-acc); }
+
+/* 网格/列表切换 */
+.ssd-dp-viewtoggle {
+  display: inline-flex;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ssd-dp-viewtoggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--sx-tx3);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ssd-dp-viewtoggle button + button { border-left: 1px solid var(--sx-ui3); }
+.ssd-dp-viewtoggle button:hover { color: var(--sx-tx); }
+.ssd-dp-viewtoggle button.on {
+  background: var(--sx-acc);
+  color: var(--sx-acc-tx);
+}
+.ssd-dp-viewtoggle svg { width: 15px; height: 15px; }
+
+/* 开关组图标 + 设置 tab 独立在右侧 */
+.ssd-dp-tab svg { width: 14px; height: 14px; flex: none; }
+.ssd-dp-tab .ssd-dp-tab-dot { margin-left: 2px; }
+.ssd-dp-tab.set { margin-left: 6px; }
+
+/* 刷新按钮旋转 */
+.ssd-dp-refresh svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
+@keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
+
+/* 模块内场景网格（复用主 JS .ssd-card-grid，仅加纵向间距） */
+.ssd-dp-grid { margin-top: 4px; }
+
+/* 迷你演员卡（§3.2 模块 1/6）*/
+.ssd-dp-grid.mini {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+.ssd-dp-mini {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 10px;
+  background: var(--sx-ui);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.ssd-dp-mini:hover {
+  transform: translateY(-2px);
+  border-color: var(--sx-edge);
+  box-shadow: var(--sx-sh);
+}
+.ssd-dp-mini img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: var(--sx-ui2);
+}
+.ssd-dp-mini-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sx-tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ssd-dp-mini-sub {
+  font-size: 11.5px;
+  color: var(--sx-tx3);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ssd-dp-mini-sub.has-unread { color: var(--sx-re-tx); font-weight: 600; }
+.ssd-dp-mini-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--sx-ui3);
+  color: var(--sx-tx2);
+  white-space: nowrap;
+}
+.ssd-dp-mini-badge.co { background: color-mix(in srgb, var(--sx-bl) 18%, transparent); color: var(--sx-bl-tx); }
+.ssd-dp-mini-badge.hot { background: color-mix(in srgb, var(--sx-or) 18%, transparent); color: var(--sx-or-tx); }
+.ssd-mini-heart {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  color: var(--sx-ma);
+  display: inline-flex;
+}
+.ssd-mini-heart svg { width: 13px; height: 13px; }
+
+/* 场景卡徽标（§3.2/§5）*/
+.ssd-overlay-days {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sx-gr) 85%, black 15%);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.ssd-overlay-inlib {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sx-gr) 20%, transparent);
+  color: var(--sx-gr-tx);
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+}
+/* 关注视图未读红框（§3.4）*/
+.ssd-card-new { outline: 2px solid var(--sx-re); outline-offset: -2px; border-radius: 4px; }
+
+/* 钻取视图（§3.3）*/
+.ssd-dp-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 999px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ssd-dp-crumb:hover { color: var(--sx-tx); border-color: var(--sx-edge); }
+.ssd-dp-crumb svg { width: 14px; height: 14px; }
+
+.ssd-dp-pagerow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.ssd-dp-pcount { color: var(--sx-tx3); font-size: 12px; }
+
+/* 工作室分组入口条（§8.2 进入点）*/
+.ssd-dp-grpstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.ssd-dp-grpchip {
+  padding: 5px 12px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 999px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ssd-dp-grpchip:hover { border-color: var(--sx-acc); color: var(--sx-tx); }
+
+/* 发现演员子切换（§3.5）*/
+.ssd-dp-subtabs { margin-bottom: 14px; }
+
+/* 通用按钮（§8.1/§8.2 按钮区 + 关注视图）*/
+.ssd-dp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.ssd-dp-btn:hover { border-color: var(--sx-edge); background: var(--sx-ui2); color: var(--sx-hi); }
+.ssd-dp-btn svg { width: 13px; height: 13px; }
+.ssd-dp-btn.primary {
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+  color: var(--sx-acc-tx);
+}
+.ssd-dp-btn.primary:hover { background: var(--sx-acc-d); border-color: var(--sx-acc-d); color: var(--sx-acc-tx); }
+.ssd-dp-btn.ghost { background: transparent; }
+.ssd-dp-btn.ghost.danger { color: var(--sx-re-tx); }
+.ssd-dp-btn.ghost.danger:hover { border-color: var(--sx-re); background: color-mix(in srgb, var(--sx-re) 10%, transparent); }
+.ssd-dp-btn.loved { border-color: var(--sx-ma); color: var(--sx-ma-tx); }
+.ssd-dp-btn.ok { border-color: var(--sx-gr); color: var(--sx-gr-tx); pointer-events: none; }
+.ssd-dp-btn.err { border-color: var(--sx-re); color: var(--sx-re-tx); }
+
+/* 演员/工作室过滤视图详情区（§8.1/§8.2）*/
+.ssd-dp-pfhead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 12px;
+  background: var(--sx-ui);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.ssd-dp-pfavatar {
+  width: 88px;
+  height: 88px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex: none;
+  background: var(--sx-ui2);
+}
+.ssd-dp-pfinfo { min-width: 0; flex: 1 1 240px; }
+.ssd-dp-pfname {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--sx-hi);
+  line-height: 1.25;
+}
+.ssd-dp-pfmeta { color: var(--sx-tx2); font-size: 13px; margin-top: 4px; }
+.ssd-dp-pfgender:empty { display: none; }
+.ssd-dp-extbtn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  color: var(--sx-tx2);
+  background: var(--sx-ui2);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.ssd-dp-extbtn:hover { color: var(--sx-acc); border-color: var(--sx-acc); }
+.ssd-dp-extbtn svg { width: 14px; height: 14px; }
+.ssd-dp-pfactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ssd-dp-pfsect {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sx-tx2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 14px 0 8px;
+}
+
+/* 关注视图（§3.4）*/
+.ssd-dp-followbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.ssd-dp-fgrp {
+  border: 1px solid var(--sx-ui3);
+  border-radius: 12px;
+  background: var(--sx-ui);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.ssd-dp-fgrp-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  flex-wrap: wrap;
+}
+.ssd-dp-fgrp-head img {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: var(--sx-ui2);
+}
+.ssd-dp-fgrp-info { min-width: 0; flex: 1 1 200px; }
+.ssd-dp-fgrp-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.ssd-dp-fgrp-body { padding: 4px 14px 14px; }
+
+/* 演员详情弹层（§3.5）*/
+.ssd-dp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+.ssd-dp-modal {
+  position: relative;
+  width: min(760px, 100%);
+  max-height: min(86vh, 900px);
+  overflow-y: auto;
+  padding: 18px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 14px;
+  background: var(--sx-bg2);
+  box-shadow: var(--sx-float);
+}
+.ssd-dp-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sx-tx2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ssd-dp-modal-close:hover { color: var(--sx-tx); background: var(--sx-ui2); }
+.ssd-dp-modal-head { margin-bottom: 12px; padding-right: 36px; }
+.ssd-dp-modal-head .ssd-dp-extbtn { position: static; }
+.ssd-dp-modal-scenes .ssd-dp-state { padding: 18px 0; }
+
+/* 窄屏降级（§7.2：自绘 UI 无冲突/无截断/无重叠）*/
+@media (max-width: 720px) {
+  .ssd-dp-toolbar .grow { flex: 1 1 100%; max-width: none; }
+  .ssd-dp-toolbar { gap: 8px; }
+  .ssd-dp-pfhead { padding: 12px; gap: 12px; }
+  .ssd-dp-pfavatar { width: 64px; height: 64px; }
+  .ssd-dp-pfname { font-size: 17px; }
+  .ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .ssd-dp-fgrp-head { padding: 10px; }
+  .ssd-dp-fgrp-head img { width: 44px; height: 44px; }
+  .ssd-dp-fgrp-body { padding: 2px 10px 10px; }
+  .ssd-dp-modal-overlay { padding: 10px; }
+  .ssd-dp-modal { padding: 14px; }
+}
+
+/* ─── 设置视图（§3.7：通用 / 总览模块开关·行数·排序）──────────────────────── */
+
+.ssd-dp-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 860px;
+}
+.ssd-dp-set-h {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sx-tx1b);
+}
+.ssd-dp-set-box {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 14px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 12px;
+  background: var(--sx-bg2);
+}
+.ssd-dp-setrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap; /* §7.2 窄屏：控件组换行 */
+  padding: 9px 0;
+}
+.ssd-dp-setrow + .ssd-dp-setrow { border-top: 1px solid var(--sx-line); }
+.ssd-dp-setname { font-size: 13px; color: var(--sx-tx); }
+.ssd-dp-settoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--sx-tx);
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.ssd-dp-settoggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--sx-bl);
+  cursor: pointer;
+}
+.ssd-dp-setctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ssd-dp-setsel {
+  padding: 5px 8px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+}
+.ssd-dp-setsel:focus { border-color: var(--sx-acc); }
+.ssd-dp-btn.sm { padding: 4px 9px; font-size: 12px; }
+.ssd-dp-btn:disabled { opacity: 0.38; cursor: default; }
+.ssd-dp-btn.loading { opacity: 0.6; pointer-events: none; }
+
+@media (max-width: 720px) {
+  .ssd-dp-setrow { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .ssd-dp-setctl { align-self: flex-end; }
+}

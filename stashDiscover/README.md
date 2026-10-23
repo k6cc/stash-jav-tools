@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.0.1：「在源上查找 TA」搜索结果行的编号冲突徽章（`已有 <源名>`）改为更淡的灰（0.38 透明度），与「已关联 / 该源无编号」两态拉开层次；关联、覆盖按钮的解释文案收短（语义不变：关联替换该源编号、其余字段与别名补齐；覆盖以源为准覆盖本地，本地独有不删除）
+> v2.1.0：新增「发现」主导航页（库内演员的 stash-box 未拥有新场景聚合 + 关注通知系统）与工作室详情页「发现」tab；原演员页「发现」tab 功能不变。详见下文「发现页」与「工作室页」章节。
 
 在 Stash 演员页面插入「发现」分页，发现该演员在已配置 stash-box 实例中存在、但本地库未拥有的场景。点击场景打开详情弹窗，可浏览封面剧照、加入库、在 stash-box 查看、通过 Jackett 搜索资源并复制磁力链接或推送到下载器。
 
@@ -26,6 +26,30 @@
 - **Jackett 资源搜索**：通过 Jackett Torznab API 搜索（URL 只填根地址即可自动补全），带磁力的结果优先、按做种数排序；默认搜索词自动推断（jav 用番号、欧美用标题），结果区顶部提供可编辑搜索框，支持按场景修正搜索词；点击搜索时弹窗自动滚动露出搜索状态，结果返回后原位替换不再滚动
 - **复制磁力链接** / **推送 qBittorrent 下载**
 - **双语界面** + **响应式设计**
+
+## 发现页（主导航「发现」）
+
+需在设置中开启 `enableDiscoverPage`（默认开启）。导航「发现」按钮聚合**库内演员**在 stash-box 上的未拥有新场景（回看窗口独立于演员 tab：读取 `recentDays`，默认 30 天，0 = 不限）：
+
+- **总览 6 模块**：有新发布的演员（迷你卡）/ 最新发布（每人 cap 2）/ 热门（全站榜）/ 即将发布（预告）/ 工作室新发布（库内收藏工作室，cap 2/工作室）/ 发现演员（共同出演 + 热门演员榜，不在库的演员）
+- **钻取视图**：最新 / 热门 / 预告 / 工作室四个下钻页（面包屑 + 分页 + 搜索 + 排序 + 网格/列表切换）
+- **演员过滤视图**：演员详情头部（头像/元数据/关注按钮/发现 Tab 跳转/主页/StashDB 外链）+ 该演员全部新场景
+- **工作室过滤视图**：工作室分组 chip 条 → 工作室详情（场景列表，角标区分库内/未拥有）
+- **数据源切换**：多源时工具栏可切换当前数据源（单源视角，与演员 tab 的多源合并互补）
+- **主题跟随**：从当前页面采样派生设计 token，深色/浅色/自定义 CSS 主题自动适配；375px 窄屏适配
+- **卡片复用**：与演员 tab 同一套场景卡（封面角标/悬停 popover/详情弹窗/加入库/Jackett），新场景带未读红框，点击即标记已读
+
+## 关注通知系统
+
+- **关注演员**：演员卡 ♥ / 演员弹层 / 演员过滤视图一键关注，新作品进「关注」视图分组展示
+- **收藏导入**：「关注」视图与设置中可从库内收藏（❤）演员一键导入（仅导入有 stash-box 关联的）
+- **未读提醒**：新场景红框 + 关注 tab 红点 + 导航「发现」按钮角标（未读数）；已读标记 7 天过期
+- **后台轮询**：打开 Stash 即检查关注演员新作品（每 6 小时至多一次，只查关注列表，轻量）；打开发现页时全量管线零成本修正角标
+- **免打扰**：设置中可关闭「关注的演员新发布提醒」（跳过轮询 + 隐藏角标）
+
+## 工作室页「发现」tab
+
+工作室详情页（`/studios/{id}`）注入与演员页同构的「发现」tab：该工作室（含 stash-box 层级匹配的母厂牌）在所有已配置 stash-box 的未拥有场景，多源合并，时间窗口与演员 tab 一致；「在源上查找」为演员专属功能，工作室 tab 不显示。
 
 ## 安装
 
@@ -56,12 +80,13 @@
 | Downloader Username | STRING | — | qBittorrent 用户名 |
 | Downloader Password | STRING | — | qBittorrent 密码 |
 | Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空=查询所有 |
+| Enable Discover Page | BOOLEAN | true | 主导航「发现」页 + 关注通知系统 + 工作室「发现」tab 的总开关 |
 
 ## stash-box API 说明
 
 本插件的 stash-box 调用约定：
 
-- **场景列表**：`queryScenes(input:{performers:{value:[id],modifier:INCLUDES},sort:DATE,direction:DESC,page,per_page})`
+- **场景列表**：`queryScenes(input:{performers:{value:[id],modifier:INCLUDES},sort:DATE,direction:DESC,page,per_page})`；工作室侧用 `studios:{value:[id],modifier:INCLUDES}`（stash-box 按层级匹配，含母厂牌）
 - **场景图片**：`images[{url}]`（封面 + 剧照的扁平数组，非 front_cover/back_cover/screenshots）
 - **场景详情**：`findScene(id)` 获取完整字段（director、production_date、urls.site 等）
 - **Web 链接**：`new URL(endpoint).origin + "/scenes/" + id`

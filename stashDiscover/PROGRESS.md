@@ -1,0 +1,196 @@
+# discover.js 实施进度（断点续传文件）
+
+> 规则：每完成一个子任务立即更新本文件状态列（⬜ 待做 / 🔄 进行中 / ✅ 完成 / ⚠️ 完成但有遗留）。中断后从最后一个非 ⬜ 行继续，不依赖对话记忆。
+> 设计规范唯一事实源：`discover-page-design.md`（356 行 13 节）。代码现状：主 JS/yml 骨架已改（`window.SSD` + `maybeLoadDiscover`），未提交。
+
+## P0 地基
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 0.1 | 创建 PROGRESS.md | ✅ | 本文件 | — |
+| 0.2 | 移植 suiteTheme() 到 discover.js（scope 限插件根选择器，Flexoki 检测保留） | ✅ | discover.js | node --check 通过 |
+| 0.3 | CSS 骨架：.ssd-dp-page 根 + 开关组/筛选行/模块段基础类 + 窄屏 @media 降级 | ✅ | stashDiscover.css（1082→1432 行） | 追加段落完成 |
+
+## P1 入口 ✅ 2026-10-23 浏览器全项验证通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 1.1 | MainNavBar patch：faSatelliteDish 图标 + "发现" + 角标容器 | ✅ | **stashDiscover.js** 顶层 registerDiscoverEntry()（导航注册从 discover.js 迁移至此，见下方重构说明） | 导航出现、图标正常、locale 中文 |
+| 1.2 | register.route(/plugins/stashDiscover) + React 壳 + ref 挂载 vanilla | ✅ | 主 JS DiscoverRouteShell（壳）+ discover.js DiscoverPage/mountPage（内容） | 直接 URL 与 SPA 导航均渲染 7 tabs |
+| 1.3 | suiteTheme scope 扩展到导航角标元素 | ✅ | discover.js THEME scope ".ssd-dp-page, .ssd-nav-item" | Flexoki 启用时 --sx-bg=#100F0F 精确值，默认主题采样 dark |
+
+### 2026-10-23 P1 验证中发现并修复的 4 个问题
+
+1. **yml `default: true` 导致插件加载失败**（Stash SettingConfig 无 default 字段，
+   14:35 起日志持续报 unmarshal error）→ 删除该字段，JS 侧已有"缺失视为开"兜底。
+2. **discover.js URL 404**：Stash 只服务 yml 声明过的文件 → yml 加 `ui.assets:
+   { /: . }`（tagMerge/oStats 先例），URL 改为 `/plugin/{id}/assets/discover.js`
+   （MIME text/javascript 验证通过）。
+3. **注册时序竞态**：discover.js 经"设置查询→注入"比其他插件晚一个网络往返，
+   MainNavBar/Router 首渲染后 patch 不生效（间歇性导航/页面丢失）→ **重构**：
+   导航 patch + 路由壳移到主 JS 顶层同步注册（LockdownI18n 同款可靠波次），
+   discover.js 只经 `SSD.discoverMount` + "ssd:discover-ready" 提供页面组件；
+   开关同步读 localStorage 缓存（key `SSD:discoverOn`），异步设置查询负责校正
+   （关闭→"ssd:discover-disabled" 事件隐藏入口；下次加载零注册零注入，已验证）。
+4. **locale 时序**：导航首渲染早于 IntlBridge 填 _intlLocale，显示英文 →
+   IntlBridge 变更时派发 "ssd:locale-changed"（setTimeout(0) 避免监听器未挂），
+   导航项监听后重渲染（中文「发现」验证通过）。
+
+## P2 数据管线 ✅ 2026-10-23 浏览器全项验证通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 2.1 | 演员侧管线：本地有关联演员查询 → 分批 queryScenes（100/批、date 窗口、performers INCLUDES、懒分页） | ✅ | discover.js L255-435 | SSD.dp.getDiscoverData()：16 关联演员、1.7s、latest 4 + preview 1 |
+| 2.2 | 筛选与 cap：排除已拥有（stash_id+code 双键）、code 跨源去重、每人上限 2 | ✅ | discover.js filterPipeline L643 | latest 4 = ≥2 演员 × cap2；actorsWithNew 3 组按量排序 |
+| 2.3 | SWR 缓存层：localStorage 按源 host+参数分键，进页先渲染缓存再静默刷新 | ✅ | discover.js L545-760 | 二次调用 fromCache="fresh" 仅 7ms；5 个缓存键（local/trending/trendingPerf/studios/newScenes .v1） |
+| 2.4 | 热门榜：TRENDING sort 全站原样（含库内演员角标标记） | ✅ | discover.js L819-855 | getTrendingData() 30 条真实数据；getTrendingPerformers() 24 人全 FEMALE（性别过滤生效）、二调 fresh |
+| 2.5 | 工作室管线：收藏(❤)工作室 → studios INCLUDES 单查询（cap 2/工作室） | ✅ | discover.js L857-934 | 临时收藏 S1：组内 12 场景（分组不受限）、总览 capped 4（2 工作室 × cap2）✓ 已还原 |
+
+### 2026-10-23 P2 验证记录与修复
+
+- 验证方式：Chrome DevTools MCP 控制台直调 `SSD.dp.*` 四入口（pageId=2，
+  http://localhost:9999/plugins/stashDiscover）。
+- recentDays 默认值 30 符合设计文档 §4.2（"回看 30 天"）；用户当前未设置
+  recentDays/previewDays（仅 enableDiscoverPage:true），previewDays 回退 7 正确。
+- 工作室端到端验证：测试期间用户真实收藏了 Kawaii（stashdb 关联）+ 测试临时
+  收藏 S1 → studioCount=2、groups=2（S1 12 + Kawaii 6 场景）、cappedItems=4，
+  cap 逻辑与"分组计数不受限、总览 cap2"均符合 §4.6。S1 已还原为未收藏。
+- **发现并修复：refreshAll() 不失效本地 memo** —— 收藏工作室后会话内点刷新
+  仍读到旧 memo（空收藏）→ refreshAll 现在同时调 invalidateLocalMemos()。
+- 控制台干净（仅 Stash 自身 manifest 图标警告，与插件无关）。
+- 工作副本与实装目录（E:\stashAPP\plugins\k6cc\stashDiscover\）已同步，
+  node --check 通过（52,998+ 字节）。
+
+## P3 UI 设计稿 ✅ 2026-10-23 用户确认通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 3.1 | v0 原型：顶部开关组/筛选行/总览 6 模块/演员过滤视图，明暗双主题模拟 | ✅ | prototype/index.html（单文件，856 行） | 用户过目通过；自动化验证：三主题 token 跟随（Stash 深色/浅色/Flexoki 精确值）、1440px 与窄屏（tabs 4 列网格降级、无横向滚动、duo 堆叠、零溢出元素）、18/18 占位图加载 |
+
+### 2026-10-23 P3 原型说明
+
+- 类名/token 与实际实现完全一致：.ssd-dp-*（stashDiscover.css P0.3 骨架）+
+  --sx-*（discover.js suiteTheme 输出），P4 实施时零翻译成本。
+- 右下角悬浮主题切换器为原型专用（真实插件由 Stash 当前主题自动驱动采样）。
+- 占位图：图片 API 需鉴权浏览器不可达（code 1001），改用程序化 SVG 数据 URI
+  （真实插件用 stash-box 场景封面/演员头像真实 URL）。
+- 场景卡为 Stash 原生结构 1:1（.scene-card.grid-card.card 系 + studio-overlay
+  + scene-specs-overlay + card-popovers），含 ssd-overlay-box/preview/days 徽标。
+- 总览 6 模块齐全：迷你演员卡（含关注♥、角标）/最新（2 行）/热门∥即将发布
+  并排（含"N 天后上映"绿标）/工作室新发布（cap 2）/发现演员（共同出演∥热门榜）。
+
+## P4 视图实现 ✅ 2026-10-23 浏览器全项验证通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 4.1 | 顶部控制区：标题+meta chips+刷新+相对时间；滑动开关组；筛选行；分页组 | ✅ | discover.js L999+ renderChrome + css | 8 tab、搜索框限宽 300px/maxw 320 左对齐、375px 满宽换行 3 行无溢出 |
+| 4.2 | 总览 6 模块 + 模块头部（标题/统计/查看更多）+ 行数设置生效 | ✅ | renderOverview | 6 模块、15 卡、11 迷你卡、chips（5 新场景/16 关联演员/StashDB）、"56 分钟前"相对时间 |
+| 4.3 | 钻取视图：最新/热门/预告/工作室（分页+筛选+返回总览） | ✅ | renderDrill | 最新：面包屑+4 卡（cap2）+"第 1 / 1 页 · 共 4 部"+列表模式表格；热门 24 卡+分页器；预告"13 天后上映"绿标；工作室分组 chip |
+| 4.4 | 演员过滤视图（§8.1 详情区+按钮区+场景区，复用挂载） | ✅ | renderPerfFilter + openPerfModal | Rei Kamiki 4 按钮（♡关注/发现Tab/主页/StashDB↗）、异步补全"女 · 26 岁"、分组场景不受 cap |
+| 4.5 | 工作室过滤视图（§8.2 同构） | ✅ | renderStudioFilter + grpstrip | chip"S1 · 12"/"Kawaii · 6"、S1 详情 12 卡、Kawaii localId=69 正常 |
+| 4.6 | 发现演员：共同出演+热门演员榜双源、详情弹层、入库链路 | ✅ | renderPerformers + openPerfModal | 共同出演 0 张（正确：窗口内 5 位出演者全在库）、热门榜 23 张带 #1-#3 排名角标、弹层 ~4s 懒加载性别+6 相关场景 |
+| 4.7 | 关注视图：分组+已读标记+全部已读+空状态 | ✅ | renderFollow + follow/read store 桩 | toggle 后未读=2、红框卡 2 张、tab 红点、全部已读后未读=0 红点消失 |
+
+### 2026-10-23 P4 验证记录与修复
+
+- **发现并修复：壳/discover-ready 竞态**（375px+ignoreCache 硬刷新后页面壳卡
+  loading）——React passive effect 在 commit 后才运行，discover.js 的
+  "ssd:discover-ready" 事件在监听器挂载前派发即丢失。修复：壳内加 200ms
+  安全轮询直接检查 `SSD.discoverMount` 标志（不依赖事件），~20s 未到达降级
+  为错误提示+重试按钮（`injectDiscoverScript(force)` 带缓存穿透参数）。
+  修复后 375px+ignoreCache 完整复现条件下验证通过（8 tab/16 卡/无溢出）。
+- **StashDB 行为记录（非 bug）**：`studios INCLUDES` 过滤器按层级匹配——
+  收藏 Kawaii 会命中母厂牌 S1 的场景（S1 不在本地库所以只有 stash-box 按钮，
+  属正确行为）。顺手加 stash_id 键两侧 toLowerCase 归一化防御。
+- 375px 走查：媒体查询生效（搜索框 `flex:1 1 100% / maxw:none` 满宽、
+  工具栏 3 行 132px）、0 横向溢出；桌面 1550px 恢复单行 48px、搜索框
+  300px 左对齐。注意：resize_page 在 reload 后不保持，窄屏验证需用
+  emulate viewport 覆盖（跨导航持久）。
+- 主题 token 采样验证：#202B33/#3991C8/dark（默认主题跟随）。
+- 三文件（stashDiscover.js / discover.js / stashDiscover.css）已 node --check
+  并同步至实装目录。
+
+### P4 实施要点（含用户确认的偏好）
+
+- **搜索输入框限宽**（用户 2026-10-23 确认）：`flex: 0 1 300px; min-width:
+  180px; max-width: 320px`，左对齐，不横向铺满——原型 .ssd-dp-toolbar .grow
+  已改，实现时照搬；其余细节后续可调。
+- 原型（prototype/index.html）为视觉唯一参考：类名 .ssd-dp-* 与
+  stashDiscover.css P0.3 骨架一致；原型中新增而骨架缺失的类（.ssd-dp-grid/
+  .ssd-dp-mini 系/.ssd-dp-viewtoggle/.grow/.ssd-overlay-days/.ssd-mini-heart/
+  .ssd-mini-src 等）需移植进 stashDiscover.css。
+- 场景卡必须用主 JS 的 SSD.buildSceneCard（原生结构 1:1），不得另写卡片。
+- 4.7 关注视图的数据层（关注列表+已读态 localStorage）由 P5.1 提供——P4 先
+  以最小 store 桩实现渲染，P5 补轮询与导入。
+
+## P5 关注系统 ✅ 2026-10-23 浏览器全项验证通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 5.1 | 关注列表 localStorage + 收藏(❤)一键导入 | ✅ | discover.js importFavoritesFromLibrary + makeImportButton（followbar+空状态） | 控制台导入 5/5（skipped 0/noId 0）、关注 1→6 人、视图 6 分组"2 部未读" |
+| 5.2 | 轮询：主 JS 端打开 Stash 触发+6h 节流，只查关注列表 | ✅ | stashDiscover.js dpPollFollowed（§6.4 块） | 刷新后 poll.v1/unread.v1 自动写入；二次刷新 lastAt 不变（节流生效）；每 endpoint 单查询（performers INCLUDES 分组） |
+| 5.3 | 导航角标：React 状态+CustomEvent 同步，有角标点击落关注视图 | ✅ | 主 JS DiscoverNavItem（缓存初值+muted+notify-changed）+ discover.js emitUnread 持久化 | 角标"2"出现→notify="0"消失→"1"恢复；follow tab 红点同步；unread-changed 事件全链路 |
+
+### 2026-10-23 P5 验证记录与修复
+
+- **发现并修复：陈旧闭包 bump**——`lc[1](lc[0] + 1)` 捕获 mount 时 state，
+  第二次触发起 setState 相同值被 React bail out（页面加载时 locale-changed
+  必然已触发过一次，后续 notify-changed 全部无效）。两处（导航 lc bump、
+  壳重试按钮 att bump）改为函数式更新 `s[1](function(v){return v+1;})`。
+- 轮询口径 = 关注演员×场景对（与页内 computeUnread/renderFollow 一致），
+  刻意不做库内排除（重）；页内全量管线是 source of truth，打开发现页零成本
+  修正。单 box 失败保留缓存计数（下轮重试）；轻量通道只取第一页 100 条。
+- muted 开关（`SSD:dp:notify`="0"）P5 已生效（跳过轮询+隐藏角标），
+  P6 设置弹窗补 UI 写入该 key 并 dispatch "ssd:notify-changed"。
+- 导入的 5 位关注演员为用户库内真实 ❤ 收藏（验证时导入，语义正确已保留）。
+
+## P6 设置弹窗 ✅ 2026-10-23 浏览器全项验证通过
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 6.1 | 模块开关/排序/行数 1-3/查询源/通知开关（localStorage） | ✅ | discover.js renderSettings + renderOverview 模块化 + css .ssd-dp-set-* | 详见下方记录 |
+
+### 2026-10-23 P6 验证记录
+
+- 设置视图结构：通用（查询源 3 源下拉/通知开关/从收藏导入）+ 总览模块
+  （6 行开关×行数×上移下移）+ 恢复默认 = 9 行 7 开关 7 下拉 12 排序按钮。
+- 模块开关：隐藏"工作室新发布" → prefs.modules.studios=false → 总览 5 模块。
+- 行数：latest 2→1 写入 prefs.rows。排序：发现演员 ↑ → order 数组与总览
+  顺序同步变化。恢复默认：prefs 清空、顺序回默认 6 模块。
+- 通知开关：checkbox ↔ `SSD:dp:notify` "0"/"1" + "ssd:notify-changed" →
+  导航角标即时隐藏/恢复（P5 链路复验）。
+- 查询源：切换 → prefs.source 写入 + 全数据集重载；切回正常。回显修正：
+  数据未就绪时用 prefs.source 回显（不跳回第一项）。
+- renderOverview 重构为模块渲染函数表 + order 遍历；trending/preview 相邻
+  时仍并排（duo），被排序拆开则各自全宽。prefs.order/moduleOrder 防御性
+  归一（补缺失/滤未知 id）。
+- 全程无横向溢出；硬刷新回归通过（8 tab + 设置结构完整）。
+
+## P7 工作室详情页 tab
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 7.1 | 主 JS ensureTabInjected 扩展 /studios/ 路径，注入同构"发现"tab（多源合并） | ✅ | stashDiscover.js（entityType 分支：isStudioPage/getStudioIdFromUrl/loadLocalStudio/loadLocalSceneKeys 参数化/fetchBoxPage studios INCLUDES/文案区分/findEntryVisible 守卫） | Kawaii(/studios/69)：tab 注入(.studio-tabs 命中)、31 卡+分页行+工具栏、无错误态、"在源上查找"按预期隐藏；演员页回归通过（Rei Kamiki 7 卡） |
+
+### 2026-10-23 P7 实施说明
+
+- 复用演员 tab 全套管线（_state + renderTabContent + 窗口过滤/库内排除/
+  分页/搜索/排序），仅按 `_state.entityType` 切换：实体加载
+  （loadLocalStudio）、box 查询 filter（studios INCLUDES，stash-box 层级
+  匹配含母厂牌）、no-ids/未找到/preferredFallback 文案、演员专属
+  "在源上查找"入口隐藏（findEntryVisible 首行守卫，两处 buildFindBlock
+  渲染点因 findOpen 只能由入口置位而自然失效）。
+- 工作室 tab 窗口默认 180 天（与演员 tab 一致，read from settings
+  recentDays/previewDays）；发现页导航页的 30 天回看是独立口径。
+
+## P8 收尾
+
+| # | 任务 | 状态 | 产出 | 验证 |
+|---|---|---|---|---|
+| 8.1 | 全量回归（含窄屏 375px、主题切换） | ⬜ | — | 走查记录 |
+| 8.2 | README 更新 + 设计文档 §12 状态更新 | ⬜ | README.md | — |
+| 8.3 | git 分阶段提交（每 Phase 一个 commit） | ⬜ | git log | — |
+
+## 遗留问题 / 技债
+
+（暂无）

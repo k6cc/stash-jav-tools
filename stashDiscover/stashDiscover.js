@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.1.0";
+  var PLUGIN_VERSION = "2.1.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -4829,7 +4829,11 @@
     if (_discoverInjected && !force) return;
     _discoverInjected = true;
     var s = document.createElement("script");
-    s.src = "/plugin/" + PLUGIN_ID + "/assets/discover.js" + (force ? "?retry=" + Date.now() : "");
+    // assets 端点不带缓存头（/javascript、/css 端点是 no-cache+ETag，每次刷新
+    // 都会 revalidate），无版本参数的 URL 会被浏览器启发式缓存——插件更新后
+    // 用户看到的还是旧 discover.js（2026-10-25 实测踩坑）。时间戳参数强制
+    // 每次文档加载都拉新，与 ui.* 文件的 no-cache 语义对齐。
+    s.src = "/plugin/" + PLUGIN_ID + "/assets/discover.js?t=" + Date.now();
     s.onerror = function () {
       console.warn("[SSD] discover.js failed to load — check the plugin directory");
     };

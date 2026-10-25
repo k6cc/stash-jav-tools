@@ -246,3 +246,19 @@
 - R1-R8 全项 DOM 度量通过（见上表）；duo 1550px 两列 731+731px、
   0 溢出，热门 trim 后 3 卡 1 行；全页 overflowX=0（双宽度）。
 - node --check 通过，工作副本与实装目录已同步（discover.js + stashDiscover.css）。
+
+### R9 缓存踩坑修复（用户反馈：演员详情区和按钮区"好像没修复"）
+
+- **根因**：discover.js 走 assets 端点（`/plugin/{id}/assets/`——无
+  Cache-Control/ETag，仅 Last-Modified）→ 浏览器启发式缓存持续命中旧文件；
+  主 JS/CSS 走 `/javascript`、`/css` 专用端点（no-cache + ETag，每次刷新
+  revalidate）→ CSS 修复（R1-R5）正常生效，discover.js 修复（R6/R7/R8
+  恰好全在此文件）被缓存吞掉。验证浏览器是全新实例（空缓存）所以看到新版。
+- **修复**：injectDiscoverScript 注入 URL 加 `?t=` + Date.now()，强制每次
+  文档加载拉新，与 ui.* 端点的 no-cache 语义对齐；版本 bump 2.1.1
+  （yml + PLUGIN_VERSION）。
+- **验证**：服务器响应头确认（ui 端点 no-cache+ETag vs assets 端点无缓存头；
+  assets 响应含 pfalias 新代码）；刷新后 `discover.js?t=...` 全新网络拉取
+  （transferSize 38028，非缓存命中），页面 7 模块挂载、0 溢出。
+- **用户侧**：普通刷新（F5）即可——主 JS 走 no-cache 端点必然更新，新主 JS
+  注入带时间戳 URL 后 discover.js 必然重新拉取。

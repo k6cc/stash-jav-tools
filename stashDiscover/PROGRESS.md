@@ -313,3 +313,22 @@
 - 375px：国旗 16×11、头像 64×96、0 横向溢出。
 - node --check 通过；discover.js + stashDiscover.css 已同步实装目录
   （stashDiscover.js 本轮无改动）；测试写入偏好已复位（perfSrc=co, latestSub=new）。
+
+## 2026-10-25 第五轮（用户需求 4 项：外部演员弹窗修复）
+
+| # | 需求（用户 2026-10-25） | 实现 | 验证 |
+|---|---|---|---|
+| R1 | "外部演员的弹窗没有关闭按钮" | 根因 = .ssd-dp-modal overflow-y:auto 为滚动容器，close 按钮position:absolute 随内容滚动滚出视野（内容超 86vh 一滚就消失）。修复 = 内层滚动：modal 改 flex column + 新增 .ssd-dp-modal-body（overflow-y:auto, padding 18px/窄屏 14px），close 悬浮 modal 右上（z-index:2 + ui 底色替代透明） | 滚动到底后 close.top 74→74 完全固定；可见底色 rgb(48,64,77)；375px 同样固定可视 |
+| R2 | "stash-box打开依然是右上箭头，不是外链图标" | acts 区 boxBtn 由 `品牌名 + " ↗"` 文字箭头改 `品牌名 + I.ext` SVG 外链图标（flex gap 6px 自动间距，13px svg） | boxBtn = 文本"JAVStash" + svg 13px，无 ↗ 字符 |
+| R3 | "加入库之后还会显示加入库，点击提示加入失败" | 根因 = 重开弹窗不做在库预检，performerCreate 重复 stash_id 报错。修复 = ①打开弹窗 loadLinkedPerformers 预检：stash_id 已在库 → 直接「已加入 ✓」禁用；②失败分支先失效 memo 复查本地库，已存在 → 显示已加入（并刷新数据集）而非「加入失败」；markAdded/markFailed 收敛为函数 | みなと羽琉（已入库）开弹窗即「已加入 ✓」disabled；木村愛心/miru 显示「＋ 加入库」；实测加入流程 加入中…→已加入✓→重开仍「已加入 ✓」disabled |
+| R4 | "已加入和加入失败的文字依然是和底色相近，不好阅读" | .ssd-dp-btn.ok/.err 由描边+浅色文字（gr-tx/re-tx）改实底白字：ok=绿底 var(--sx-gr)+#fff，err=红底 var(--sx-re)+#fff | ok 实测 bg rgb(135,154,57) + color rgb(255,255,255)，高对比 |
+
+### 走查记录（1440 / 375px，已登录，ignoreCache 刷新后新代码）
+
+- 弹窗结构 = close + modal-body（head/acts/scenes 全在 body 内），滚动只发生在
+  body 层，close 与 modal 定位解耦。
+- co 列表 12 卡逐个抽验：在库演员（みなと羽琉）预检即显已加入；未入库演员
+  可正常加入，成功后绿底白字「已加入 ✓」，重开不再重复创建。
+- 375px：body padding 14px、close 固定可视、0 横向溢出。
+- node --check 通过；discover.js + stashDiscover.css 已同步实装目录；
+  测试写入偏好已复位（木村愛心入库为流程验证产物，属功能预期数据）。

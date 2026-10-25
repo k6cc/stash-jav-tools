@@ -1892,6 +1892,10 @@
     close.type = "button";
     close.addEventListener("click", closePerfModal);
     m.appendChild(close);
+    // 内容装进内层滚动容器：close 悬浮在 modal 右上角不随内容滚动
+    // （用户 2026-10-25 第五轮：弹窗内容一滚关闭按钮就消失）
+    var body = el("div", "ssd-dp-modal-body");
+    m.appendChild(body);
 
     // 头部：共享演员详情模块（与演员过滤视图同构 — 用户 2026-10-25）
     // 统计行走详情区 info 列（第四轮：不放按钮区下面）
@@ -1899,12 +1903,24 @@
       ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
       : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
     var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true, stat: statText });
-    m.appendChild(h.head);
+    body.appendChild(h.head);
 
     // 按钮区：加入库（performerCreate + stash_ids 回链）
     var acts = el("div", "ssd-dp-pfactions");
     var addBtn = el("button", "ssd-dp-btn primary", tc("＋ 加入库", "＋ Add to library"));
     addBtn.type = "button";
+    function markAdded() {
+      addBtn.disabled = true;
+      addBtn.textContent = tc("已加入 ✓", "Added ✓");
+      addBtn.classList.remove("err");
+      addBtn.classList.add("ok");
+    }
+    function markFailed() {
+      addBtn.disabled = false;
+      addBtn.textContent = tc("加入失败，重试", "Failed — retry");
+      addBtn.classList.remove("ok");
+      addBtn.classList.add("err");
+    }
     addBtn.addEventListener("click", function () {
       if (addBtn.disabled) return;
       addBtn.disabled = true;
@@ -1915,32 +1931,44 @@
       ).then(function (r) {
         var created = r && r.performerCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "empty result"));
-        addBtn.textContent = tc("已加入 ✓", "Added ✓");
-        addBtn.classList.add("ok");
+        markAdded();
         invalidateLocalMemos();
         _dp.d.latest = null; _dp.d.studios = null;
         setTimeout(function () { ensureData(["latest", "studios"]); }, 400);
       }).catch(function (e) {
         console.error("[SSD] performerCreate failed:", e);
-        addBtn.disabled = false;
-        addBtn.textContent = tc("加入失败，重试", "Failed — retry");
-        addBtn.classList.add("err");
+        // 失败先复查本地库：stash_id 已存在（此前加入过）→ 显示已加入而非报错
+        // （用户 2026-10-25 第五轮：重复加入报"加入失败"）
+        invalidateLocalMemos();
+        loadLinkedPerformers(endpoint).then(function (linked) {
+          var already = linked.some(function (lp) { return String(lp.stashId) === String(p.stashId); });
+          if (already) { markAdded(); invalidateLocalMemos(); _dp.d.latest = null; _dp.d.studios = null; return; }
+          markFailed();
+        }).catch(function () { markFailed(); });
       });
     });
+    // 预检：该 stash_id 已在本地库 → 直接显示已加入，避免重复创建报错
+    // （用户 2026-10-25 第五轮：加入后重开弹窗仍显示"加入库"）
+    loadLinkedPerformers(endpoint).then(function (linked) {
+      if (!addBtn.isConnected || addBtn.disabled) return;
+      var already = linked.some(function (lp) { return String(lp.stashId) === String(p.stashId); });
+      if (already) markAdded();
+    }).catch(function () {});
     acts.appendChild(addBtn);
-    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + " ↗");
+    // 源按钮：外链图标（与详情区右上角一致，弃 ↗ 文字箭头 — 用户 2026-10-25 第五轮）
+    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + I.ext);
     boxBtn.href = SSD.boxWebBase(endpoint) + "/performers/" + p.stashId;
     boxBtn.target = "_blank";
     boxBtn.rel = "noopener noreferrer";
     acts.appendChild(boxBtn);
-    m.appendChild(acts);
+    body.appendChild(acts);
 
     // 相关场景
     var sc = el("div", "ssd-dp-modal-scenes");
     sc.appendChild(el("h4", "ssd-dp-pfsect", tc("相关场景", "Related scenes")));
     var scBody = el("div");
     sc.appendChild(scBody);
-    m.appendChild(sc);
+    body.appendChild(sc);
 
     overlay.appendChild(m);
     document.body.appendChild(overlay);

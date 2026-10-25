@@ -20,6 +20,7 @@
 | 等新场景入库 | `stash_client.Stash.wait_for_scene` | `s.wait_for_scene(q="TST-", timeout=120, interval=5)` |
 | 销毁单场景（blob 锁拦时重试 2-3 次） | `stash_client.Stash.destroy_scene` | `s.destroy_scene("225")` |
 | **测试收尾清 DB 孤儿**（files + scenes_files + images_files + image_files + files_fingerprints + 孤儿 image） | `db_cleanup.py` | `python db_cleanup.py --prefix TST- --dry-run` → 确认清单 → 去掉 `--dry-run` 真跑（自动停/启 Stash） |
+| 生成论坛帖截图（演员/场景/工作室自动匿名化） | `screenshots/scenarios/*.mjs` | 先 `stash-testkit\screenshots\launch-chrome.bat`，`node stash-testkit/screenshots/scenarios/stashdiscover-discover-page.mjs`；输出落 `docs/`，规则见 `screenshots/NOTES.md` |
 | 测新场景入库类插件（nfo / javstashAF+ / sceneGallerySync） | 流程：gen_test_video → 放同名 .nfo/-cover.jpg → trigger_scan → wait_for_scene → 给 hook 留延迟（javstashAF+ 默认 20s）→ 验证 → db_cleanup | 见 `README.md` 测试生命周期 |
 | 测演员解析类插件（performerCreate 钩子） | 直接 `performerCreate` mutation，不用视频 | 骨架见 `README.md` E2E 节；用例见 `tests/javstashAutofill/test_e2e.py` |
 | 测 tagCreate 失败兜底（nfoSceneParser） | `tests/nfoSceneParser/test_tag_create_fallback.py` | `python tests/nfoSceneParser/test_tag_create_fallback.py offline <插件目录>` |

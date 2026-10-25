@@ -344,12 +344,12 @@
 
 ## 12. 实施状态（2026-10-23，P0-P8 全部完成）
 
-**全部已实施并经浏览器验证**（详见 `PROGRESS.md` 各 Phase 验证记录）：
+**全部已实施并经浏览器验证**（各 Phase 验证记录见 git 历史中的 PROGRESS.md）：
 
 - **P0 地基**：suiteTheme 移植（scope `.ssd-dp-page, .ssd-nav-item`）+ CSS 骨架。
 - **P1 入口**：主 JS 顶层同步注册导航 + 路由壳（规避注册时序竞态），discover.js 经 `SSD.discoverMount` + `"ssd:discover-ready"` 提供页面组件；壳内 200ms 安全轮询兜底事件丢失（React passive effect 时序），~20s 超时降级重试。locale 经 `"ssd:locale-changed"` 事件重渲染。
 - **P2 数据管线**：演员/热门/工作室三管线 + localStorage SWR 缓存（`refreshAll` 同时失效本地 memo）。
-- **P3 原型**：`prototype/index.html`（类名/token 与实现一致，P4 零翻译成本）。
+- **P3 原型**：单文件 HTML 原型（类名/token 与实现一致，P4 零翻译成本；快照见 git 历史）。
 - **P4 视图**：总览 6 模块 + 4 钻取 + 演员/工作室过滤视图 + 发现演员 + 关注视图。搜索框限宽 300px/max 320 左对齐（用户确认），375px 满宽降级。
 - **P5 关注系统**：收藏一键导入、主 JS 轮询（打开 Stash 触发、6h 节流、只查关注列表、每 endpoint 单查询、performer×scene 口径不做库内排除——页内全量管线修正）、导航角标 React 状态 + CustomEvent 同步（bump 必须函数式更新防陈旧闭包 bail out）、免打扰。
 - **P6 设置**：renderOverview 模块化（MODULE_DEFS + order 防御性归一 + 模块渲染函数表，trending/preview 相邻时 duo 并排）；设置 9 行（查询源/通知/导入 + 6 模块开关×行数×排序 + 恢复默认）。

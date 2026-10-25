@@ -14,6 +14,7 @@ stash-testkit/
 ├── stash_client.py         # 通用 GraphQL 客户端（场景生命周期 / 扫描 / 轮询）
 ├── gen_test_video.py       # ffmpeg 生成内容唯一测试视频（避 oshash 合并）
 ├── db_cleanup.py           # 测试后 DB 孤儿清理（停实例→SQL→重启，自动级联）
+├── screenshots/            # Stash UI 截图链路（CDP + 登录 + 占位符匿名化，产出论坛帖配图）
 ├── tests/
 │   ├── sceneTranslateAuto/  # 插件特定验证脚本
 │   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
@@ -92,6 +93,8 @@ stash-testkit/
 - **用 CDP 驱动 Chrome 必须带 `--remote-allow-origins=*`**，否则 WebSocket 握手 403；`browser-automation-cdp` 技能的 `start_chrome.py` 已内建该参数，手动启动浏览器时别漏。额外 flag 用它的 `--extra` 透传。
 - **浏览器里测 Stash 流要同源注入**：Stash 流端点无 CORS 头，跨域 `fetch` 必失败；先 `open` 到 `http://127.0.0.1:9999/login` 这类同源页面再注入脚本，段 URL 用 manifest 自带的 apikey（无需登录态）。
 - **断言异步 UI 先等元素出现**：点击触发的渲染/预载/回填是异步的，点击后立即 evaluate 读到中间态；先轮询等目标元素/文本出现再断言（否则"头像没加载出来"式误判）。
+- **chrome-devtools MCP 的截图工具存不了盘**（`path is not within any of the configured workspace roots`，MCP 版 Chrome 还走 `--remote-debugging-pipe` 无 TCP 端口）：需要落盘走 `screenshots/capture.mjs`，自建 `--remote-debugging-port` 的 Chrome 直连 CDP `Page.captureScreenshot`。
+- **论坛帖截图必须匿名化**：真实演员/场景/工作室/标签/番号一律占位符，注入器 `screenshots/anon-stash.js` 带 250ms 重应用定时器（SPA 重渲染会刷回真实值），规则见 `screenshots/NOTES.md`。
 
 ## 脚本索引
 
@@ -100,6 +103,7 @@ stash-testkit/
 | `stash_client.py` | GraphQL 客户端：场景 CRUD / 扫描 / 轮询 / 封面字节 |
 | `gen_test_video.py` | 生成内容唯一测试视频 |
 | `db_cleanup.py` | 测试收尾 DB 孤儿清理（`--prefix` 白名单，`--dry-run` 预览） |
+| `screenshots/` | 论坛帖配图：起调试 Chrome → 自动登录 → 注入占位符 → 全页截图落 `docs/`；场景脚本按 `<插件名>-<视图>.mjs` 命名，用法与占位符规则见 `screenshots/NOTES.md` |
 | `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |

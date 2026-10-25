@@ -332,3 +332,18 @@
 - 375px：body padding 14px、close 固定可视、0 横向溢出。
 - node --check 通过；discover.js + stashDiscover.css 已同步实装目录；
   测试写入偏好已复位（木村愛心入库为流程验证产物，属功能预期数据）。
+
+## 2026-10-25 第六轮（用户需求 2 项）
+
+| # | 需求（用户 2026-10-25） | 实现 | 验证 |
+|---|---|---|---|
+| R1 | "国旗黑色边框太粗，参考场景二级弹窗点击演员的头像框国旗样式" | .ssd-dp-pfflag 与 .ssd-perf-flag（popup 参考实现）完全同款：去掉 rgba(0,0,0,.55) 底色与 2px 垂直 padding（粗黑边来源），改 padding:0 3px + height:16px + text-shadow 四向描边（文本兜底可读）；img 18×12 + 柔影 box-shadow:0 1px 2px rgba(0,0,0,.4)（弃 20×14）；窄屏同步 padding:0 2px | computed：bg rgba(0,0,0,0)、padding 0 3px、img 18×12 + 柔影、badge 高 16px，与参考样式逐项一致 |
+| R2 | "stash 插件设置发现页入口用英文描述，内容简化" | stashDiscover.yml enableDiscoverPage：displayName "发现页入口 (Discover page)"→"Discover page"；description 中文长句→"Show the Discover entry in the top navigation. Takes effect after a browser refresh." | 设置 > 插件页重载插件后：新英文文案显示、旧中文描述消失（yml 由 Stash 服务端解析，改后需重载插件或重启 Stash 生效） |
+
+### 走查记录
+
+- 国旗 DOM 断言（演员过滤视图）：透明底/无垂直 padding/18×12 img/text-shadow
+  描边齐备；窄屏规则 padding:0 2px + img 16×11。
+- yml 生效路径：Copy-Item 同步 → 设置页「重载插件」→ 刷新后新文案确认。
+- 本轮改动：stashDiscover.css + stashDiscover.yml（discover.js 无改动）；
+  两文件已同步实装目录。

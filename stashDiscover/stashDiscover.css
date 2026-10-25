@@ -1786,24 +1786,35 @@
 }
 /* 头像容器 + 国旗徽标（叠加头像左下角 — 用户 2026-10-25）*/
 .ssd-dp-pfav { position: relative; flex: none; }
-/* 国旗缩小为 flagcdn 图，与场景二级弹窗演员 popup 同一实现（用户 2026-10-25 第四轮）*/
+/* 国旗：与场景二级弹窗演员 popup 完全同款（用户 2026-10-25 第六轮：
+   无底色、text-shadow 描边、img 柔影，弃粗黑底边）*/
 .ssd-dp-pfflag {
   position: absolute;
   left: 6px;
   bottom: 6px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 2px 3px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 3px;
+  color: #fff;
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
-  color: #fff;
   letter-spacing: 0.5px;
+  text-shadow:
+    -0.5px -0.5px 0 rgba(0, 0, 0, 0.9), 0.5px -0.5px 0 rgba(0, 0, 0, 0.9),
+    -0.5px 0.5px 0 rgba(0, 0, 0, 0.9), 0.5px 0.5px 0 rgba(0, 0, 0, 0.9),
+    0 0 2px rgba(0, 0, 0, 0.7), 0 0 4px rgba(0, 0, 0, 0.45),
+    0 0 7px rgba(0, 0, 0, 0.2);
 }
-.ssd-dp-pfflag img { display: block; width: 20px; height: 14px; border-radius: 2px; }
+.ssd-dp-pfflag img {
+  display: block;
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
 /* 统计行：详情区 info 列最后一行（ssd-dp-pfmeta 派生样式 — 用户 2026-10-25 第四轮）*/
 .ssd-dp-pfstat { color: var(--sx-tx3); }
 .ssd-dp-pfsect {
@@ -1906,7 +1917,7 @@
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
   .ssd-dp-pfavatar { width: 64px; height: 96px; }
-  .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 1px 2px; }
+  .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 0 2px; }
   .ssd-dp-pfflag img { width: 16px; height: 11px; }
   .ssd-dp-pfname { font-size: 17px; }
   .ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }

@@ -262,3 +262,28 @@
   （transferSize 38028，非缓存命中），页面 7 模块挂载、0 溢出。
 - **用户侧**：普通刷新（F5）即可——主 JS 走 no-cache 端点必然更新，新主 JS
   注入带时间戳 URL 后 discover.js 必然重新拉取。
+
+## 2026-10-25 第三轮（用户需求 8 项：导航重构 + 演员详情模块统一）
+
+| # | 需求（用户 2026-10-25） | 实现 | 验证 |
+|---|---|---|---|
+| N1 | "有新发布的演员"查看更多 → 发现演员页 | actors 模块 more：dpSetPrefs({perfSrc:"local"}) + switchView("performers") | 点击后 activeTab=performers、本地有更新 subtab on |
+| N2 | 发现演员页增加"本地所有有更新的演员"tab | renderPerformers 三 subtab（本地有更新/共同出演/热门演员榜），local 分支渲染全量 actorsWithNew（可搜索、♥ 标、点击→perfFilter）；数据依赖只需 latest（hot 才需要 trendingPerf） | 48 张迷你卡全带本地头像；空态文案"回看期内没有新作品" |
+| N3 | 预告分页合并到最新分页 + 预告 tab | VIEWS 删 preview 页 tab（7 tab）；renderDrill latest 视图内嵌"已发布·N | 预告·M"subtab（latestSub pref 持久化）；DRILL.preview 转为 sub 配置（date-asc+days 绿标）；总览预告模块 more → latest+预告 sub | 最新视图：已发布·46/预告·40，切预告 40 卡分页+“2 天后上映”绿标；预告模块 more 落在预告 sub ✓ |
+| N4 | 演员详情区别名放到名称下面 | 共享模块 buildPerfHead：info 顺序 = 名称 → 别名 → 性别·年龄（R6 的 meta 并入方案作废） | infoOrder = [pfname, pfalias, pfgender]，别名"Maria Sakamoto / Miyu Aizawa / 坂本マリア" |
+| N5 | 国籍用国旗放到头像上面（参考 stash 演员详情 tab） | 头像包 .ssd-dp-pfav + 左下角 .ssd-dp-pfflag 徽标；Stash 自带 flag-icons（fi-xx，与原生详情 tab 同源，实测 background-image 为内嵌 SVG）→ fillPerfDetail 设 fi 类；countryIso()：ISO2 直用 + 全名兜底表（JAPAN→JP 等 30 项）；本地 findPerformer 与 box findPerformer 均取 country | 108×162 头像左下 30×22 fi-jp 国旗（窄屏 64×96 头像 24×18）；弹窗（box country）同样 fi-jp |
+| N6 | 演员详情区 n 部新作品放到最下面 | 统计行 .ssd-dp-pfstat 统一放按钮区下方（perfFilter："37 部新作品 · 最新 2026-11-19"；弹窗："共同出演 ×66" / "热门榜 #20 · 49 部作品"） | contentOrder = [pfhead, pfactions, pfstat, card-grid]；modal 同构 |
+| N7 | 共同出演/热门演员榜弹窗用相同演员详情模块 | buildPerfHead/fillPerfDetail 共享（弹窗加 modal 类名）；弹窗 box 查询扩 country+aliases；统计行随模块移到按钮下方 | 弹窗结构 = close/pfhead/pfactions/pfstat/scenes；name→alias→gender 与 perfFilter 完全同构 |
+| N8 | 共同出演的演员加载头像 | 主 JS BOX_SCENE_FIELDS performers 增 images{url}（与 L632 既有查询同模式）；buildCoStars meta.image；co 迷你卡与弹窗即时带头像（弹窗另由 findPerformer 补全） | co tab 12/12 卡真实头像（javstash.org）；总览发现演员模块 8/8；弹窗头像即点即显 |
+
+### 走查记录（1550 / 375px，已登录，刷新后新代码）
+
+- 页 tab 7 个（预告已并入最新）；总览 6 模块齐全；0 横向溢出（双宽度）。
+- 本地有更新 tab：48 卡全头像；follow 视图 6 组正常（当前回看期均无新作，
+  详情→perfFilter 路径与本地 tab 同代码已验）。
+- 弹窗双源（co/hot）均：国旗 fi-jp、别名行、统计行底部、6 相关场景卡。
+- 375px：latest subtab 正常、弹窗 fitsViewport、flag 24×18、0 溢出。
+- SWR 缓存说明：latest 数据集缓存不含演员头像字段，需点"刷新"或等静默
+  刷新后共同出演头像才出现（本轮验证已点刷新确认全量头像）。
+- node --check 通过；三文件已同步实装目录；测试写入的 perfSrc/latestSub
+  偏好已复位默认。

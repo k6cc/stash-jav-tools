@@ -419,7 +419,7 @@
     "id title code details release_date duration " +
     "urls { url site { name } } " +
     "studio { id name } " +
-    "performers { as performer { id name } } " +
+    "performers { as performer { id name images { url } } } " +
     "tags { id name } " +
     "images { url }";
 

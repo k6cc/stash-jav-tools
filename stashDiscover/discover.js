@@ -1508,7 +1508,8 @@
         count: d ? tc((d.actorsWithNew || []).length + " 位演员 · " + (d.actorsWithNew || []).reduce(function (n, g) { return n + g.items.length; }, 0) +
           " 部新作品 · 回看 " + d.recentDays + " 天",
           (d.actorsWithNew || []).length + " performers · lookback " + d.recentDays + "d") : "",
-        more: function () { switchView("latest"); },
+        // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
+        more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
       if (!d) secBody(s1, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
       else if (!(d.actorsWithNew || []).length) secBody(s1, null).appendChild(stateBox("empty", tc("回看期内没有新作品", "No new releases in the lookback window")));
@@ -1566,7 +1567,8 @@
       var s4 = sec(parent, {
         icon: I.preview, title: tc("即将发布", "Upcoming"),
         count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length) : "",
-        more: function () { switchView("preview"); },
+        // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
+        more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
       if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", null, retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
@@ -1608,9 +1610,10 @@
         buildCoStars().slice(0, rows.performers * 12).forEach(function (cs) {
           g6.appendChild(miniPerfCard({
             name: cs.meta.name,
+            image: cs.meta.image,
             sub: tc("共同出演 ×" + cs.scenes, "co-starred ×" + cs.scenes),
             badge: tc("共同出演", "Co-star"), badgeKind: "co",
-            onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, scenes: cs.scenes, items: cs.items }); },
+            onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items }); },
           }));
         });
         trendingPerfMinis({ limit: Math.max(0, rows.performers * 12 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
@@ -1640,7 +1643,8 @@
           var pf = pp && pp.performer;
           if (!pf || lib[String(pf.id)]) return;
           var pid = String(pf.id);
-          if (!meta[pid]) meta[pid] = { stashId: pid, name: pf.name || "" };
+          // 头像随场景数据带上（共同出演迷你卡与弹窗即时显示 — 用户 2026-10-25）
+          if (!meta[pid]) meta[pid] = { stashId: pid, name: pf.name || "", image: (pf.images && pf.images[0] && pf.images[0].url) || "" };
           if (!counts[pid]) counts[pid] = { n: 0, items: [] };
           counts[pid].n++;
           if (counts[pid].items.length < 12) counts[pid].items.push(it);
@@ -1675,14 +1679,22 @@
   }
 
   // ── 钻取视图（§3.3：面包屑 + 分页 + 筛选）───────────────────────────────
+  // preview 不再是独立页 tab，并入 latest 视图的「预告」子 tab（用户 2026-10-25）；
+  // DRILL.preview 保留为 latest+previewSub 时的配置。
   var DRILL = {
     latest: { title: tc("最新发布", "Latest"), key: "latest", items: function (d) { return d.latest || []; }, sort: "date-desc" },
-    preview: { title: tc("即将发布", "Upcoming"), key: "latest", items: function (d) { return d.preview || []; }, sort: "date-asc", days: true },
+    preview: { title: tc("预告", "Upcoming"), key: "latest", items: function (d) { return d.preview || []; }, sort: "date-asc", days: true },
     trending: { title: tc("热门", "Trending"), key: "trending", items: function (t) { return t.items || []; }, sort: "hot", inlib: true },
     studios: { title: tc("工作室新发布", "Studio releases"), key: "studios", items: function (st) { return st.items || []; }, sort: "date-desc" },
   };
+  function latestSub() {
+    return dpPrefs().latestSub === "preview" ? "preview" : "new";
+  }
   function renderDrill(c, view) {
     var cfg = DRILL[view];
+    // latest 视图内嵌「已发布 | 预告」子 tab
+    var sub = view === "latest" ? latestSub() : "";
+    if (view === "latest" && sub === "preview") cfg = DRILL.preview;
     var ds = _dp.d[cfg.key];
     if (!ds) {
       if (_dp.err[cfg.key]) { c.appendChild(stateBox("error", errText(_dp.err[cfg.key]), function () { retryDataset(cfg.key); })); return; }
@@ -1694,6 +1706,23 @@
     crumb.type = "button";
     crumb.addEventListener("click", function () { switchView("overview"); });
     c.appendChild(crumb);
+
+    // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
+    if (view === "latest") {
+      var subRow = el("div", "ssd-dp-tabs ssd-dp-subtabs");
+      [["new", tc("已发布 · " + (ds.latest || []).length, "Released · " + (ds.latest || []).length)],
+       ["preview", tc("预告 · " + (ds.preview || []).length, "Upcoming · " + (ds.preview || []).length)]].forEach(function (pair) {
+        var b = el("button", "ssd-dp-tab" + (sub === pair[0] ? " on" : ""), pair[1]);
+        b.type = "button";
+        b.addEventListener("click", function () {
+          dpSetPrefs({ latestSub: pair[0] });
+          _dp.page = 1;
+          render();
+        });
+        subRow.appendChild(b);
+      });
+      c.appendChild(subRow);
+    }
 
     // 工作室钻取：按工作室分组入口条（§8.2 studioFilter 视图的进入点）
     if (view === "studios" && ds.groups && ds.groups.length) {
@@ -1760,15 +1789,15 @@
     return bar;
   }
 
-  // ── 发现演员视图（§3.5 双源）─────────────────────────────────────────────
+  // ── 发现演员视图（§3.5 双源 + 本地有更新 — 用户 2026-10-25）───────────────
   function renderPerformers(c) {
     var d = _dp.d.latest, tp = _dp.d.trendingPerf;
     var prefs = dpPrefs();
-    var src = prefs.perfSrc === "hot" ? "hot" : "co";
+    var src = ["local", "co", "hot"].indexOf(prefs.perfSrc) >= 0 ? prefs.perfSrc : "co";
 
-    // 子切换（共同出演 | 热门榜）
+    // 子切换（本地有更新 | 共同出演 | 热门榜）
     var sub = el("div", "ssd-dp-tabs ssd-dp-subtabs");
-    [["co", tc("共同出演", "Co-starred")], ["hot", tc("热门演员榜", "Trending performers")]].forEach(function (pair) {
+    [["local", tc("本地有更新", "Local updates")], ["co", tc("共同出演", "Co-starred")], ["hot", tc("热门演员榜", "Trending performers")]].forEach(function (pair) {
       var b = el("button", "ssd-dp-tab" + (src === pair[0] ? " on" : ""), pair[1]);
       b.type = "button";
       b.addEventListener("click", function () {
@@ -1779,28 +1808,49 @@
     });
     c.appendChild(sub);
 
-    if (!d || !tp) {
+    if (!d) {
       if (_dp.err.latest) { c.appendChild(stateBox("error", errText(_dp.err.latest), retryLatest)); return; }
+      c.appendChild(stateBox("loading"));
+      return;
+    }
+    if (src === "hot" && !tp) {
       if (_dp.err.trendingPerf) { c.appendChild(stateBox("error", errText(_dp.err.trendingPerf), function () { retryDataset("trendingPerf"); })); return; }
       c.appendChild(stateBox("loading"));
       return;
     }
+    var q = _dp.search.trim().toLowerCase();
     var grid = el("div", "ssd-dp-grid mini");
-    if (src === "co") {
-      var q = _dp.search.trim().toLowerCase();
+    var emptyMsg = tc("暂无可发现的演员", "No performers to discover");
+    if (src === "local") {
+      // 本地所有有更新的演员（搜索可过滤，点击 → 演员过滤视图）
+      emptyMsg = tc("回看期内没有新作品", "No new releases in the lookback window");
+      (d.actorsWithNew || []).forEach(function (grp) {
+        var nm = grp.performer.name || "";
+        if (q && nm.toLowerCase().indexOf(q) === -1) return;
+        grid.appendChild(miniPerfCard({
+          name: nm,
+          image: grp.performer.image,
+          sub: tc("最新 " + (grp.newest || "—"), "newest " + (grp.newest || "—")),
+          badge: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
+          heart: followHas(grp.performer.stashId),
+          onClick: function () { _dp.perfGroup = grp; switchView("perfFilter"); },
+        }));
+      });
+    } else if (src === "co") {
       buildCoStars().forEach(function (cs) {
         if (q && cs.meta.name.toLowerCase().indexOf(q) === -1) return;
         grid.appendChild(miniPerfCard({
           name: cs.meta.name,
+          image: cs.meta.image,
           sub: tc("共同出演 ×" + cs.scenes, "co-starred ×" + cs.scenes),
           badge: tc("共同出演", "Co-star"), badgeKind: "co",
-          onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, scenes: cs.scenes, items: cs.items }); },
+          onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items }); },
         }));
       });
     } else {
       trendingPerfMinis().forEach(function (pm) { grid.appendChild(pm); });
     }
-    if (!grid.children.length) c.appendChild(stateBox("empty", tc("暂无可发现的演员", "No performers to discover")));
+    if (!grid.children.length) c.appendChild(stateBox("empty", emptyMsg));
     else c.appendChild(grid);
   }
 
@@ -1824,32 +1874,9 @@
     close.addEventListener("click", closePerfModal);
     m.appendChild(close);
 
-    // 头部：头像 + 名字 + 来源 meta
-    var head = el("div", "ssd-dp-pfhead ssd-dp-modal-head");
-    var img = document.createElement("img");
-    img.className = "ssd-dp-pfavatar";
-    img.alt = p.name || "";
-    img.src = p.image || letterAvatar(p.name);
-    img.onerror = function () { this.src = letterAvatar(p.name); };
-    head.appendChild(img);
-    var info = el("div", "ssd-dp-pfinfo");
-    info.appendChild(el("div", "ssd-dp-pfname", p.name || tc("未知演员", "Unknown")));
-    var metaLine = el("div", "ssd-dp-pfmeta");
-    metaLine.textContent = p.src === "co"
-      ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
-      : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
-    info.appendChild(metaLine);
-    var genderLine = el("div", "ssd-dp-pfmeta ssd-dp-pfgender");
-    info.appendChild(genderLine);
-    head.appendChild(info);
-    // 右上角外链（§8.1：stash-box 打开）
-    var ext = el("a", "ssd-dp-extbtn", I.ext);
-    ext.href = SSD.boxWebBase(endpoint) + "/performers/" + p.stashId;
-    ext.target = "_blank";
-    ext.rel = "noopener noreferrer";
-    ext.title = tc("在 stash-box 打开", "Open on stash-box");
-    head.appendChild(ext);
-    m.appendChild(head);
+    // 头部：共享演员详情模块（与演员过滤视图同构 — 用户 2026-10-25）
+    var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true });
+    m.appendChild(h.head);
 
     // 按钮区：加入库（performerCreate + stash_ids 回链）
     var acts = el("div", "ssd-dp-pfactions");
@@ -1885,6 +1912,13 @@
     acts.appendChild(boxBtn);
     m.appendChild(acts);
 
+    // 统计行（按钮区下方 = 详情区最下面 — 用户 2026-10-25）
+    var stat = el("div", "ssd-dp-pfstat");
+    stat.textContent = p.src === "co"
+      ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
+      : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
+    m.appendChild(stat);
+
     // 相关场景
     var sc = el("div", "ssd-dp-modal-scenes");
     sc.appendChild(el("h4", "ssd-dp-pfsect", tc("相关场景", "Related scenes")));
@@ -1899,20 +1933,12 @@
       if (e.key === "Escape") { closePerfModal(); document.removeEventListener("keydown", onEsc); }
     });
 
-    // 演员详情补全（性别/生日/头像）：box findPerformer
+    // 演员详情补全（性别/年龄/别名/国籍/头像）：box findPerformer
     SSD.callBoxGQL(endpoint, apiKey,
-      "query($id:ID!){findPerformer(id:$id){id name gender birth_date images{url}}}",
+      "query($id:ID!){findPerformer(id:$id){id name gender birth_date country aliases images{url}}}",
       { id: p.stashId }, BOX_TIMEOUT).then(function (r) {
-        var pf = r && r.findPerformer;
-        if (!pf || !_dpModal) return;
-        if (pf.images && pf.images[0] && pf.images[0].url) img.src = pf.images[0].url;
-        var bits = [];
-        if (pf.gender) bits.push(genderLabel(pf.gender));
-        if (pf.birth_date) {
-          var age = ageFromBirth(pf.birth_date);
-          if (age) bits.push(tc(age + " 岁", age + " y/o"));
-        }
-        genderLine.textContent = bits.join(" · ");
+        if (!_dpModal) return;
+        fillPerfDetail(h, r && r.findPerformer);
       }).catch(function () {});
 
     // 场景区填充：共同出演源 = 共演场景；热门源 = 懒加载近期场景（§3.5）
@@ -1957,6 +1983,78 @@
     return age >= 0 && age < 130 ? age : null;
   }
 
+  // ── 共享演员详情模块（演员过滤视图 + 发现演员弹层同构 — 用户 2026-10-25）──
+  // 结构：头像（左下角国旗徽标）｜名称 / 别名（名称正下方）/ 性别·年龄｜右上外链。
+  // 按钮区与统计行由调用方追加（统计行统一放按钮区下方 = 详情区最下面）。
+  function buildPerfHead(p) {
+    var head = el("div", "ssd-dp-pfhead" + (p.modal ? " ssd-dp-modal-head" : ""));
+    var av = el("div", "ssd-dp-pfav");
+    var img = document.createElement("img");
+    img.className = "ssd-dp-pfavatar";
+    img.alt = p.name || "";
+    img.src = p.image || letterAvatar(p.name);
+    img.onerror = function () { this.src = letterAvatar(p.name); };
+    av.appendChild(img);
+    var flag = el("span", "ssd-dp-pfflag");
+    flag.style.display = "none";
+    av.appendChild(flag);
+    head.appendChild(av);
+    var info = el("div", "ssd-dp-pfinfo");
+    info.appendChild(el("div", "ssd-dp-pfname", p.name || tc("未知演员", "Unknown")));
+    var aliasLine = el("div", "ssd-dp-pfmeta ssd-dp-pfalias");
+    info.appendChild(aliasLine);
+    var genderLine = el("div", "ssd-dp-pfmeta ssd-dp-pfgender");
+    info.appendChild(genderLine);
+    head.appendChild(info);
+    var ext = el("a", "ssd-dp-extbtn", I.ext);
+    ext.href = SSD.boxWebBase(p.endpoint) + "/performers/" + p.stashId;
+    ext.target = "_blank";
+    ext.rel = "noopener noreferrer";
+    ext.title = tc("在 stash-box 打开", "Open on stash-box");
+    head.appendChild(ext);
+    return { head: head, avatar: img, flag: flag, aliasLine: aliasLine, genderLine: genderLine, info: info };
+  }
+
+  // 详情补全：性别/年龄 → genderLine，别名 → 名称下方，国籍 → 头像国旗徽标，
+  // box 头像 URL → 头像。pf 兼容本地（birthdate/alias_list）与 box（birth_date/aliases）。
+  function fillPerfDetail(h, pf) {
+    if (!pf) return;
+    var bits = [];
+    if (pf.gender) bits.push(genderLabel(pf.gender));
+    var bd = pf.birth_date || pf.birthdate;
+    if (bd) {
+      var age = ageFromBirth(bd);
+      if (age) bits.push(tc(age + " 岁", age + " y/o"));
+    }
+    if (bits.length) h.genderLine.textContent = bits.join(" · ");
+    var al = pf.alias_list || pf.aliases;
+    if (al && al.length) h.aliasLine.textContent = tc("别名：", "Aliases: ") + al.join(" / ");
+    if (pf.images && pf.images[0] && pf.images[0].url) h.avatar.src = pf.images[0].url;
+    var iso = countryIso(pf.country);
+    if (iso) {
+      // flag-icons 与 Stash 演员详情 tab 同源（fi-xx 类，Stash 自带该 CSS）
+      h.flag.className = "ssd-dp-pfflag fi fi-" + iso.toLowerCase();
+      h.flag.title = String(pf.country);
+      h.flag.style.display = "";
+    }
+  }
+
+  // 国籍 → ISO 3166-1 alpha-2（本地库存 ISO 码；部分源存全名 → 兜底表）
+  function countryIso(c) {
+    if (!c) return "";
+    var s = String(c).trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(s)) return s;
+    var NAMES = {
+      JAPAN: "JP", "SOUTH KOREA": "KR", KOREA: "KR", CHINA: "CN", TAIWAN: "TW", "HONG KONG": "HK",
+      "UNITED STATES": "US", USA: "US", "UNITED KINGDOM": "GB", UK: "GB", ENGLAND: "GB",
+      FRANCE: "FR", GERMANY: "DE", ITALY: "IT", SPAIN: "ES", RUSSIA: "RU", "CZECH REPUBLIC": "CZ",
+      THAILAND: "TH", VIETNAM: "VN", INDONESIA: "ID", INDIA: "IN", PHILIPPINES: "PH",
+      MALAYSIA: "MY", SINGAPORE: "SG", CANADA: "CA", AUSTRALIA: "AU", BRAZIL: "BR", MEXICO: "MX",
+      NETHERLANDS: "NL", POLAND: "PL", SWEDEN: "SE", UKRAINE: "UA", "NEW ZEALAND": "NZ",
+    };
+    return NAMES[s] || "";
+  }
+
   // ── 演员过滤视图（§8.1：上半演员详情 + 下半场景卡）───────────────────────
   function renderPerfFilter(c) {
     var g = _dp.perfGroup;
@@ -1965,31 +2063,9 @@
     var pf = g.performer;
     var endpoint = d.source.endpoint;
 
-    var head = el("div", "ssd-dp-pfhead");
-    var img = document.createElement("img");
-    img.className = "ssd-dp-pfavatar";
-    img.alt = pf.name || "";
-    img.src = pf.image || letterAvatar(pf.name);
-    img.onerror = function () { this.src = letterAvatar(pf.name); };
-    head.appendChild(img);
-    var info = el("div", "ssd-dp-pfinfo");
-    info.appendChild(el("div", "ssd-dp-pfname", pf.name || ""));
-    var meta = el("div", "ssd-dp-pfmeta");
-    meta.textContent = tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
-      g.items.length + " new · newest " + (g.newest || "—"));
-    info.appendChild(meta);
-    var genderLine = el("div", "ssd-dp-pfmeta ssd-dp-pfgender");
-    info.appendChild(genderLine);
-    head.appendChild(info);
-
-    // 右上角外链（§8.1）
-    var ext = el("a", "ssd-dp-extbtn", I.ext);
-    ext.href = SSD.boxWebBase(endpoint) + "/performers/" + pf.stashId;
-    ext.target = "_blank";
-    ext.rel = "noopener noreferrer";
-    ext.title = tc("在 stash-box 打开", "Open on stash-box");
-    head.appendChild(ext);
-    c.appendChild(head);
+    // 头部：共享演员详情模块（与发现演员弹层同构 — 用户 2026-10-25）
+    var h = buildPerfHead({ name: pf.name, image: pf.image, stashId: pf.stashId, endpoint: endpoint });
+    c.appendChild(h.head);
 
     // 按钮区（§8.1：关注 ♥ / 发现 tab / 主页 / stash-box）
     var acts = el("div", "ssd-dp-pfactions");
@@ -2018,23 +2094,15 @@
     // stash-box 打开按钮已移除（详情区右上外链图标承担）— 用户 2026-10-25
     c.appendChild(acts);
 
-    // 本地演员详情补全（性别/年龄/国家/别名）
-    var aliasLine = el("div", "ssd-dp-pfmeta ssd-dp-pfalias");
-    info.appendChild(aliasLine);
+    // 统计行（按钮区下方 = 详情区最下面 — 用户 2026-10-25）
+    var stat = el("div", "ssd-dp-pfstat");
+    stat.textContent = tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
+      g.items.length + " new · newest " + (g.newest || "—"));
+    c.appendChild(stat);
+
+    // 本地演员详情补全（性别/年龄/别名/国籍国旗）
     SSD.callGQL("query($id:ID!){findPerformer(id:$id){id gender birthdate country alias_list}}", { id: pf.localId }).then(function (r) {
-      var lp = r && r.findPerformer;
-      if (!lp) return;
-      var bits = [];
-      if (lp.gender) bits.push(genderLabel(lp.gender));
-      if (lp.birthdate) {
-        var age = ageFromBirth(lp.birthdate);
-        if (age) bits.push(tc(age + " 岁", age + " y/o"));
-      }
-      if (lp.country) bits.push(lp.country);
-      genderLine.textContent = bits.join(" · ");
-      if (lp.alias_list && lp.alias_list.length) {
-        aliasLine.textContent = tc("别名：", "Aliases: ") + lp.alias_list.join(" / ");
-      }
+      fillPerfDetail(h, r && r.findPerformer);
     }).catch(function () {});
 
     // 下半：场景卡（分组内不受 cap 限制）
@@ -2344,7 +2412,7 @@
     { id: "follow", icon: I.follow, zh: "关注", en: "Following" },
     { id: "latest", icon: I.latest, zh: "最新", en: "Latest" },
     { id: "trending", icon: I.trending, zh: "热门", en: "Trending" },
-    { id: "preview", icon: I.preview, zh: "预告", en: "Upcoming" },
+    // preview 不再是独立页 tab：并入「最新」视图的预告子 tab（用户 2026-10-25）
     { id: "performers", icon: I.performers, zh: "发现演员", en: "Performers" },
     { id: "studios", icon: I.studios, zh: "工作室", en: "Studios" },
   ];

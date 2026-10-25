@@ -1172,6 +1172,8 @@
   cursor: pointer;
   box-shadow: 0 1px 2px rgba(0, 0, 0, calc(0.5 * var(--sx-k)));
   transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap; /* 防文字被挤换行成两行 — 用户 2026-10-25 */
+  flex: none;
 }
 
 .ssd-dp-refresh:hover { color: var(--sx-hi); border-top-color: var(--sx-edge); }
@@ -1254,10 +1256,10 @@
 /* ─── 筛选行（§3.1.3）────────────────────────────────────────────────────── */
 
 .ssd-dp-toolbar {
-  display: grid;
-  /* 三列：左空 | 搜索框（居中）| 控件组（靠右）——搜索框几何居中 */
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
+  justify-content: center; /* 搜索框+筛选控件作为一组横向居中 — 用户 2026-10-25 */
+  flex-wrap: wrap; /* §7.2 */
   gap: 0.6rem;
   padding: 6px 10px;
   border-radius: 9px;
@@ -1265,20 +1267,12 @@
   border: 1px solid var(--sx-line2);
 }
 
-/* 控件组（排序/每页/视图切换/数据源）——右列，靠右对齐 */
+/* 控件组（排序/每页/视图切换/数据源） */
 .ssd-dp-tools {
-  grid-column: 3;
-  justify-self: end;
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
-}
-
-/* 中窄宽度回退 flex 换行（720px 以下 .grow 满宽，见文末媒体查询） */
-@media (max-width: 1020px) {
-  .ssd-dp-toolbar { display: flex; flex-wrap: wrap; }
-  .ssd-dp-tools { justify-self: auto; flex: 1 1 100%; justify-content: flex-end; }
 }
 
 .ssd-dp-toolbar input,
@@ -1336,7 +1330,11 @@
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  /* 模块间隔开 — 用户 2026-10-25：总览各模块之间需要明显间隔 */
+  margin-bottom: 2.1rem;
 }
+.ssd-dp-sec:last-child { margin-bottom: 0; }
+.ssd-dp-duo { margin-bottom: 2.1rem; }
 
 .ssd-dp-sec-head {
   display: flex;
@@ -1456,10 +1454,8 @@
 
 /* ─── P4 视图实现（设计 §3/§7/§8；原型 prototype/index.html 移植 + 扩展）── */
 
-/* 工具栏（§3.1.3 贯穿所有视图；搜索框限宽 + grid 中列几何居中 — 用户 2026-10-23 确认）*/
+/* 工具栏（§3.1.3 贯穿所有视图；搜索框限宽 — 用户 2026-10-23 确认）*/
 .ssd-dp-toolbar .grow {
-  grid-column: 2;
-  justify-self: center;
   flex: 0 1 300px;
   min-width: 180px;
   max-width: 320px;
@@ -1560,7 +1556,7 @@
   border-radius: 10px;
   background: var(--sx-ui);
   cursor: pointer;
-  overflow: hidden;
+  overflow: visible; /* badge 凸出到卡外右上角，不能裁剪 — 用户 2026-10-25 */
   transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
 }
 .ssd-dp-mini:hover {
@@ -1595,15 +1591,18 @@
 .ssd-dp-mini-sub.has-unread { color: var(--sx-re-tx); font-weight: 600; }
 .ssd-dp-mini-badge {
   position: absolute;
-  top: 8px;
+  /* 骑在卡片右上角外沿（不再叠在名字行上）— 用户 2026-10-25 */
+  top: 0;
   right: 8px;
-  padding: 2px 7px;
+  transform: translateY(-50%);
+  padding: 2px 8px;
   border-radius: 999px;
   font-size: 10.5px;
   font-weight: 700;
-  background: var(--sx-ui3);
-  color: var(--sx-tx2);
+  background: var(--sx-or); /* 醒目橙底白字 — 用户 2026-10-25 */
+  color: #fff;
   white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 .ssd-dp-mini-badge.co { background: color-mix(in srgb, var(--sx-bl) 18%, transparent); color: var(--sx-bl-tx); }
 .ssd-dp-mini-badge.hot { background: color-mix(in srgb, var(--sx-or) 18%, transparent); color: var(--sx-or-tx); }
@@ -1741,10 +1740,12 @@
   flex-wrap: wrap;
 }
 .ssd-dp-pfavatar {
-  width: 88px;
-  height: 88px;
+  /* 竖版长图（2:3）— 用户 2026-10-25 */
+  width: 108px;
+  height: 162px;
   border-radius: 12px;
   object-fit: cover;
+  object-position: top;
   flex: none;
   background: var(--sx-ui2);
 }
@@ -1756,7 +1757,8 @@
   line-height: 1.25;
 }
 .ssd-dp-pfmeta { color: var(--sx-tx2); font-size: 13px; margin-top: 4px; }
-.ssd-dp-pfgender:empty { display: none; }
+.ssd-dp-pfgender:empty, .ssd-dp-pfalias:empty { display: none; }
+.ssd-dp-pfalias { color: var(--sx-tx3); }
 .ssd-dp-extbtn {
   position: absolute;
   top: 10px;
@@ -1872,7 +1874,7 @@
   .ssd-dp-toolbar .grow { flex: 1 1 100%; max-width: none; }
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
-  .ssd-dp-pfavatar { width: 64px; height: 64px; }
+  .ssd-dp-pfavatar { width: 64px; height: 96px; }
   .ssd-dp-pfname { font-size: 17px; }
   .ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .ssd-dp-fgrp-head { padding: 10px; }

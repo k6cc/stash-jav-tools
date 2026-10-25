@@ -227,3 +227,22 @@
 - 视图：follow 红框卡 2 张、settings 9 行 2 面板、trending 钻取正常。
 - 主题 token --sx-bg #202B33（默认主题跟随正常）。
 - node --check 通过，工作副本与实装目录已同步。
+
+## 2026-10-25 样式修复第二轮（用户反馈 8 项）
+
+| # | 问题（用户 2026-10-25） | 修复 | 验证 |
+|---|---|---|---|
+| R1 | 搜索框和筛选栏要**一起**整组横向居中（原：搜索框单独居中+控件靠右） | .ssd-dp-toolbar 改 flex + `justify-content:center`（S2 的 grid 三列与 1020px 回退断点删除），flex-wrap 兜底窄屏换行仍居中 | 502px / 1550px：groupCenterOffset=0；1550px 单行 48.2px；502px 换行态整组仍居中 |
+| R2 | 总览模块之间没有隔开 | .ssd-dp-sec / .ssd-dp-duo `margin-bottom: 2.1rem`（last-child 归零） | 双宽度顶层模块间距全 29px 均匀 |
+| R3 | 刷新按钮被挤成两行 | .ssd-dp-refresh `white-space: nowrap` + `flex: none` | 刷新按钮 h=29.3 单行（双宽度） |
+| R4 | 演员角标叠在名字行，要移到卡片右上角外面 | .ssd-dp-mini `overflow: visible`；badge 改 `top:0; right:8px; translateY(-50%)` 骑卡右上外沿 | badgeProtrudesAbove=9.2px 外凸（双宽度） |
+| R5 | 总览"n部新作品"角标要醒目色 | badge 默认态醒目橙底白字（--sx-or + 阴影）；co/hot 变体跟随同一位置 | bg rgb(218,112,44) 白字（双宽度） |
+| R6 | 演员详情头像用竖版长图，右侧详情加国家/别名 | .ssd-dp-pfavatar 108×162 竖版 2:3（窄屏 64×96）object-position:top；renderPerfFilter 补 findPerformer 查询：性别/年龄/国家并入 meta 行 + alias_list 别名行（:empty 隐藏） | 1550px：108×162（ratio 1.5）；502px：64×96；"女 · 26 岁 · JP" + "别名：Kamiki Rei / Shiori / しおり / 園田みおん / 神木麗" |
+| R7 | 右上箭头改用外链图标 | I.ext 换 lucide external-link（三段 path） | extIconPaths 三段 path ✓ |
+| R8 | 按钮区去掉 stash-box 打开按钮（详情区外链图标已够） | renderPerfFilter 删 boxBtn；openPerfModal / renderStudioFilter 的同名按钮保留（用户仅指演员详情区） | actionButtons = ["♥ 已关注","发现 Tab","主页"]，无 stash-box 按钮 |
+
+### 走查记录（502px 窄屏 + 1550px 桌面，已登录）
+
+- R1-R8 全项 DOM 度量通过（见上表）；duo 1550px 两列 731+731px、
+  0 溢出，热门 trim 后 3 卡 1 行；全页 overflowX=0（双宽度）。
+- node --check 通过，工作副本与实装目录已同步（discover.js + stashDiscover.css）。

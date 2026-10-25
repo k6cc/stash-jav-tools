@@ -1166,7 +1166,7 @@
     settings: sv('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/>'),
     star: sv('<path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2l-6.1 3.4 1.4-6.8L2.2 9.1l6.9-.8z"/>', "currentColor"),
     back: sv('<path d="M15 18l-6-6 6-6"/>'),
-    ext: sv('<path d="M7 17L17 7"/><path d="M9 7h8v8"/>'),
+    ext: sv('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
     refresh: sv('<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/>'),
     grid: sv('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
     list: sv('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>'),
@@ -2015,15 +2015,13 @@
     homeBtn.type = "button";
     homeBtn.addEventListener("click", function () { window.location.assign("/performers/" + pf.localId); });
     acts.appendChild(homeBtn);
-    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + " ↗");
-    boxBtn.href = SSD.boxWebBase(endpoint) + "/performers/" + pf.stashId;
-    boxBtn.target = "_blank";
-    boxBtn.rel = "noopener noreferrer";
-    acts.appendChild(boxBtn);
+    // stash-box 打开按钮已移除（详情区右上外链图标承担）— 用户 2026-10-25
     c.appendChild(acts);
 
-    // 本地演员详情补全（性别/年龄）
-    SSD.callGQL("query($id:ID!){findPerformer(id:$id){id gender birthdate}}", { id: pf.localId }).then(function (r) {
+    // 本地演员详情补全（性别/年龄/国家/别名）
+    var aliasLine = el("div", "ssd-dp-pfmeta ssd-dp-pfalias");
+    info.appendChild(aliasLine);
+    SSD.callGQL("query($id:ID!){findPerformer(id:$id){id gender birthdate country alias_list}}", { id: pf.localId }).then(function (r) {
       var lp = r && r.findPerformer;
       if (!lp) return;
       var bits = [];
@@ -2032,7 +2030,11 @@
         var age = ageFromBirth(lp.birthdate);
         if (age) bits.push(tc(age + " 岁", age + " y/o"));
       }
+      if (lp.country) bits.push(lp.country);
       genderLine.textContent = bits.join(" · ");
+      if (lp.alias_list && lp.alias_list.length) {
+        aliasLine.textContent = tc("别名：", "Aliases: ") + lp.alias_list.join(" / ");
+      }
     }).catch(function () {});
 
     // 下半：场景卡（分组内不受 cap 限制）

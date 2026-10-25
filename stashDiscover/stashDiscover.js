@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.1.1";
+  var PLUGIN_VERSION = "2.2.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -4529,6 +4529,8 @@
     buildSourceRow: buildSourceRow,
     // events
     SCENE_SAVED_EVENT: SCENE_SAVED_EVENT,
+    // follow polling (force = bypass the 6h throttle; used after favorites import)
+    pollFollowed: dpPollFollowed,
   };
 
   // ─── Discover nav entry + route shell (synchronous top-level registration) ─
@@ -4562,6 +4564,7 @@
   var DP_POLL_KEY = "SSD:dp:poll.v1";
   var DP_UNREAD_KEY = "SSD:dp:unread.v1";
   var DP_NOTIFY_KEY = "SSD:dp:notify"; // "0" = muted (P6 settings UI writes it)
+  var DP_PREFS_KEY = "SSD:dp:prefs"; // discover page prefs (active source lives here)
   var DP_POLL_MIN_MS = 6 * 3600 * 1000;
 
   function dpCachedUnread() {
@@ -4609,6 +4612,12 @@
       if (!(recentDays > 0)) recentDays = 30; // §4.2 default lookback
       var cutoff = localDateStr(new Date(Date.now() - recentDays * 86400000));
 
+      // 关注页是单源口径（只显示当前数据源的新作，用户 2026-10-25 第七轮），
+      // 角标同样只统计当前数据源，避免「角标有未读、关注页却全是暂无新作品」。
+      var wanted = "";
+      try { wanted = String(((JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {}).source) || ""); } catch (_) {}
+      if (!wanted) wanted = String(settings.preferredBox || "");
+      wanted = wanted.toLowerCase();
       var byEndpoint = {};
       ids.forEach(function (k) {
         var f = list[k] || {};
@@ -4617,7 +4626,11 @@
         (byEndpoint[ep] = byEndpoint[ep] || []).push(String(f.stashId || k));
       });
       var boxByEp = {};
-      boxes.forEach(function (b) { boxByEp[String(b.endpoint).toLowerCase()] = b; });
+      boxes.forEach(function (b) {
+        if (wanted && String(b.name).toLowerCase() !== wanted && String(b.endpoint).toLowerCase() !== wanted) return;
+        boxByEp[String(b.endpoint).toLowerCase()] = b;
+      });
+      if (!Object.keys(boxByEp).length) boxes.forEach(function (b) { boxByEp[String(b.endpoint).toLowerCase()] = b; });
 
       // One query per endpoint, first 100 scenes — a light channel; the page's
       // full pipeline paginates properly and corrects the badge.
@@ -4625,8 +4638,10 @@
         var box = boxByEp[ep];
         if (!box) return Promise.resolve(null);
         return _boxRateLimiter.submit(function () {
-          return callBoxGQL(box.endpoint, box.apiKey,
-            "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{id date performers{id}}}}",
+          return callBoxGQL(box.endpoint, box.api_key,
+            // performers 是 PerformerAppearance（{as, performer}），写成 performers{id}
+            // 会被 stash-box 校验拒绝（HTTP 422）→ 轮询永远 0（用户 2026-10-25 第七轮）
+            "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{id date performers{performer{id}}}}}",
             {
               input: {
                 date: { value: cutoff, modifier: "GREATER_THAN" },
@@ -4650,7 +4665,10 @@
         r.ids.forEach(function (id) { set[String(id)] = true; });
         (r.scenes || []).forEach(function (sc) {
           if (marks[r.ep + ":" + String(sc.id || "").toLowerCase()]) return;
-          ((sc.performers || [])).forEach(function (pf) { if (set[String(pf.id)]) n++; });
+          ((sc.performers || [])).forEach(function (pf) {
+            var pid = pf && pf.performer && pf.performer.id;
+            if (pid && set[String(pid)]) n++;
+          });
         });
       });
       return stamp(n);

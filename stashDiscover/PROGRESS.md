@@ -347,3 +347,35 @@
 - yml 生效路径：Copy-Item 同步 → 设置页「重载插件」→ 刷新后新文案确认。
 - 本轮改动：stashDiscover.css + stashDiscover.yml（discover.js 无改动）；
   两文件已同步实装目录。
+
+## 2026-10-25 第七轮（用户需求 7 项 + 关注轮询根因）
+
+已确认口径：显示上限放**发现页设置 tab**（localStorage 即时生效）；上限只约束
+**平铺列表**（关注分组/详情内场景不限）；工作室详情**保持左图右文**（加宽 + contain）；
+关注分页**默认全部收起**。
+
+| # | 需求（用户 2026-10-25） | 实现 | 验证 |
+|---|---|---|---|
+| R1 | "最新 分页的 返回总览 按钮删除" | renderDrill 删除面包屑（含 I.back 图标，只留 I.ext） | crumbCount=0；子 tab 已发布·47 / 预告·42 保留 |
+| R2a | "从收藏导入，导入的演员不会轮询" | 根因 1 = dpPollFollowed 用 box.apiKey（配置字段是 api_key）→ 全部 401；根因 2 = 轮询 GraphQL 写 `performers{id}`，stash-box 的 performers 是 PerformerAppearance，校验 422 → 轮询从上线起从未成功。修复 = api_key + `performers{performer{id}}` + 计数取 pf.performer.id | `pollFollowed(true)` 在 stashdb 源返回 2（原始终 0）；HTTP 422 消失 |
+| R2b | "…刷新也不行" | 关注页只按当前源分组（导入的 6 位全在 stashdb，页面源 javstash → 永远「暂无新作品」）。按用户确认改为**单源口径**：导入只取当前数据源关联；关注列表只列当前源演员；角标轮询同源统计；切源即强制重轮询 | 导入后 javstash 关注 4 位（2 位有新作，8+2 未读），角标 10 与页内一致；切 stashdb 显示 2 组新作 |
+| R3 | "关注 演员条目整行展开/收起（详情、取消关注除外），最多展开一个" | _dp.followOpenKey 单 key 手风琴；head 加 .is-toggle + 整行 click；caret/详情/♥ 均 stopPropagation；默认 null 全收起 | defaultBodies=0；点行 1 个 body（8 卡）；点另一行仍 1 个（切换）；点「详情」进 perfFilter 后返回仍展开原行 |
+| R4 | "每个演员/工作室最多 2 个场景改为设置项" | capPerActor()/capPerStudio() 读 dpPrefs（默认 2）；设置页「显示上限」两个 1–10 下拉；改动只清 _dp.d.latest/studios 并用缓存重算（不重拉网络） | 上限=2 → 已发布·47；改 1 → 28；复原 2 → 47 |
+| R5 | 工作室详情图"自适应铺满不裁切（最好宽一点）"；问改共用模块还是单独改 | 共用的是 CSS 类而非函数，故**只加工作室修饰类** `.ssd-dp-pfavatar--studio`（不动演员 2:3 竖图）：width clamp(240px,32%,460px) + height auto + contain | 1369 宽头部下 427×82（原 240×46），自然比 239:46 保持、contain 不裁切；窄屏 clamp(132px,42%,240px) |
+| R6 | "工作室按钮区 stash-box 打开 依然右上箭头，改为外链符号" | 按钮区 boxBtn 早已是 `<a>` + I.ext SVG（第五轮改过）；本轮确认无残留 ↗（右上角另有 .ssd-dp-extbtn 图标按钮，同为外链 SVG） | boxBtn = A / 文本 JAVStash / svg 13px / href 正常；document.body 无 ↗ 字符 |
+| R7 | "筛选栏 数据源 与后面下拉框没有间隔" | 新增 .ssd-dp-srcwrap（inline-flex + gap .6rem）包裹 label+select | gap 8.4px，label 与 select 实测间距 8.4px |
+
+### 走查记录（1440px，已登录，ignoreCache 刷新后新代码）
+
+- 关注页（javash）：4 行（源过滤后），伊藤舞雪 8 部 / 小丽花 2 部未读，顶部
+  「4 位关注 · 10 部未读」与角标 unread=10 一致。
+- 手风琴：展开只保留 1 个 body；「详情」按钮走 perfFilter 不改展开态；
+  ♥（取消关注）与 caret 均 stopPropagation（代码断言，未真实触发取消）。
+- 设置页：显示上限两下拉默认 2；改动即时重算平铺列表总数。
+- 工作室详情：图 427×82 contain；按钮区 A + 13px 外链 SVG。
+- 控制台仅 2 条既有无关告警（PWA 图标 / 连接拒绝），无插件报错。
+- node --check 双文件通过；discover.js / stashDiscover.js / stashDiscover.css
+  已同步实装目录；测试写入偏好已复位（source=javstash、cap=2）。
+- 注意：从收藏导入在 javstash 源下实际导入了 4 位（其本地演员同时挂了 javstash
+  与 stashdb 链接），关注 store 现为 10 条（按源各自成行，页面按源过滤展示）。
+

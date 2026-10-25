@@ -1477,6 +1477,12 @@
   white-space: nowrap;
   user-select: none;
 }
+/* 数据源 label + 下拉：包裹层自身是 flex 项，需内部 gap（用户 2026-10-25 第七轮） */
+.ssd-dp-srcwrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
 
 .ssd-dp-toolbar select {
   padding: 7px 8px;
@@ -1645,22 +1651,6 @@
 .ssd-card-new { outline: 2px solid var(--sx-re); outline-offset: -2px; border-radius: 4px; }
 
 /* 钻取视图（§3.3）*/
-.ssd-dp-crumb {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid var(--sx-ui3);
-  border-radius: 999px;
-  background: var(--sx-ui);
-  color: var(--sx-tx2);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.ssd-dp-crumb:hover { color: var(--sx-tx); border-color: var(--sx-edge); }
-.ssd-dp-crumb svg { width: 14px; height: 14px; }
 
 .ssd-dp-pagerow {
   display: flex;
@@ -1749,6 +1739,16 @@
   object-position: top;
   flex: none;
   background: var(--sx-ui2);
+}
+/* 工作室详情图（左图右文）：随容器宽度自适应并尽量铺满，按原始比例完整显示（不裁切）
+   — 用户 2026-10-25 第七轮 */
+.ssd-dp-pfavatar--studio {
+  width: clamp(240px, 32%, 460px);
+  max-width: 100%;
+  height: auto;
+  max-height: 260px;
+  object-fit: contain;
+  object-position: center;
 }
 .ssd-dp-pfinfo { min-width: 0; flex: 1 1 240px; }
 .ssd-dp-pfname {
@@ -1858,6 +1858,9 @@
   background: var(--sx-ui2);
 }
 .ssd-dp-fgrp-info { min-width: 0; flex: 1 1 200px; }
+/* 整行可点展开/收起（详情、取消关注按钮除外）— 用户 2026-10-25 第七轮 */
+.ssd-dp-fgrp-head.is-toggle { cursor: pointer; }
+.ssd-dp-fgrp-head.is-toggle:hover { background: var(--sx-ui2); }
 .ssd-dp-fgrp-acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .ssd-dp-fgrp-body { padding: 4px 14px 14px; }
 
@@ -1917,6 +1920,7 @@
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
   .ssd-dp-pfavatar { width: 64px; height: 96px; }
+  .ssd-dp-pfavatar--studio { width: clamp(132px, 42%, 240px); height: auto; max-height: 180px; }
   .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 0 2px; }
   .ssd-dp-pfflag img { width: 16px; height: 11px; }
   .ssd-dp-pfname { font-size: 17px; }

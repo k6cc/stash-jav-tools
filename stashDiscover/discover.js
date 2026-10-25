@@ -262,8 +262,9 @@
   var BOX_MAX_PAGES = 50;
   var TRENDING_PER_PAGE = 30;     // §5 热门榜
   var STUDIO_PAGE_SIZE = 100;     // §4.6 工作室管线
-  var MAX_SCENES_PER_ACTOR = 2;   // §4.3 每人上限 2（总览模块+最新/预告钻取保留）
-  var MAX_SCENES_PER_STUDIO = 2;  // §4.6 每工作室上限 2
+  // 显示上限（设置页可改；分组/详情内不受限 — 用户 2026-10-25 第七轮）
+  function capPerActor() { return Math.max(1, toNum(dpPrefs().capPerActor, 2)); }
+  function capPerStudio() { return Math.max(1, toNum(dpPrefs().capPerStudio, 2)); }
   var CACHE_TTL_MS = 12 * 3600 * 1000;        // §4.4 12h 新鲜期
   var CACHE_STALE_MAX_MS = 7 * 24 * 3600 * 1000; // SWR 陈旧兜底 7d
   var TRENDING_PERF_CACHE_TTL_MS = 6 * 3600 * 1000;
@@ -698,7 +699,7 @@
           var lp = linkedByStashId[String(pf.id)];
           if (!lp) continue;
           matched = true;
-          if ((n[lp.localId] || 0) < MAX_SCENES_PER_ACTOR) keep = true;
+          if ((n[lp.localId] || 0) < capPerActor()) keep = true;
         }
         if (!matched) return true; // 无库内演员匹配（理论少见）不丢
         if (keep) {
@@ -935,7 +936,7 @@
       var capped = items.filter(function (it) {
         var stId2 = it.scene.studio ? String(it.scene.studio.id) : "";
         if (!stId2) return true;
-        if ((n[stId2] || 0) >= MAX_SCENES_PER_STUDIO) return false;
+        if ((n[stId2] || 0) >= capPerStudio()) return false;
         n[stId2] = (n[stId2] || 0) + 1;
         return true;
       });
@@ -1011,7 +1012,7 @@
     search: "", page: 1,
     boxes: [],        // 已配置 stash-box（数据源下拉）
     refreshing: false,
-    followOpen: {},   // 关注分组手动展开态（会话级）
+    followOpenKey: null, // 关注分组展开态（会话级；单一 key = 手风琴，最多展开一位）
     perfGroup: null,  // 演员过滤视图：actorsWithNew 分组引用
     studioGroup: null, // 工作室过滤视图：studio 分组引用
     refs: {},         // chrome 元素引用（head/tabs/toolbar/content）
@@ -1098,34 +1099,37 @@
   }
 
   // §6.2 收藏(❤)一键导入：库内 favorite 演员 → 关注列表。
-  // 只导入 stash_ids 能匹配到已配置 stash-box 的演员（关注订阅需要 box 端点）；
+  // 关注页是单源口径（只显示当前数据源的新作），导入同样只取**当前数据源**的
+  // stash_id 关联，避免导入别源演员后关注页永远「回看期内暂无新作品」
+  // （用户 2026-10-25 第七轮确认）。
   // 已关注的跳过（保留原 addedAt）。返回 {imported, skipped, noId}。
   function importFavoritesFromLibrary() {
-    return SSD.callGQL(
-      "query{findPerformers(performer_filter:{filter_favorites:true},filter:{per_page:-1}){performers{id name image_path stash_ids{endpoint stash_id}}}}"
-    ).then(function (data) {
-      var perfs = (((data || {}).findPerformers || {}).performers) || [];
-      var boxByEp = {};
-      (_dp.boxes || []).forEach(function (b) { boxByEp[String(b.endpoint).toLowerCase()] = true; });
-      var st = followStore();
-      var imported = 0, skipped = 0, noId = 0;
-      perfs.forEach(function (pf) {
-        var ids = pf.stash_ids || [];
-        var hit = null;
-        for (var i = 0; i < ids.length; i++) {
-          if (ids[i].stash_id && boxByEp[String(ids[i].endpoint).toLowerCase()]) { hit = ids[i]; break; }
-        }
-        if (!hit) { noId++; return; }
-        var k = String(hit.stash_id);
-        if (st.performers[k]) { skipped++; return; }
-        st.performers[k] = {
-          stashId: k, endpoint: hit.endpoint, name: pf.name || "",
-          image: pf.image_path || null, localId: String(pf.id), addedAt: Date.now(),
-        };
-        imported++;
+    return resolveBase().then(function (base) {
+      var srcEp = String(base.source.endpoint).toLowerCase();
+      return SSD.callGQL(
+        "query{findPerformers(performer_filter:{filter_favorites:true},filter:{per_page:-1}){performers{id name image_path stash_ids{endpoint stash_id}}}}"
+      ).then(function (data) {
+        var perfs = (((data || {}).findPerformers || {}).performers) || [];
+        var st = followStore();
+        var imported = 0, skipped = 0, noId = 0;
+        perfs.forEach(function (pf) {
+          var ids = pf.stash_ids || [];
+          var hit = null;
+          for (var i = 0; i < ids.length; i++) {
+            if (ids[i].stash_id && String(ids[i].endpoint).toLowerCase() === srcEp) { hit = ids[i]; break; }
+          }
+          if (!hit) { noId++; return; }
+          var k = String(hit.stash_id);
+          if (st.performers[k]) { skipped++; return; }
+          st.performers[k] = {
+            stashId: k, endpoint: hit.endpoint, name: pf.name || "",
+            image: pf.image_path || null, localId: String(pf.id), addedAt: Date.now(),
+          };
+          imported++;
+        });
+        try { localStorage.setItem(FOLLOW_KEY, JSON.stringify(st)); } catch (_) {}
+        return { imported: imported, skipped: skipped, noId: noId };
       });
-      try { localStorage.setItem(FOLLOW_KEY, JSON.stringify(st)); } catch (_) {}
-      return { imported: imported, skipped: skipped, noId: noId };
     });
   }
 
@@ -1139,9 +1143,14 @@
       importFavoritesFromLibrary().then(function (r) {
         btn.disabled = false;
         btn.classList.remove("loading");
-        if (r.imported > 0) { emitUnread(); render(); return; }
+        if (r.imported > 0) {
+          // 导入的演员立即进入轮询：强制检查一次，绕过 6h 节流
+          // （否则刚导入后角标/未读要等下一个 6h 窗口 — 用户 2026-10-25 第七轮）
+          if (SSD.pollFollowed) SSD.pollFollowed(true);
+          emitUnread(); render(); return;
+        }
         btn.classList.add("ok");
-        btn.title = tc("库内收藏均已关注或无 stash-box 关联", "Favorites already followed or without stash-box links");
+        btn.title = tc("库内收藏均已关注，或未关联当前数据源", "Favorites already followed, or not linked to the current source");
         setTimeout(function () { btn.classList.remove("ok"); }, 1200);
       }).catch(function () {
         btn.disabled = false;
@@ -1168,7 +1177,6 @@
     studios: sv('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
     settings: sv('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/>'),
     star: sv('<path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2l-6.1 3.4 1.4-6.8L2.2 9.1l6.9-.8z"/>', "currentColor"),
-    back: sv('<path d="M15 18l-6-6 6-6"/>'),
     ext: sv('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
     refresh: sv('<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/>'),
     grid: sv('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
@@ -1706,15 +1714,9 @@
       c.appendChild(stateBox("loading"));
       return;
     }
-    // 面包屑 + 子 tab：仅 latest 有子 tab，面包屑也只在该视图显示
-    // （用户 2026-10-25 第四轮：无子 tab 的钻取页不要「返回总览」）
+    // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
+    // 「返回总览」已移除（用户 2026-10-25 第七轮）
     if (view === "latest") {
-      var crumb = el("button", "ssd-dp-crumb", I.back + "<span>" + tc("返回总览", "Back to overview") + "</span>");
-      crumb.type = "button";
-      crumb.addEventListener("click", function () { switchView("overview"); });
-      c.appendChild(crumb);
-
-      // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
       var subRow = el("div", "ssd-dp-tabs ssd-dp-subtabs");
       [["new", tc("已发布 · " + (ds.latest || []).length, "Released · " + (ds.latest || []).length)],
        ["preview", tc("预告 · " + (ds.preview || []).length, "Upcoming · " + (ds.preview || []).length)]].forEach(function (pair) {
@@ -2171,9 +2173,9 @@
     var endpoint = st.source.endpoint;
     var studio = g.studio || {};
 
-    var head = el("div", "ssd-dp-pfhead");
+    var head = el("div", "ssd-dp-pfhead ssd-dp-pfhead--studio");
     var img = document.createElement("img");
-    img.className = "ssd-dp-pfavatar";
+    img.className = "ssd-dp-pfavatar ssd-dp-pfavatar--studio";
     img.alt = studio.name || "";
     img.src = studio.image || letterAvatar(studio.name);
     img.onerror = function () { this.src = letterAvatar(studio.name); };
@@ -2200,7 +2202,7 @@
       homeBtn.addEventListener("click", function () { window.location.assign("/studios/" + studio.localId); });
       acts.appendChild(homeBtn);
     }
-    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + " ↗");
+    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + I.ext);
     boxBtn.href = SSD.boxWebBase(endpoint) + "/studios/" + studio.stashId;
     boxBtn.target = "_blank";
     boxBtn.rel = "noopener noreferrer";
@@ -2214,16 +2216,23 @@
   // ── 关注视图（§3.4：分组 + 未读标记 + 全部已读 + 空状态；P5 补数据层）──
   function renderFollow(c) {
     var d = _dp.d.latest;
-    var fl = followList();
+    var allFollow = followList();
     if (!d) {
       if (_dp.err.latest) { c.appendChild(stateBox("error", errText(_dp.err.latest), retryLatest)); return; }
       c.appendChild(stateBox("loading"));
       return;
     }
+    // 单源口径（用户 2026-10-25 第七轮）：只列当前数据源的关注演员，
+    // 别源演员不在此页显示「回看期内暂无新作品」，切源后自然出现。
+    var srcEp = String(d.source.endpoint).toLowerCase();
+    var fl = allFollow.filter(function (f) { return String(f.endpoint || "").toLowerCase() === srcEp; });
     if (!fl.length) {
       var empty = stateBox("empty",
-        tc("还没有关注的演员。在演员卡上点 ♥ 即可关注，或从库内收藏一键导入。",
-           "Not following anyone yet. Tap ♥ on a performer card, or import your ❤ favorites in one tap."));
+        allFollow.length
+          ? tc("当前数据源下还没有关注的演员。切换数据源，或从收藏导入当前源的演员。",
+               "No followed performers on the current source. Switch the source, or import its favorites.")
+          : tc("还没有关注的演员。在演员卡上点 ♥ 即可关注，或从库内收藏一键导入。",
+               "Not following anyone yet. Tap ♥ on a performer card, or import your ❤ favorites in one tap."));
       empty.appendChild(makeImportButton());
       c.appendChild(empty);
       return;
@@ -2282,16 +2291,19 @@
       head.appendChild(info);
 
       var rightBox = el("div", "ssd-dp-fgrp-acts");
-      // 点击整行进入演员过滤视图（§8.1 复用）或展开/收起
+      var isOpen = !!g && _dp.followOpenKey === String(f.stashId);
+      var toggleRow = function () {
+        if (!g) return;
+        _dp.followOpenKey = isOpen ? null : String(f.stashId);
+        render();
+      };
       if (g) {
-        var caret = el("button", "ssd-dp-btn ghost", (_dp.followOpen[f.stashId] !== false && unread > 0) || _dp.followOpen[f.stashId] ? "▾" : "▸");
+        var caret = el("button", "ssd-dp-btn ghost", isOpen ? "▾" : "▸");
         caret.type = "button";
         caret.title = tc("展开 / 收起", "Expand / collapse");
         caret.addEventListener("click", function (e) {
           e.stopPropagation();
-          var open = _dp.followOpen[f.stashId];
-          _dp.followOpen[f.stashId] = open === false ? true : !(open === true || (open === undefined && unread > 0));
-          render();
+          toggleRow();
         });
         rightBox.appendChild(caret);
       }
@@ -2314,10 +2326,15 @@
       });
       rightBox.appendChild(unfBtn);
       head.appendChild(rightBox);
+      // 整行点击 = 展开/收起（详情、取消关注按钮已 stopPropagation）
+      if (g) {
+        head.classList.add("is-toggle");
+        head.addEventListener("click", toggleRow);
+      }
       grp.appendChild(head);
 
-      // 分组体：有未读默认展开（§3.4）；场景卡未读红框、点开即已读
-      var expanded = g && ((_dp.followOpen[f.stashId] !== false && unread > 0) || _dp.followOpen[f.stashId] === true);
+      // 分组体：手风琴，最多展开一位（默认全部收起 — 用户 2026-10-25 第七轮）
+      var expanded = isOpen;
       if (g && expanded) {
         var body = el("div", "ssd-dp-fgrp-body");
         body.appendChild(sceneGrid(g.items, { unread: true }));
@@ -2356,6 +2373,8 @@
     srcSel.addEventListener("change", function () {
       dpSetPrefs({ source: srcSel.value });
       _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
+      // 角标按当前数据源统计（单源口径），切源后立即重算一次
+      if (SSD.pollFollowed) SSD.pollFollowed(true);
       ensureData(viewDataKeys(_dp.view));
       render();
     });
@@ -2382,6 +2401,39 @@
     rowI.appendChild(makeImportButton());
     secG.appendChild(rowI);
     wrap.appendChild(secG);
+
+    // ── 显示上限（平铺列表：每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──
+    wrap.appendChild(el("h3", "ssd-dp-set-h", tc("显示上限", "Display limits")));
+    var secC = el("div", "ssd-dp-set-box");
+    [
+      ["capPerActor", tc("每位演员最多场景", "Max scenes per performer"), capPerActor()],
+      ["capPerStudio", tc("每个工作室最多场景", "Max scenes per studio"), capPerStudio()],
+    ].forEach(function (def) {
+      var row = el("div", "ssd-dp-setrow");
+      row.appendChild(el("span", "ssd-dp-setname", def[1]));
+      var sel = document.createElement("select");
+      sel.className = "ssd-dp-setsel";
+      for (var i = 1; i <= 10; i++) {
+        var op = document.createElement("option");
+        op.value = String(i);
+        op.textContent = String(i);
+        sel.appendChild(op);
+      }
+      sel.value = String(def[2]);
+      sel.addEventListener("change", function () {
+        var patch = {};
+        patch[def[0]] = parseInt(sel.value, 10);
+        dpSetPrefs(patch);
+        // 上限在管线计算期生效 → 清结果、用现有场景缓存重算
+        _dp.d.latest = null; _dp.d.studios = null;
+        _dp.err.latest = null; _dp.err.studios = null;
+        ensureData(["latest", "studios"]);
+        render();
+      });
+      row.appendChild(sel);
+      secC.appendChild(row);
+    });
+    wrap.appendChild(secC);
 
     // ── 总览模块（开关 / 行数 1-3 / 上移下移）──
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("总览模块", "Overview modules")));
@@ -2592,7 +2644,7 @@
     vt.appendChild(gBtn); vt.appendChild(lBtn);
     tools.appendChild(vt);
 
-    refs.srcWrap = el("span");
+    refs.srcWrap = el("span", "ssd-dp-srcwrap");
     tools.appendChild(refs.srcWrap);
     bar.appendChild(tools);
     root.appendChild(bar);
@@ -2645,6 +2697,8 @@
       sel.addEventListener("change", function () {
         dpSetPrefs({ source: sel.value });
         _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
+        // 角标按当前数据源统计（单源口径），切源后立即重算一次
+        if (SSD.pollFollowed) SSD.pollFollowed(true);
         ensureData(viewDataKeys(_dp.view));
         render();
       });

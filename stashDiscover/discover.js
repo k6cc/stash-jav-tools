@@ -145,6 +145,8 @@
       });
       const pr = parse(s.primary);
       t.acc = pr && pr[3] > 0 ? fit(hex(over(pr, ui)), [ui], 3, dark) : t.or;
+      // 采样主色过暗（黑色系主题）→ 退回橙色，避免「加入库」等主按钮变黑（用户 2026-10-25）
+      if (lum(t.acc) < 0.09) t.acc = t.or;
       t["acc-tx"] = contrast(t.acc, "#FFFFFF") >= contrast(t.acc, t.on) ? "#FFFFFF" : t.on;
       return t;
     }
@@ -582,7 +584,8 @@
   }
 
   // ── 2.3 SWR 缓存（localStorage，按源 host + 窗口参数分键）────────────────
-  function cacheKey(host, family) { return LS_PREFIX + host + ":" + family + ".v1"; }
+  // .v2（2026-10-25）：场景数据 performers 增 images 字段，旧缓存无共同出演头像
+  function cacheKey(host, family) { return LS_PREFIX + host + ":" + family + ".v2"; }
 
   function cacheRead(host, family, wantSince) {
     try {
@@ -1340,7 +1343,9 @@
     return m;
   }
   function cardCtx() {
-    return { zoom: 0, queryBoxes: _dp.boxes, localPerformerMaps: localPerfMaps() };
+    // queryBoxes 传空：发现页按源查询（单源目标），封面左下角不显示源名徽标
+    // （buildSceneCard 仅在多源上下文渲染该徽标）— 用户 2026-10-25
+    return { zoom: 0, queryBoxes: [], localPerformerMaps: localPerfMaps() };
   }
   // decorateCard：预告"X 天后上映"绿标（替换 buildSceneCard 的黄色彩点）、
   // 热门榜"库内"小角标（§5）、关注未读红框（§3.4）
@@ -1701,14 +1706,15 @@
       c.appendChild(stateBox("loading"));
       return;
     }
-    // 面包屑（§3.3）
-    var crumb = el("button", "ssd-dp-crumb", I.back + "<span>" + tc("返回总览", "Back to overview") + "</span>");
-    crumb.type = "button";
-    crumb.addEventListener("click", function () { switchView("overview"); });
-    c.appendChild(crumb);
-
-    // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
+    // 面包屑 + 子 tab：仅 latest 有子 tab，面包屑也只在该视图显示
+    // （用户 2026-10-25 第四轮：无子 tab 的钻取页不要「返回总览」）
     if (view === "latest") {
+      var crumb = el("button", "ssd-dp-crumb", I.back + "<span>" + tc("返回总览", "Back to overview") + "</span>");
+      crumb.type = "button";
+      crumb.addEventListener("click", function () { switchView("overview"); });
+      c.appendChild(crumb);
+
+      // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
       var subRow = el("div", "ssd-dp-tabs ssd-dp-subtabs");
       [["new", tc("已发布 · " + (ds.latest || []).length, "Released · " + (ds.latest || []).length)],
        ["preview", tc("预告 · " + (ds.preview || []).length, "Upcoming · " + (ds.preview || []).length)]].forEach(function (pair) {
@@ -1748,7 +1754,20 @@
 
     c.appendChild(pagerBar(view, all.length, totalPages, perPage, true));
     if (!all.length) {
-      c.appendChild(stateBox("empty", _dp.search ? tc("没有匹配的场景", "No matching scenes") : tc("暂无内容", "Nothing here yet")));
+      // 工作室钻取无任何收藏工作室 → 提示 + 跳转 Stash 原生工作室列表
+      // （用户 2026-10-25 第四轮；有关注但无新发布仍走通用空态）
+      if (view === "studios" && !ds.studioCount) {
+        var noFav = stateBox("empty",
+          tc("还没有收藏的工作室。在 Stash 中收藏（♥）工作室后，其新作品会出现在这里。",
+             "No favorited studios yet. Favorite (♥) studios in Stash and their new releases will show up here."));
+        var goStash = el("button", "ssd-dp-btn primary", tc("去 Stash 查看", "Open Stash studios"));
+        goStash.type = "button";
+        goStash.addEventListener("click", function () { window.location.assign("/studios"); });
+        noFav.appendChild(goStash);
+        c.appendChild(noFav);
+      } else {
+        c.appendChild(stateBox("empty", _dp.search ? tc("没有匹配的场景", "No matching scenes") : tc("暂无内容", "Nothing here yet")));
+      }
     } else {
       c.appendChild(sceneGrid(pageItems, { days: cfg.days, allowList: true }));
     }
@@ -1875,7 +1894,11 @@
     m.appendChild(close);
 
     // 头部：共享演员详情模块（与演员过滤视图同构 — 用户 2026-10-25）
-    var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true });
+    // 统计行走详情区 info 列（第四轮：不放按钮区下面）
+    var statText = p.src === "co"
+      ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
+      : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
+    var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true, stat: statText });
     m.appendChild(h.head);
 
     // 按钮区：加入库（performerCreate + stash_ids 回链）
@@ -1911,13 +1934,6 @@
     boxBtn.rel = "noopener noreferrer";
     acts.appendChild(boxBtn);
     m.appendChild(acts);
-
-    // 统计行（按钮区下方 = 详情区最下面 — 用户 2026-10-25）
-    var stat = el("div", "ssd-dp-pfstat");
-    stat.textContent = p.src === "co"
-      ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
-      : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
-    m.appendChild(stat);
 
     // 相关场景
     var sc = el("div", "ssd-dp-modal-scenes");
@@ -1984,8 +2000,8 @@
   }
 
   // ── 共享演员详情模块（演员过滤视图 + 发现演员弹层同构 — 用户 2026-10-25）──
-  // 结构：头像（左下角国旗徽标）｜名称 / 别名（名称正下方）/ 性别·年龄｜右上外链。
-  // 按钮区与统计行由调用方追加（统计行统一放按钮区下方 = 详情区最下面）。
+  // 结构：头像（左下角国旗徽标）｜名称 / 别名（名称正下方）/ 性别·年龄 / 统计行｜右上外链。
+  // 统计行（p.stat）放 info 列最后一行 = 详情区内部最下面（用户 2026-10-25 第四轮）。
   function buildPerfHead(p) {
     var head = el("div", "ssd-dp-pfhead" + (p.modal ? " ssd-dp-modal-head" : ""));
     var av = el("div", "ssd-dp-pfav");
@@ -2005,6 +2021,9 @@
     info.appendChild(aliasLine);
     var genderLine = el("div", "ssd-dp-pfmeta ssd-dp-pfgender");
     info.appendChild(genderLine);
+    var statLine = el("div", "ssd-dp-pfmeta ssd-dp-pfstat");
+    if (p.stat) statLine.textContent = p.stat;
+    info.appendChild(statLine);
     head.appendChild(info);
     var ext = el("a", "ssd-dp-extbtn", I.ext);
     ext.href = SSD.boxWebBase(p.endpoint) + "/performers/" + p.stashId;
@@ -2012,7 +2031,7 @@
     ext.rel = "noopener noreferrer";
     ext.title = tc("在 stash-box 打开", "Open on stash-box");
     head.appendChild(ext);
-    return { head: head, avatar: img, flag: flag, aliasLine: aliasLine, genderLine: genderLine, info: info };
+    return { head: head, avatar: img, flag: flag, aliasLine: aliasLine, genderLine: genderLine, statLine: statLine, info: info };
   }
 
   // 详情补全：性别/年龄 → genderLine，别名 → 名称下方，国籍 → 头像国旗徽标，
@@ -2032,9 +2051,18 @@
     if (pf.images && pf.images[0] && pf.images[0].url) h.avatar.src = pf.images[0].url;
     var iso = countryIso(pf.country);
     if (iso) {
-      // flag-icons 与 Stash 演员详情 tab 同源（fi-xx 类，Stash 自带该 CSS）
-      h.flag.className = "ssd-dp-pfflag fi fi-" + iso.toLowerCase();
+      // 国旗缩小为 flagcdn 图，与场景二级弹窗演员 popup 同一实现
+      // （w40 图片 + onerror 文本兜底 — 用户 2026-10-25 第四轮）
       h.flag.title = String(pf.country);
+      h.flag.textContent = "";
+      var flagImg = document.createElement("img");
+      flagImg.src = "https://flagcdn.com/w40/" + iso.toLowerCase() + ".png";
+      flagImg.alt = iso;
+      flagImg.onerror = function () {
+        h.flag.textContent = iso;
+        flagImg.remove();
+      };
+      h.flag.appendChild(flagImg);
       h.flag.style.display = "";
     }
   }
@@ -2064,7 +2092,10 @@
     var endpoint = d.source.endpoint;
 
     // 头部：共享演员详情模块（与发现演员弹层同构 — 用户 2026-10-25）
-    var h = buildPerfHead({ name: pf.name, image: pf.image, stashId: pf.stashId, endpoint: endpoint });
+    // 统计行走详情区 info 列（第四轮：不放按钮区下面）
+    var h = buildPerfHead({ name: pf.name, image: pf.image, stashId: pf.stashId, endpoint: endpoint,
+      stat: tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
+        g.items.length + " new · newest " + (g.newest || "—")) });
     c.appendChild(h.head);
 
     // 按钮区（§8.1：关注 ♥ / 发现 tab / 主页 / stash-box）
@@ -2093,12 +2124,6 @@
     acts.appendChild(homeBtn);
     // stash-box 打开按钮已移除（详情区右上外链图标承担）— 用户 2026-10-25
     c.appendChild(acts);
-
-    // 统计行（按钮区下方 = 详情区最下面 — 用户 2026-10-25）
-    var stat = el("div", "ssd-dp-pfstat");
-    stat.textContent = tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
-      g.items.length + " new · newest " + (g.newest || "—"));
-    c.appendChild(stat);
 
     // 本地演员详情补全（性别/年龄/别名/国籍国旗）
     SSD.callGQL("query($id:ID!){findPerformer(id:$id){id gender birthdate country alias_list}}", { id: pf.localId }).then(function (r) {

@@ -287,3 +287,29 @@
   刷新后共同出演头像才出现（本轮验证已点刷新确认全量头像）。
 - node --check 通过；三文件已同步实装目录；测试写入的 perfSrc/latestSub
   偏好已复位默认。
+
+## 2026-10-25 第四轮（用户需求 7 项：细节修正）
+
+| # | 需求（用户 2026-10-25） | 实现 | 验证 |
+|---|---|---|---|
+| R1 | "n部新作品，最新……统计放到演员详情区的下面，不是按钮区的下面" | buildPerfHead 增 p.stat → info 列最后一行 statLine（名称→别名→性别·年龄→统计）；perfFilter/openPerfModal 删按钮区下独立 stat div 改传 p.stat | 弹窗 infoLines 末行 "共同出演 ×64"；perfFilter 末行 "37 部新作品 · 最新 2026-11-19"；旧位置 0 残留 |
+| R2 | "演员头像国旗缩小（场景的二级弹窗点击演员就有国旗的实现…）" | 弃 flag-icons fi-xx，改与主 JS 场景弹窗演员 popup 同实现：flagcdn w40 img + onerror ISO 文本兜底；CSS 徽标改为半透明黑底小徽章（桌面 img 20×14、窄屏 16×11，padding 2px 3px） | 桌面 flagRect 20×14、375px 16×11、src=flagcdn.com/w40/jp.png；无 fi-xx 类 |
+| R3 | "共同出演列表还是没有头像，点开才有" | 根因 = 第三轮验证点过刷新但用户浏览器仍是旧 SWR 缓存（v1 无 performers images 字段）→ cacheKey 家族版本 .v1→.v2（newScenes/studios/trending）强制全端失效重拉 | 刷新后 v2 键写入；co tab 12/12 卡真实头像（javstash.org 直链） |
+| R4 | ""加入库"按钮怎么是黑色的？" | 根因 = 用户主题采样主色过暗（黑系主题）→ suiteTheme derive() 增防黑守卫：lum(t.acc)<0.09 时退回橙色 t.or | 我方主题加入库按钮 rgb(57,145,200) 蓝不受影响（守卫仅拦近黑主色） |
+| R5 | "返回总览按钮，我倾向分页有子tab的要有，没子tab不要有" | renderDrill 面包屑移入 view==="latest" 块（唯一有子tab 的钻取视图，含预告 sub）；trending/studios/perfFilter/studioFilter 均无 | latest：crumb"返回总览"+subtab"已发布·47/预告·42"；热门/工作室/演员过滤均 crumbCount=0 |
+| R6 | "工作室分页，如果没有任何工作室被关注，提示…然后"去stash查看"按钮跳转到stash原生工作室列表" | renderDrill 空态分支：view==="studios" && !ds.studioCount（收藏数，非场景数）→ stateBox 提示"还没有收藏的工作室。在 Stash 中收藏（♥）工作室后…" + "去 Stash 查看" primary 按钮 → /studios；有关注但无新发布仍走通用空态 | 有关注时正常渲染组条（Prestige·12→cap 2 卡）；空态结构同 stateBox("error") 内按钮先例，.ssd-dp-state flex-column 居中布局确认 |
+| R7 | "发现页作为单源目标，封面左下角不需要显示源名字" | cardCtx() queryBoxes 传空数组（主 JS buildSceneCard 仅 st.queryBoxes.length>1 时渲染 .ssd-overlay-box 徽标） | 总览/最新/热门/工作室四视图 sourceBadges=0（预告左上绿标保留，属不同功能） |
+
+### 走查记录（1440 / 375px，已登录，ignoreCache 刷新后新代码）
+
+- 缓存 .v2 生效：SSD:dp:javstash.org:{newScenes,studios,trending}.v2 写入，
+  trendingPerf/local/follow 家族无 schema 变化保持 .v1。
+- 弹窗（co）：info 列 = 名称→别名→"女·30 岁"→"共同出演 ×64"，加入库按钮
+  蓝 rgb(57,145,200)，国旗 flagcdn jp 20×14，6 相关场景。
+- perfFilter（本地有更新 51 卡取第一）：info 末行 "37 部新作品 · 最新
+  2026-11-19"，按钮区 ♡关注/发现Tab/主页，无面包屑。
+- 工作室视图：组条 Prestige·12（cap 2 卡）；latest 子 tab 计数随缓存刷新为
+  已发布·47/预告·42。
+- 375px：国旗 16×11、头像 64×96、0 横向溢出。
+- node --check 通过；discover.js + stashDiscover.css 已同步实装目录
+  （stashDiscover.js 本轮无改动）；测试写入偏好已复位（perfSrc=co, latestSub=new）。

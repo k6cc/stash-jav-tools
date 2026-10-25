@@ -1757,7 +1757,7 @@
   line-height: 1.25;
 }
 .ssd-dp-pfmeta { color: var(--sx-tx2); font-size: 13px; margin-top: 4px; }
-.ssd-dp-pfgender:empty, .ssd-dp-pfalias:empty { display: none; }
+.ssd-dp-pfgender:empty, .ssd-dp-pfalias:empty, .ssd-dp-pfstat:empty { display: none; }
 .ssd-dp-pfalias { color: var(--sx-tx3); }
 .ssd-dp-extbtn {
   position: absolute;
@@ -1783,28 +1783,28 @@
   gap: 10px;
   margin-bottom: 16px;
 }
-/* 头像容器 + 国旗徽标（叠加头像左下角 — 用户 2026-10-25，参考 Stash 演员详情国旗）*/
+/* 头像容器 + 国旗徽标（叠加头像左下角 — 用户 2026-10-25）*/
 .ssd-dp-pfav { position: relative; flex: none; }
+/* 国旗缩小为 flagcdn 图，与场景二级弹窗演员 popup 同一实现（用户 2026-10-25 第四轮）*/
 .ssd-dp-pfflag {
   position: absolute;
-  left: 7px;
-  bottom: 7px;
-  width: 30px;
-  height: 22px;
-  border-radius: 5px;
-  overflow: hidden;
-  border: 1.5px solid var(--sx-ui);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
-  background-size: cover;
-  background-position: center;
+  left: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  letter-spacing: 0.5px;
 }
-.ssd-dp-pfflag:before { content: none; } /* 覆盖 flag-icons 的 ::before 高度占位 */
-/* 统计行（按钮区下方 = 详情区最下面 — 用户 2026-10-25）*/
-.ssd-dp-pfstat {
-  color: var(--sx-tx2);
-  font-size: 13px;
-  margin: -6px 0 14px 2px;
-}
+.ssd-dp-pfflag img { display: block; width: 20px; height: 14px; border-radius: 2px; }
+/* 统计行：详情区 info 列最后一行（ssd-dp-pfmeta 派生样式 — 用户 2026-10-25 第四轮）*/
+.ssd-dp-pfstat { color: var(--sx-tx3); }
 .ssd-dp-pfsect {
   font-size: 13px;
   font-weight: 700;
@@ -1897,7 +1897,8 @@
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
   .ssd-dp-pfavatar { width: 64px; height: 96px; }
-  .ssd-dp-pfflag { width: 24px; height: 18px; left: 4px; bottom: 4px; border-radius: 4px; }
+  .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 1px 2px; }
+  .ssd-dp-pfflag img { width: 16px; height: 11px; }
   .ssd-dp-pfname { font-size: 17px; }
   .ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .ssd-dp-fgrp-head { padding: 10px; }

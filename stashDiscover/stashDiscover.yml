@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.2.1
+version: 2.2.2
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -21,6 +21,10 @@ settings:
     displayName: "Jackett API Key"
     description: "Jackett API key (found in Jackett dashboard top-right)"
     type: STRING
+  jackettTimeout:
+    displayName: "Jackett Timeout (seconds)"
+    description: "How long to wait for a Jackett search. Raise it if searches time out on a slow NAS or with many indexers. Default 120, max 600."
+    type: NUMBER
   downloaderType:
     displayName: "Downloader Type"
     description: "Torrent downloader for push-to-download (currently only qbittorrent)"
@@ -74,4 +78,5 @@ ui:
       - "https://stashdb.org"
       - "https://javstash.org"
       - "https://theporndb.net"
+      - "https://api.theporndb.net"
       - "https://r18.dev"

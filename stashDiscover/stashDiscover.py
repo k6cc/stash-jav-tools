@@ -123,10 +123,11 @@ def http_request(url, method="GET", data=None, headers=None, timeout=30):
     req = urllib.request.Request(url, data=req_data, headers=req_headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", errors="replace"), dict(resp.headers)
+            # 保留 HTTPMessage，qBittorrent 登录可能分多条 Set-Cookie
+            return resp.status, resp.read().decode("utf-8", errors="replace"), resp.headers
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        return e.code, body, dict(e.headers or {})
+        return e.code, body, (e.headers or {})
     except Exception as e:
         return 0, str(e), {}
 
@@ -223,10 +224,21 @@ def _normalize_torznab_url(url):
     return u + "/api/v2.0/indexers/all/results/torznab"
 
 
+def _int_setting(cfg, key, default, lo, hi):
+    try:
+        v = int(str(cfg.get(key) or "").strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
 def do_search(stash, query):
     cfg = stash.get_plugin_config()
     jackett_url = _normalize_torznab_url(cfg.get("jackettUrl") or "")
     jackett_key = (cfg.get("jackettApiKey") or "").strip()
+    # 索引器聚合搜索在 NAS / 慢索引器上常超过 30s，默认放宽到 120s，
+    # 并允许在插件设置里按需上调（论坛反馈：30s 会稳定超时）
+    jackett_timeout = _int_setting(cfg, "jackettTimeout", 120, 10, 600)
 
     if not jackett_url or not jackett_key:
         emit_error("Jackett not configured. Set Jackett API URL and API Key in plugin settings.")
@@ -238,7 +250,7 @@ def do_search(stash, query):
     url = f"{jackett_url}{sep}apikey={urllib.parse.quote(jackett_key)}&q={urllib.parse.quote(query)}"
 
     log_info(f"Jackett search: {query}")
-    status, body, _ = http_request(url, timeout=30)
+    status, body, _ = http_request(url, timeout=jackett_timeout)
 
     if status != 200:
         emit_error(f"Jackett request failed (HTTP {status}): {body[:200]}")
@@ -269,6 +281,29 @@ def do_push_download(stash, magnet, savepath=""):
         emit_error(f"Unsupported downloader type: {dl_type}. Currently only qbittorrent is supported.")
 
 
+def _session_cookie(headers):
+    """qBittorrent ≤5.1 sends `SID=…`, 5.2+ renamed the session cookie to
+    `QBT_SID_<port>` (and may split Set-Cookie across header lines). Collect
+    every SID-bearing cookie pair instead of hard-coding the old name."""
+    lines = []
+    try:
+        lines = headers.get_all("Set-Cookie") or []
+    except AttributeError:
+        for k, v in (headers or {}).items():
+            if k.lower() == "set-cookie":
+                lines.append(v)
+    pairs = []
+    for line in lines:
+        # a server may combine several cookies into one header line
+        for part in re.split(r",\s*(?=[^=;,\s]+=)", line or ""):
+            m = re.match(r"\s*([^=;,\s]+)=([^;,]*)", part)
+            if not m:
+                continue
+            if "SID" in m.group(1).upper():
+                pairs.append(f"{m.group(1)}={m.group(2)}")
+    return "; ".join(pairs)
+
+
 def _push_qbittorrent(base_url, username, password, magnet, savepath):
     login_url = f"{base_url}/api/v2/auth/login"
     status, body, headers = http_request(
@@ -280,13 +315,7 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath):
         emit_error(f"qBittorrent login failed (HTTP {status}): {body[:100]}")
         return
 
-    cookie = ""
-    for k, v in headers.items():
-        if k.lower() == "set-cookie":
-            m = re.search(r'(SID=[^;]+)', v)
-            if m:
-                cookie = m.group(1)
-                break
+    cookie = _session_cookie(headers)
 
     if not cookie:
         emit_error("qBittorrent login did not return a session cookie.")

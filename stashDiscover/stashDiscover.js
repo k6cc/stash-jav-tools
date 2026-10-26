@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.2.1";
+  var PLUGIN_VERSION = "2.2.2";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -170,6 +170,267 @@
       throw ssdError("unknown", (e && e.message) || String(e));
     });
   }
+
+  // ─── ThePornDB REST adapter ──────────────────────────────────────────────
+  // TPDB 的 stash-box 列表接口（queryScenes / queryStudios）服务端故障：
+  // HTTP 200 但 scenes 恒为 null（论坛反馈的 "TPDB API error"）。单条查询
+  // findScene / findPerformer / findStudio 正常。场景列表因此改走它公开的
+  // REST API；返回里的 site.uuid 与 stash-box 的 studio id 一致。
+  var TPDB_RE = /theporndb\.net/i;
+  var _tpdbLastPage = {};
+
+  function isTPDBBox(box) {
+    return !!box && TPDB_RE.test(String(box.endpoint || ""));
+  }
+
+  // The discover page builds its own source object with camelCase apiKey,
+  // while configuration.general.stashBoxes exposes api_key — accept both.
+  function boxKey(box) {
+    if (!box) return "";
+    return box.api_key != null ? box.api_key : (box.apiKey || "");
+  }
+
+  function tpdbGet(box, path, timeoutMs) {
+    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timedOut = false;
+    var timer = setTimeout(function () {
+      timedOut = true;
+      if (controller) controller.abort();
+    }, timeoutMs || BOX_TIMEOUT_MS);
+    var headers = { "Accept": "application/json" };
+    if (boxKey(box)) headers["Authorization"] = "Bearer " + boxKey(box);
+    return fetch("https://api.theporndb.net" + path, {
+      headers: headers,
+      signal: controller ? controller.signal : undefined,
+    }).catch(function (e) {
+      clearTimeout(timer);
+      if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
+      throw ssdError("network", (e && e.message) || "network error");
+    }).then(function (r) {
+      if (!r.ok) {
+        throw ssdError((r.status === 401 || r.status === 403) ? "auth" : "blocked", "HTTP " + r.status);
+      }
+      return r.json().catch(function () { throw ssdError("parse", "non-JSON response"); });
+    }).then(function (data) {
+      clearTimeout(timer);
+      return data;
+    }).catch(function (e) {
+      clearTimeout(timer);
+      if (e && e.ssdKind) throw e;
+      throw ssdError("unknown", (e && e.message) || String(e));
+    });
+  }
+
+  function tpdbScene(raw) {
+    if (!raw) return null;
+    var site = raw.site || null;
+    var imgs = [];
+    [raw.image, raw.poster, raw.poster_image, raw.back_image, raw.background, raw.background_back].forEach(function (u) {
+      if (u && !imgs.some(function (x) { return x.url === u; })) imgs.push({ url: u });
+    });
+    var urls = [];
+    if (raw.url) urls.push({ url: raw.url, site: { name: (site && site.name) || "" } });
+    (raw.links || []).forEach(function (l) {
+      var u = typeof l === "string" ? l : (l && l.url);
+      if (u && !urls.some(function (x) { return x.url === u; })) {
+        urls.push({ url: u, site: { name: (site && site.name) || "" } });
+      }
+    });
+    return {
+      id: raw.id,
+      title: raw.title || "",
+      code: raw.sku || raw.external_id || "",
+      details: raw.description || "",
+      release_date: raw.date || "",
+      duration: raw.duration || 0,
+      urls: urls,
+      studio: site ? {
+        id: site.uuid || (site.id != null ? String(site.id) : ""),
+        name: site.name || "",
+      } : null,
+      performers: (raw.performers || []).map(function (p) {
+        // 场景内演员是站点级记录；stash-box 的演员 id 是站点无关的 parent id
+        var par = p.parent || null;
+        var img = p.image || p.thumbnail || p.face ||
+          (par && (par.image || par.thumbnail || par.face)) || "";
+        return {
+          as: p.name || (par && par.name) || "",
+          performer: {
+            id: (par && par.id) || p.id || "",
+            name: p.name || (par && par.name) || "",
+            images: img ? [{ url: img }] : [],
+          },
+        };
+      }),
+      tags: (raw.tags || []).map(function (t) {
+        return { id: t.uuid || (t.id != null ? String(t.id) : ""), name: t.name || "" };
+      }),
+      images: imgs,
+    };
+  }
+
+  function tpdbResult(j, reverse) {
+    var scenes = ((j && j.data) || []).map(tpdbScene).filter(Boolean);
+    if (reverse) scenes.reverse();
+    var meta = (j && j.meta) || {};
+    return {
+      count: meta.total || scenes.length,
+      scenes: scenes,
+      hasMore: (meta.current_page || 1) < (meta.last_page || 1),
+    };
+  }
+
+  function tpdbIdPage(box, kind, id, pageNum, perPage, dir, timeoutMs) {
+    var path = (kind === "studio" ? "/sites/" : "/performers/") +
+      encodeURIComponent(id) + "/scenes?per_page=" + perPage;
+    var key = box.endpoint + "|" + kind + "|" + id;
+    function get(p) {
+      return tpdbGet(box, path + "&page=" + p, timeoutMs);
+    }
+    if (String(dir).toUpperCase() !== "ASC") {
+      // 这两个端点固定按日期倒序
+      return get(pageNum).then(function (j) {
+        _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
+        return tpdbResult(j, false);
+      });
+    }
+    // ASC：REST 排序参数被忽略 → 页号镜像 + 页内倒序
+    var cached = _tpdbLastPage[key];
+    var ready = cached ? Promise.resolve(cached) : get(1).then(function (j) {
+      _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
+      return _tpdbLastPage[key];
+    });
+    return ready.then(function (last) {
+      var target = Math.max(1, last - pageNum + 1);
+      return get(target).then(function (j) { return tpdbResult(j, true); });
+    });
+  }
+
+  function tpdbSinceScenes(box, kind, ids, since, perPage, timeoutMs) {
+    var out = [], seen = {}, idx = 0;
+    function fetchOne(id) {
+      // 这两个端点按日期倒序；碰到早于 since 的场景即可停止翻页
+      var path = (kind === "studio" ? "/sites/" : "/performers/") +
+        encodeURIComponent(id) + "/scenes?per_page=" + perPage;
+      function step(p) {
+        return tpdbGet(box, path + "&page=" + p, timeoutMs).then(function (j) {
+          var rows = (j && j.data) || [];
+          var reachedOld = false;
+          rows.forEach(function (raw) {
+            var s = tpdbScene(raw);
+            if (!s) return;
+            if (since && !(s.release_date && s.release_date > since)) { reachedOld = true; return; }
+            if (seen[s.id]) return;
+            seen[s.id] = true;
+            out.push(s);
+          });
+          var last = (j && j.meta && j.meta.last_page) || 1;
+          if (!reachedOld && rows.length && p < last && p < 3) return step(p + 1);
+        });
+      }
+      return step(1);
+    }
+    function wave() {
+      if (idx >= ids.length) return out;
+      var chunk = ids.slice(idx, idx + 3);
+      idx += 3;
+      return Promise.all(chunk.map(fetchOne)).then(wave);
+    }
+    return Promise.resolve().then(wave).then(function () {
+      out.sort(function (a, b) {
+        return String(b.release_date || "").localeCompare(String(a.release_date || ""));
+      });
+      return { count: out.length, scenes: out, hasMore: false };
+    });
+  }
+
+  function tpdbGlobalPage(box, pageNum, perPage, sort, dir, timeoutMs) {
+    // TPDB REST 只对 date 排序可信；TRENDING 降级为最新
+    var q = "/scenes?per_page=" + perPage + "&page=" + pageNum +
+      "&sort=date&direction=" + (String(dir).toUpperCase() === "ASC" ? "asc" : "desc");
+    return tpdbGet(box, q, timeoutMs).then(function (j) { return tpdbResult(j, false); });
+  }
+
+  function filterIds(filter) {
+    if (!filter) return [];
+    var v = filter.value;
+    if (Array.isArray(v)) return v.filter(Boolean).map(String);
+    if (typeof v === "string" && v) return [v];
+    return [];
+  }
+
+  // stash-box SceneQueryInput 同构入参；TPDB 走 REST，其余源走 GraphQL
+  function callBoxSceneList(box, input, timeoutMs) {
+    if (!isTPDBBox(box)) {
+      return callBoxGQL(
+        box.endpoint, boxKey(box),
+        "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + BOX_SCENE_FIELDS + "}}}",
+        { input: input }, timeoutMs
+      ).then(function (d) { return (d && d.queryScenes) || null; });
+    }
+    var inp = input || {};
+    var pageNum = inp.page || 1;
+    var perPage = Math.min(100, inp.per_page || 100);
+    var dir = String(inp.direction || "DESC").toUpperCase();
+    var since = inp.date && inp.date.value ? String(inp.date.value) : "";
+    var perf = filterIds(inp.performers);
+    var stud = filterIds(inp.studios);
+    if (since && (perf.length || stud.length)) {
+      return tpdbSinceScenes(box, perf.length ? "performer" : "studio",
+        perf.length ? perf : stud, since, perPage, timeoutMs);
+    }
+    if (perf.length === 1) return tpdbIdPage(box, "performer", perf[0], pageNum, perPage, dir, timeoutMs);
+    if (stud.length === 1) return tpdbIdPage(box, "studio", stud[0], pageNum, perPage, dir, timeoutMs);
+    if (perf.length || stud.length) {
+      var wantP = {}, wantS = {};
+      perf.forEach(function (id) { wantP[id] = 1; });
+      stud.forEach(function (id) { wantS[id] = 1; });
+      return tpdbGlobalPage(box, pageNum, perPage, inp.sort, dir, timeoutMs).then(function (r) {
+        r.scenes = r.scenes.filter(function (s) {
+          if (perf.length && (s.performers || []).some(function (a) {
+            return a.performer && wantP[a.performer.id];
+          })) return true;
+          if (stud.length && s.studio && wantS[s.studio.id]) return true;
+          return false;
+        });
+        return r;
+      });
+    }
+    return tpdbGlobalPage(box, pageNum, perPage, inp.sort, dir, timeoutMs);
+  }
+
+  // TPDB 演员列表（queryPerformers 返回的 gender/images 全空，改走 REST）
+  function callBoxPerformerList(box, input, timeoutMs) {
+    if (!isTPDBBox(box)) {
+      return callBoxGQL(
+        box.endpoint, boxKey(box),
+        "query($input:PerformerQueryInput!){queryPerformers(input:$input){count performers{id name gender birth_date images{url} scene_count}}}",
+        { input: input }, timeoutMs
+      ).then(function (d) { return (d && d.queryPerformers) || null; });
+    }
+    var inp = input || {};
+    var perPage = Math.min(100, inp.per_page || 24);
+    var q = "/performers?per_page=" + perPage + "&page=" + (inp.page || 1);
+    if (inp.q) q += "&q=" + encodeURIComponent(inp.q);
+    return tpdbGet(box, q, timeoutMs).then(function (j) {
+      var rows = ((j && j.data) || []).map(function (p) {
+        var ex = p.extras || p.extra || {};
+        var g = String(ex.gender || "").toUpperCase();
+        var img = p.image || p.thumbnail || p.face || "";
+        return {
+          id: p.id,
+          name: p.name || "",
+          gender: g === "FEMALE" ? "FEMALE" : (g === "MALE" ? "MALE" : null),
+          birth_date: ex.birthday || null,
+          images: img ? [{ url: img }] : [],
+          scene_count: 0,
+        };
+      });
+      return { count: (j && j.meta && j.meta.total) || rows.length, performers: rows };
+    });
+  }
+
+
 
   // ─── Config ───────────────────────────────────────────────────────────────
 
@@ -430,27 +691,22 @@
   // toward the max when it is low or the remaining need increases.
   function fetchBoxPage(box, stashId, pageNum) {
     var boxPerPage = _state.boxPageSize;
+    var input = Object.assign(
+      // P7：工作室 tab 按 studios INCLUDES 查（stash-box 层级匹配含母厂牌）
+      _state.entityType === "studio"
+        ? { studios: { value: [stashId], modifier: "INCLUDES" } }
+        : { performers: { value: [stashId], modifier: "INCLUDES" } },
+      {
+        sort: "DATE",
+        direction: _state.sortDir,
+        page: pageNum,
+        per_page: boxPerPage,
+      }
+    );
     return _boxRateLimiter.submit(function () {
-      return callBoxGQL(
-        box.endpoint, box.api_key,
-        "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + BOX_SCENE_FIELDS + "}}}",
-        {
-          input: Object.assign(
-            // P7：工作室 tab 按 studios INCLUDES 查（stash-box 层级匹配含母厂牌）
-            _state.entityType === "studio"
-              ? { studios: { value: [stashId], modifier: "INCLUDES" } }
-              : { performers: { value: [stashId], modifier: "INCLUDES" } },
-            {
-              sort: "DATE",
-              direction: _state.sortDir,
-              page: pageNum,
-              per_page: boxPerPage,
-            }
-          )
-        }
-      );
-    }).then(function (data) {
-      var result = data && data.queryScenes;
+      // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
+      return callBoxSceneList(box, input);
+    }).then(function (result) {
       if (!result || !result.scenes) return { scenes: [], count: 0, hasMore: false };
       var items = result.scenes.map(function (sc) {
         return {
@@ -464,7 +720,7 @@
       return {
         scenes: items,
         count: result.count || 0,
-        hasMore: result.scenes.length >= boxPerPage,
+        hasMore: result.hasMore != null ? result.hasMore : result.scenes.length >= boxPerPage,
       };
     });
   }
@@ -636,7 +892,7 @@
   function fetchBoxSceneDetail(box, sceneId) {
     return _boxRateLimiter.submit(function () {
       return callBoxGQL(
-        box.endpoint, box.api_key,
+        box.endpoint, boxKey(box),
         "query($id:ID!){findScene(id:$id){" + BOX_SCENE_DETAIL_FIELDS + "}}",
         { id: sceneId }
       );
@@ -3861,7 +4117,7 @@
     // Box performer: derive age from birth_date
     return _boxRateLimiter.submit(function () {
       return callBoxGQL(
-        item.endpoint, item.box.api_key,
+        item.endpoint, boxKey(item.box),
         "query($id:ID!){findPerformer(id:$id){id birth_date country}}",
         { id: performer.id }
       );
@@ -4497,6 +4753,10 @@
     // GraphQL
     callGQL: callGQL,
     callBoxGQL: callBoxGQL,
+    // TPDB REST fallback（列表接口故障）
+    callBoxSceneList: callBoxSceneList,
+    callBoxPerformerList: callBoxPerformerList,
+    isTPDBBox: isTPDBBox,
     boxRateLimiter: _boxRateLimiter,
     // config
     getStashBoxes: getStashBoxes,
@@ -4638,21 +4898,14 @@
         var box = boxByEp[ep];
         if (!box) return Promise.resolve(null);
         return _boxRateLimiter.submit(function () {
-          return callBoxGQL(box.endpoint, box.api_key,
-            // performers 是 PerformerAppearance（{as, performer}），写成 performers{id}
-            // 会被 stash-box 校验拒绝（HTTP 422）→ 轮询永远 0（用户 2026-10-25 第七轮）
-            "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{id date performers{performer{id}}}}}",
-            {
-              input: {
-                date: { value: cutoff, modifier: "GREATER_THAN" },
-                performers: { value: byEndpoint[ep], modifier: "INCLUDES" },
-                sort: "DATE", direction: "DESC",
-                page: 1, per_page: 100,
-              },
-            }
-          );
-        }).then(function (data) {
-          return { ep: ep, ids: byEndpoint[ep], scenes: (((data || {}).queryScenes || {}).scenes) || [] };
+          return callBoxSceneList(box, {
+            date: { value: cutoff, modifier: "GREATER_THAN" },
+            performers: { value: byEndpoint[ep], modifier: "INCLUDES" },
+            sort: "DATE", direction: "DESC",
+            page: 1, per_page: 100,
+          });
+        }).then(function (qs) {
+          return { ep: ep, ids: byEndpoint[ep], scenes: (qs && qs.scenes) || [] };
         }).catch(function () { return null; }); // a failed box keeps its cached count next round
       }));
     }).then(function (results) {

@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.2.1：发行包清理——插件目录只保留运行文件（移除开发进度、设计文档与原型），功能与 v2.2.0 一致。
+> v2.2.2：修复论坛反馈的三个问题——Jackett 搜索超时改为可配置（设置项 `jackettTimeout`，默认 120 秒，替代硬编码 30 秒）；qBittorrent 5.2+ 会话 Cookie 改名（`SID` → `QBT_SID_<端口>`）导致登录失败，现兼容新旧命名；TPDB 的 stash-box 列表接口服务端故障（`queryScenes` 恒空、`queryStudios` 500），场景/演员列表改走其 REST API，演员页、工作室页与发现页不再显示 API error。
 
 在 Stash 演员页面插入「发现」分页，发现该演员在已配置 stash-box 实例中存在、但本地库未拥有的场景。点击场景打开详情弹窗，可浏览封面剧照、加入库、在 stash-box 查看、通过 Jackett 搜索资源并复制磁力链接或推送到下载器。
 

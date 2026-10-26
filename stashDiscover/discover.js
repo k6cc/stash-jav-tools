@@ -410,28 +410,21 @@
     var page = 1;
     function one() {
       return SSD.boxRateLimiter.submit(function () {
-        return SSD.callBoxGQL(
-          box.endpoint, box.apiKey,
-          "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + SSD.BOX_SCENE_FIELDS + "}}}",
-          {
-            input: {
-              date: { value: sinceIsoDate, modifier: "GREATER_THAN" },
-              performers: { value: performerStashIds, modifier: "INCLUDES" },
-              sort: "DATE", direction: "DESC",
-              page: page, per_page: BOX_PAGE_SIZE,
-            },
-          },
-          BOX_TIMEOUT
-        );
+        // TPDB 的 queryScenes 恒返回空 → 内部自动切 REST（按演员逐个取并筛日期）
+        return SSD.callBoxSceneList(box, {
+          date: { value: sinceIsoDate, modifier: "GREATER_THAN" },
+          performers: { value: performerStashIds, modifier: "INCLUDES" },
+          sort: "DATE", direction: "DESC",
+          page: page, per_page: BOX_PAGE_SIZE,
+        }, BOX_TIMEOUT);
       });
     }
-    function next(data) {
-      var qs = (data && data.queryScenes) || null;
+    function next(qs) {
       if (!qs || !qs.scenes) return null; // 无应答 ≠ 空结果（binge 教训）
       qs.scenes.forEach(function (s) { out.push(s); });
       // count 制终止（防源把 per_page 偷降到 100 时截断）
       if (qs.count != null && out.length >= qs.count) return out;
-      if (qs.scenes.length === 0) return out;
+      if (qs.scenes.length === 0 || qs.hasMore === false) return out;
       page++;
       return one().then(next);
     }
@@ -484,15 +477,11 @@
   // §5 热门榜：TRENDING 全站原样（不过滤库内演员、无日期窗），30 条
   function fetchTrendingScenes(box) {
     return SSD.boxRateLimiter.submit(function () {
-      return SSD.callBoxGQL(
-        box.endpoint, box.apiKey,
-        "query($input:SceneQueryInput!){queryScenes(input:$input){scenes{" + SSD.BOX_SCENE_FIELDS + "}}}",
-        { input: { sort: "TRENDING", direction: "DESC", page: 1, per_page: TRENDING_PER_PAGE } },
-        BOX_TIMEOUT
-      );
-    }).then(function (data) {
-      var scenes = (((data || {}).queryScenes || {}).scenes) || null;
-      return scenes; // null = 失败
+      return SSD.callBoxSceneList(box, {
+        sort: "TRENDING", direction: "DESC", page: 1, per_page: TRENDING_PER_PAGE,
+      }, BOX_TIMEOUT);
+    }).then(function (qs) {
+      return (qs && qs.scenes) || null; // null = 失败
     });
   }
 
@@ -502,27 +491,19 @@
     var page = 1;
     function one() {
       return SSD.boxRateLimiter.submit(function () {
-        return SSD.callBoxGQL(
-          box.endpoint, box.apiKey,
-          "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + SSD.BOX_SCENE_FIELDS + "}}}",
-          {
-            input: {
-              date: { value: sinceIsoDate, modifier: "GREATER_THAN" },
-              studios: { value: studioStashIds, modifier: "INCLUDES" },
-              sort: "DATE", direction: "DESC",
-              page: page, per_page: STUDIO_PAGE_SIZE,
-            },
-          },
-          BOX_TIMEOUT
-        );
+        return SSD.callBoxSceneList(box, {
+          date: { value: sinceIsoDate, modifier: "GREATER_THAN" },
+          studios: { value: studioStashIds, modifier: "INCLUDES" },
+          sort: "DATE", direction: "DESC",
+          page: page, per_page: STUDIO_PAGE_SIZE,
+        }, BOX_TIMEOUT);
       });
     }
-    function next(data) {
-      var qs = (data && data.queryScenes) || null;
+    function next(qs) {
       if (!qs || !qs.scenes) return null;
       qs.scenes.forEach(function (s) { out.push(s); });
       if (qs.count != null && out.length >= qs.count) return out;
-      if (qs.scenes.length === 0) return out;
+      if (qs.scenes.length === 0 || qs.hasMore === false) return out;
       page++;
       return one().then(next);
     }
@@ -556,13 +537,17 @@
       }
       return shape(merged);
     }
-    var wideQuery = "query($input:PerformerQueryInput!){queryPerformers(input:$input){performers{id name gender birth_date images{url} scene_count}}}";
+    // TPDB 没有热度排序（queryPerformers 的 gender/images 也全空），
+    // 不做伪热门榜单 —— 返回空让 UI 走空状态，而不是报 API error。
+    if (SSD.isTPDBBox(box)) {
+      return Promise.resolve({ performers: [], degraded: true });
+    }
     return SSD.boxRateLimiter.submit(function () {
-      return SSD.callBoxGQL(box.endpoint, box.apiKey, wideQuery,
+      return SSD.callBoxPerformerList(box,
         { input: { sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: Math.max(perPage * 3, 90) } },
         BOX_TIMEOUT);
     }).then(function (data) {
-      var rows = ((((data || {}).queryPerformers) || {}).performers) || [];
+      var rows = ((data || {}).performers) || [];
       var kept = rows.filter(function (r) { return r.gender && allowed[r.gender]; });
       if (kept.length >= Math.min(perPage, 12)) {
         // 按 gender 分桶轮转交错（binge：避免排头全是多数性别）
@@ -573,11 +558,11 @@
       // 降级：按性别逐查（20s 超时兜底）
       return Promise.all(Object.keys(allowed).map(function (g) {
         return SSD.boxRateLimiter.submit(function () {
-          return SSD.callBoxGQL(box.endpoint, box.apiKey, wideQuery,
+          return SSD.callBoxPerformerList(box,
             { input: { gender: g, sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: perPage } },
             20000);
         }).then(function (d) {
-          return ((((d || {}).queryPerformers) || {}).performers) || [];
+          return ((d || {}).performers) || [];
         }).catch(function () { return []; });
       })).then(function (perGender) { return { performers: interleave(perGender), degraded: true }; });
     });
@@ -1993,17 +1978,15 @@
     } else {
       scBody.appendChild(stateBox("loading"));
       var input = { performers: { value: [p.stashId], modifier: "INCLUDES" }, sort: "DATE", direction: "DESC", per_page: 6 };
-      SSD.callBoxGQL(endpoint, apiKey,
-        "query($input:SceneQueryInput!){queryScenes(input:$input){count scenes{" + SSD.BOX_SCENE_FIELDS + "}}}",
-        { input: input }, BOX_TIMEOUT).then(function (r) {
-          if (!_dpModal) return;
-          scBody.innerHTML = "";
-          var scenes = (r && r.queryScenes && r.queryScenes.scenes) || [];
-          if (!scenes.length) { scBody.appendChild(stateBox("empty", tc("暂无场景", "No scenes"))); return; }
-          var box2 = { name: d.source.name, endpoint: endpoint, apiKey: apiKey };
-          scBody.appendChild(sceneGrid(scenes.map(function (s2) { return shapeBoxItem(box2, s2); })));
-          SSD.layoutCardGrid();
-        }).catch(function () {
+      SSD.callBoxSceneList({ endpoint: endpoint, api_key: apiKey }, input, BOX_TIMEOUT).then(function (qs) {
+        if (!_dpModal) return;
+        scBody.innerHTML = "";
+        var scenes = (qs && qs.scenes) || [];
+        if (!scenes.length) { scBody.appendChild(stateBox("empty", tc("暂无场景", "No scenes"))); return; }
+        var box2 = { name: d.source.name, endpoint: endpoint, apiKey: apiKey };
+        scBody.appendChild(sceneGrid(scenes.map(function (s2) { return shapeBoxItem(box2, s2); })));
+        SSD.layoutCardGrid();
+      }).catch(function () {
           if (!_dpModal) return;
           scBody.innerHTML = "";
           scBody.appendChild(stateBox("empty", tc("场景加载失败", "Failed to load scenes")));

@@ -440,6 +440,8 @@
       // count 制终止（防源把 per_page 偷降到 100 时截断）
       if (qs.count != null && out.length >= qs.count) return out;
       if (qs.scenes.length === 0 || qs.hasMore === false) return out;
+      // 硬上限：防源偷降 per_page 时无限翻页（用户 2026-10-26）
+      if (page >= BOX_MAX_PAGES) return out;
       page++;
       return one().then(next);
     }
@@ -450,7 +452,7 @@
   // 会话内 in-flight 去重（binge 模式）。
   var _newScenesFlight = null;
 
-  function fetchNewScenesForPerformers(box, performerStashIds, sinceIsoDate) {
+  function fetchNewScenesForPerformers(box, performerStashIds, sinceIsoDate, onProgress) {
     if (!performerStashIds.length) return Promise.resolve([]);
     var key = box.host + "|" + sinceIsoDate + "|" + performerStashIds.length;
     if (_newScenesFlight && _newScenesFlight.key === key) return _newScenesFlight.value;
@@ -461,6 +463,7 @@
       }
       var merged = [];
       var idx = 0;
+      var done = 0;
       function runWave() {
         if (idx >= batches.length) return merged;
         var wave = [];
@@ -470,6 +473,9 @@
             if (results[r] == null) return null; // 部分失败 → 整体 null
             merged = merged.concat(results[r]);
           }
+          done += wave.length;
+          // 4a：批量进度（用户 2026-10-26），仅用于加载态文案，不影响数据
+          if (onProgress) onProgress(done, batches.length);
           return runWave();
         });
       }
@@ -816,7 +822,7 @@
     // 先取库内演员（分批查询的输入依赖它），再并行取 owned keys + box 场景
     return loadLinkedPerformers(base.source.endpoint).then(function (linked) {
       var ids = linked.map(function (p) { return p.stashId; });
-      return Promise.all([loadOwnedKeys(), fetchNewScenesForPerformers(box, ids, base.since)]).then(function (r) {
+      return Promise.all([loadOwnedKeys(), fetchNewScenesForPerformers(box, ids, base.since, opts && opts.onProgress)]).then(function (r) {
         var ownedKeys = r[0], scenes = r[1];
         if (scenes == null) throw { ssdKind: "box", message: "partial fetch failure" };
         cacheWrite(host, "newScenes", base.since, scenes);
@@ -1009,6 +1015,7 @@
     d: {},            // 数据集缓存: latest(=getDiscoverData) trending studios trendingPerf
     err: {},          // 数据集错误（重试可清）
     loading: {},      // 数据集加载中标记
+    progress: null,   // latest 拉取进度 {done,total}（4a，仅加载态文案）
     fetchedAt: 0,     // 数据集最新 fetchedAt（页头相对时间）
     search: "", page: 1,
     boxes: [],        // 已配置 stash-box（数据源下拉）
@@ -1316,17 +1323,38 @@
       if (_dp.loading[k]) return;
       if (_dp.err[k] && !force) return; // 出错后等用户重试，不自动循环
       _dp.loading[k] = true; _dp.err[k] = null;
-      DATASETS[k]({ force: !!force }).then(function (r) {
+      if (k === "latest") _dp.progress = null;
+      DATASETS[k]({ force: !!force, onProgress: k === "latest" ? updateFetchProgress : null }).then(function (r) {
         _dp.d[k] = r; _dp.loading[k] = false;
+        if (k === "latest") _dp.progress = null;
         _dp.fetchedAt = Math.max(_dp.fetchedAt, r.fetchedAt || 0);
         if (k === "latest") { _dp.boxes = r.boxes || []; syncSourceSelect(); }
         emitUnread();
         render();
       }).catch(function (e) {
-        _dp.loading[k] = false; _dp.err[k] = e;
+        _dp.loading[k] = false;
+        if (k === "latest") _dp.progress = null;
+        _dp.err[k] = e;
         render();
       });
     });
+  }
+  // 4a：批量进度只刷新加载态文案；节流避免整页高频重绘（用户 2026-10-26）
+  var _progressTimer = 0;
+  function updateFetchProgress(done, total) {
+    _dp.progress = { done: done, total: total };
+    if (_progressTimer) return;
+    _progressTimer = setTimeout(function () {
+      _progressTimer = 0;
+      // 仅当当前视图会展示 latest 且仍在加载时重绘，避免打断设置页输入
+      if (_dp.loading.latest && _dp.progress && viewDataKeys(_dp.view).indexOf("latest") >= 0) render();
+    }, 400);
+  }
+  function loadingText() {
+    var p = _dp.progress;
+    if (!p || !(p.total > 1) || p.done >= p.total) return null;
+    return tc("加载中… 已拉取 " + p.done + "/" + p.total + " 批",
+      "Loading… " + p.done + "/" + p.total + " batches");
   }
   function pollSettled(keys, cb) {
     var t = setInterval(function () {
@@ -1495,6 +1523,8 @@
         if (n >= 1 && n <= 3) rows[k] = n;
       });
     }
+    // 合并为一个设置项时行数共享（用户 2026-10-26）：两个模块同一行数
+    if (mergeTrendPreview()) rows.preview = rows.trending;
     return rows;
   }
   function moveModule(id, dir) {
@@ -1502,6 +1532,35 @@
     var i = order.indexOf(id), j = i + dir;
     if (i < 0 || j < 0 || j >= order.length) return;
     var t = order[i]; order[i] = order[j]; order[j] = t;
+    dpSetPrefs({ order: order });
+    render();
+  }
+
+  // 热门 ∥ 即将发布合并成一个设置项（用户 2026-10-26）：
+  // 排序与行数共享，两者在 order 中保持相邻并视作整体移动
+  function pairAdjacentOrder(a, b) {
+    var order = moduleOrder();
+    var ia = order.indexOf(a), ib = order.indexOf(b);
+    if (ia < 0 || ib < 0 || Math.abs(ia - ib) === 1) return order;
+    var first = ia < ib ? a : b, second = first === a ? b : a;
+    var rest = order.filter(function (id) { return id !== second; });
+    rest.splice(rest.indexOf(first) + 1, 0, second);
+    return rest;
+  }
+  function moveModulePair(a, b, dir) {
+    var order = pairAdjacentOrder(a, b);
+    var ia = order.indexOf(a), ib = order.indexOf(b);
+    if (ia < 0 || ib < 0) return;
+    var start = Math.min(ia, ib), end = Math.max(ia, ib);
+    if (dir < 0) {
+      if (start <= 0) return;
+      var prev = order.splice(start - 1, 1)[0];
+      order.splice(end, 0, prev);
+    } else {
+      if (end >= order.length - 1) return;
+      var nxt = order.splice(end + 1, 1)[0];
+      order.splice(start, 0, nxt);
+    }
     dpSetPrefs({ order: order });
     render();
   }
@@ -1524,6 +1583,15 @@
   }
   function trendingTitle() {
     return trendingOnTPDB() ? tc("网站上新", "New on site") : tc("热门", "Trending");
+  }
+  // 设置页提示用：当前选中的源是否 TPDB（数据尚未就绪时也能判断）
+  function sourceIsTPDB() {
+    var boxes = _dp.boxes || [];
+    var name = (_dp.d.latest && _dp.d.latest.source && _dp.d.latest.source.name) || dpPrefs().source || "";
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].name === name || boxes[i].endpoint === name) return SSD.isTPDBBox(boxes[i]);
+    }
+    return boxes.length === 1 && SSD.isTPDBBox(boxes[0]);
   }
   // TPDB 空状态兜底：旧缓存（2.2.4 前）可能没有 degraded 标志，
   // 或缓存里的 performers 为空但未标记；该源一律视为「无热度榜」。
@@ -1568,7 +1636,7 @@
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
         more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
-      if (!d) secBody(s1, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
+      if (!d) secBody(s1, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
       else if (!(d.actorsWithNew || []).length) {
         // 区分「没有可匹配的演员」与「窗口内确实没有新作品」（用户 2026-10-26）
         var noLinked = !(d.linked || []).length;
@@ -1600,7 +1668,7 @@
         count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 2 部", (d.latest || []).length + " unowned · max 2 per performer") : "",
         more: function () { switchView("latest"); },
       });
-      if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
+      if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
         var g2 = sceneGrid(d.latest.slice(0, rows.latest * colsOf(240) + rows.latest));
@@ -1635,7 +1703,7 @@
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
-      if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
+      if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
         var g4 = sceneGrid(d.preview.slice(0, rows.preview * colsOf(240, true) + rows.preview), { days: true });
@@ -1770,7 +1838,7 @@
     var ds = _dp.d[cfg.key];
     if (!ds) {
       if (_dp.err[cfg.key]) { c.appendChild(stateBox("error", errText(_dp.err[cfg.key]), function () { retryDataset(cfg.key); })); return; }
-      c.appendChild(stateBox("loading"));
+      c.appendChild(stateBox("loading", loadingText()));
       return;
     }
     // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
@@ -1890,7 +1958,7 @@
 
     if (!d) {
       if (_dp.err.latest) { c.appendChild(stateBox("error", errText(_dp.err.latest), retryLatest)); return; }
-      c.appendChild(stateBox("loading"));
+      c.appendChild(stateBox("loading", loadingText()));
       return;
     }
     if (src === "hot" && !tp) {
@@ -2478,6 +2546,13 @@
     secG.appendChild(el("div", "ssd-dp-sethint", tc(
       "0 = 不限。仅作用于发现页；演员详情「发现」标签的窗口在插件设置的 Recent Window 中调整。",
       "0 = unlimited. Applies to the Discover page only; the performer-page Discover tab uses Recent Window in the plugin settings.")));
+    // TPDB 按演员逐个取片，每人最多 TPDB_MAX_PAGES_PER_ID 页（用户 2026-10-26）
+    if (dpRecentDays() === 0 && sourceIsTPDB()) {
+      var tpdbPages = SSD.TPDB_MAX_PAGES_PER_ID || 2;
+      secG.appendChild(el("div", "ssd-dp-sethint", tc(
+        "当前源按演员逐个取片：每人最多回溯 " + tpdbPages * 100 + " 部（" + tpdbPages + " 页），并非全部历史。",
+        "This source fetches per performer: at most " + tpdbPages * 100 + " scenes each (" + tpdbPages + " pages), not full history.")));
+    }
 
     // 通知开关（独立 key SSD:dp:notify，主 JS 轮询与导航角标读取；§6.4）
     // 右侧滑块（用户 2026-10-26：勾选框不好看）
@@ -2543,25 +2618,49 @@
     var rowJ = el("div", "ssd-dp-setrow");
     rowJ.appendChild(el("span", "ssd-dp-setname", mergeLabel));
     var swJ = switchToggle(mergeTrendPreview(), function (on) {
-      dpSetPrefs({ mergeTrendPreview: on });
+      var patch = { mergeTrendPreview: on };
+      if (on) {
+        // 合并后共享排序与行数：两者相邻，行数对齐到热门（用户 2026-10-26）
+        patch.order = pairAdjacentOrder("trending", "preview");
+        var rw = dpPrefs().rows || {};
+        rw.trending = curRows.trending;
+        rw.preview = curRows.trending;
+        patch.rows = rw;
+      }
+      dpSetPrefs(patch);
       render();
     }, mergeLabel);
     rowJ.appendChild(swJ);
     secM.appendChild(rowJ);
+    var merged = mergeTrendPreview();
     MODULE_DEFS.forEach(function (m) {
+      // 合并开启时「即将发布」并入「热门」一行，共享开关/行数/排序
+      if (merged && m.id === "preview") return;
+      var isPair = merged && m.id === "trending";
       var row = el("div", "ssd-dp-setrow");
       var lab = el("label", "ssd-dp-settoggle");
       var cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = moduleShown(m.id);
+      cb.checked = isPair
+        ? (moduleShown("trending") && moduleShown("preview"))
+        : moduleShown(m.id);
       cb.addEventListener("change", function () {
         var mods = dpPrefs().modules || {};
-        mods[m.id] = cb.checked;
+        if (isPair) {
+          mods.trending = cb.checked;
+          mods.preview = cb.checked;
+        } else {
+          mods[m.id] = cb.checked;
+        }
         dpSetPrefs({ modules: mods });
         render();
       });
       lab.appendChild(cb);
-      lab.appendChild(el("span", null, m.id === "trending" ? trendingTitle() : tc(m.zh, m.en)));
+      lab.appendChild(el("span", null, isPair
+        ? (trendingOnTPDB()
+          ? tc(trendingTitle() + "与即将发布", "New on site & Upcoming")
+          : tc("热门与即将发布", "Trending & Upcoming"))
+        : (m.id === "trending" ? trendingTitle() : tc(m.zh, m.en))));
       row.appendChild(lab);
 
       var ctl = el("div", "ssd-dp-setctl");
@@ -2574,24 +2673,39 @@
         op.textContent = String(n);
         rs.appendChild(op);
       });
-      rs.value = String(curRows[m.id] || 1);
+      rs.value = String(isPair ? curRows.trending : (curRows[m.id] || 1));
       rs.addEventListener("change", function () {
         var rw = dpPrefs().rows || {};
-        rw[m.id] = parseInt(rs.value, 10);
+        var n = parseInt(rs.value, 10);
+        if (isPair) {
+          rw.trending = n;
+          rw.preview = n;
+        } else {
+          rw[m.id] = n;
+        }
         dpSetPrefs({ rows: rw });
         render();
       });
       ctl.appendChild(rs);
 
-      var idx = order.indexOf(m.id);
       var up = el("button", "ssd-dp-btn ghost sm", "↑");
       var dn = el("button", "ssd-dp-btn ghost sm", "↓");
       up.type = "button"; dn.type = "button";
       up.title = tc("上移", "Move up"); dn.title = tc("下移", "Move down");
-      up.disabled = idx <= 0;
-      dn.disabled = idx < 0 || idx >= order.length - 1;
-      up.addEventListener("click", function () { moveModule(m.id, -1); });
-      dn.addEventListener("click", function () { moveModule(m.id, 1); });
+      if (isPair) {
+        var lo = Math.min(order.indexOf("trending"), order.indexOf("preview"));
+        var hi = Math.max(order.indexOf("trending"), order.indexOf("preview"));
+        up.disabled = lo <= 0;
+        dn.disabled = hi < 0 || hi >= order.length - 1;
+        up.addEventListener("click", function () { moveModulePair("trending", "preview", -1); });
+        dn.addEventListener("click", function () { moveModulePair("trending", "preview", 1); });
+      } else {
+        var idx = order.indexOf(m.id);
+        up.disabled = idx <= 0;
+        dn.disabled = idx < 0 || idx >= order.length - 1;
+        up.addEventListener("click", function () { moveModule(m.id, -1); });
+        dn.addEventListener("click", function () { moveModule(m.id, 1); });
+      }
       ctl.appendChild(up);
       ctl.appendChild(dn);
       row.appendChild(ctl);

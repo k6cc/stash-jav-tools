@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.2.7";
+  var PLUGIN_VERSION = "2.3.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -177,6 +177,9 @@
   // findScene / findPerformer / findStudio 正常。场景列表因此改走它公开的
   // REST API；返回里的 site.uuid 与 stash-box 的 studio id 一致。
   var TPDB_RE = /theporndb\.net/i;
+  // 按演员/站点逐个取场景时的翻页上限（每页最多 100 条 → 200 部/人）。
+  // 无限回看窗口也不会全量回溯，UI 需要把这个截断说明白（用户 2026-10-26）。
+  var TPDB_MAX_PAGES_PER_ID = 2;
   var _tpdbLastPage = {};
 
   function isTPDBBox(box) {
@@ -233,9 +236,10 @@
     if (!raw) return null;
     var site = raw.site || null;
     var imgs = [];
-    // 顺序即封面回退顺序：外站直链（可能是 gif/动图）→ TPDB 自托管 poster/背景
-    [raw.image, raw.poster, raw.poster_image, raw.back_image,
-      tpdbImgUrl(raw.background), tpdbImgUrl(raw.background_back)].forEach(function (u) {
+    // 顺序即封面回退顺序：外站直链（可能是 gif/动图）→ 横版背景 → 竖版 poster
+    // 横版（back_image / background / background_back）优先于竖版，符合弹层观感
+    [raw.image, raw.back_image, tpdbImgUrl(raw.background), tpdbImgUrl(raw.background_back),
+      raw.poster, raw.poster_image].forEach(function (u) {
       if (u && !imgs.some(function (x) { return x.url === u; })) imgs.push({ url: u });
     });
     var urls = [];
@@ -317,7 +321,7 @@
   }
 
   function tpdbSinceScenes(box, kind, ids, since, perPage, timeoutMs) {
-    var out = [], seen = {}, idx = 0;
+    var out = [], seen = {}, idx = 0, truncated = false;
     function fetchOne(id) {
       // 这两个端点按日期倒序；碰到早于 since 的场景即可停止翻页
       var path = (kind === "studio" ? "/sites/" : "/performers/") +
@@ -335,7 +339,11 @@
             out.push(s);
           });
           var last = (j && j.meta && j.meta.last_page) || 1;
-          if (!reachedOld && rows.length && p < last && p < 3) return step(p + 1);
+          if (!reachedOld && rows.length && p < last) {
+            // 到页数上限但源还有更早场景 → 记录截断，UI 只在真截断时提示（用户 2026-10-26）
+            if (p >= TPDB_MAX_PAGES_PER_ID) { truncated = true; return; }
+            return step(p + 1);
+          }
         });
       }
       return step(1);
@@ -350,14 +358,13 @@
       out.sort(function (a, b) {
         return String(b.release_date || "").localeCompare(String(a.release_date || ""));
       });
-      return { count: out.length, scenes: out, hasMore: false };
+      return { count: out.length, scenes: out, hasMore: false, truncated: truncated };
     });
   }
 
-  function tpdbGlobalPage(box, pageNum, perPage, sort, dir, timeoutMs) {
-    // TPDB REST 只对 date 排序可信；TRENDING 降级为最新
-    var q = "/scenes?per_page=" + perPage + "&page=" + pageNum +
-      "&sort=date&direction=" + (String(dir).toUpperCase() === "ASC" ? "asc" : "desc");
+  function tpdbGlobalPage(box, pageNum, perPage, timeoutMs) {
+    // TPDB 官方 REST 用 orderBy（小写枚举）；无热度榜，统一按最新入库
+    var q = "/scenes?per_page=" + perPage + "&page=" + pageNum + "&orderBy=recently_created";
     return tpdbGet(box, q, timeoutMs).then(function (j) { return tpdbResult(j, false); });
   }
 
@@ -396,7 +403,7 @@
       return tpdbSinceScenes(box, perf.length ? "performer" : "studio",
         perf.length ? perf : stud, "", perPage, timeoutMs);
     }
-    return tpdbGlobalPage(box, pageNum, perPage, inp.sort, dir, timeoutMs);
+    return tpdbGlobalPage(box, pageNum, perPage, timeoutMs);
   }
 
   // TPDB 演员列表（queryPerformers 返回的 gender/images 全空，改走 REST）
@@ -524,6 +531,7 @@
     boxFailed: {},             // endpoint -> failed this round (retried on the next load)
     boxStatus: {},             // endpoint -> { ok:bool, kind:string }
     boxFetched: {},            // endpoint -> scenes fetched this round (loading panel rows)
+    boxTruncated: {},          // endpoint -> true when TPDB hit its per-id page cap
     droppedByWindow: 0,        // scenes dropped by the recent/preview window this round
     windowRelaxed: false,      // "unlimited time range (this session)"
     preferredFallback: false,  // preferred box had no ID → queried the others instead
@@ -721,6 +729,7 @@
         scenes: items,
         count: result.count || 0,
         hasMore: result.hasMore != null ? result.hasMore : result.scenes.length >= boxPerPage,
+        truncated: !!result.truncated,
       };
     });
   }
@@ -794,6 +803,7 @@
         delete _state.boxFailed[b.endpoint];
         _state.boxStatus[b.endpoint] = { ok: true };
         _state.boxFetched[b.endpoint] = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
+        if (result.truncated) _state.boxTruncated[b.endpoint] = true;
         if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
         // Window early-stop: the page's boundary date crossed the window,
         // every later page is outside it as well
@@ -934,6 +944,7 @@
     _state.boxFailed = {};
     _state.boxStatus = {};
     _state.boxFetched = {};
+    _state.boxTruncated = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -1140,6 +1151,7 @@
     _state.boxFailed = {};
     _state.boxStatus = {};
     _state.boxFetched = {};
+    _state.boxTruncated = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -2877,6 +2889,21 @@
     }
     pane.appendChild(countInfo);
 
+    // TPDB 按演员/站点逐个取片，每人最多 TPDB_MAX_PAGES_PER_ID 页：
+    // 只有源确实还有更早场景、被页数上限截断时才提示（用户 2026-10-26）
+    var truncatedBox = _state.queryBoxes.filter(function (b) { return _state.boxTruncated[b.endpoint]; })[0];
+    if (truncatedBox) {
+      var capInfo = document.createElement("div");
+      capInfo.className = "ssd-count-info ssd-count-line text-muted";
+      var capCount = TPDB_MAX_PAGES_PER_ID * 100;
+      capInfo.textContent = _state.entityType === "studio"
+        ? tc("当前源按站点逐个取片：每个站点最多回溯 " + capCount + " 部，已达上限。",
+          "This source fetches per site: at most " + capCount + " scenes each; this list reached that limit.")
+        : tc("当前源按演员逐个取片：每位演员最多回溯 " + capCount + " 部，已达上限。",
+          "This source fetches per performer: at most " + capCount + " scenes each; this list reached that limit.");
+      pane.appendChild(capInfo);
+    }
+
     if (_state.displayMode === "list") {
       pane.appendChild(buildSceneTable(pageItems));
     } else {
@@ -3031,16 +3058,113 @@
 
   // 封面候选依次回退：TPDB 的外站直链常因防盗链 403，失败后换下一张
   //（images 里随后是 TPDB 自托管的 poster / background）
+
+  // 动图候选（外站 gif / webp）：直接塞进 src 时，网络失败要等浏览器
+  // 超时才触发 onerror，期间封面是空的（先黑屏再恢复静态图）。
+  // 方案 A+B（用户 2026-10-26）：静态图先行 + 首图后台探测；失败写入
+  // sessionStorage 负缓存，切页重建卡片时不再重复等待。
+  // 2026-10-26 补：TPDB 首图多为外站普通 jpg（manyvids / phncdn /
+  // iwantclips），不是动图但同样会失败空白 → 判定从「动图」扩到
+  // 「与后备图不同域」；next() 也跳过负缓存命中的候选，不再每次重试。
+  var IMG_FAIL_KEY = "SSD:imgfail.v1";
+  var IMG_FAIL_TTL = 12 * 3600 * 1000;
+  // 失败 10 分钟后允许后台重探一次：网络抖动 / 并发过高造成的「假失败」
+  // 不会把外站封面钉死 12 小时（用户 2026-10-26 实测 30 张里 24 张误判）
+  var IMG_FAIL_RETRY = 10 * 60 * 1000;
+
+  function animUrl(u) {
+    return /\.gif(?:$|[?#])/i.test(u) || /\.webp(?:$|[?#])/i.test(u);
+  }
+  function hostOf(u) {
+    try { return new URL(u, location.href).host; } catch (_) { return ""; }
+  }
+  // 首图需要「先显示静态后备」：动图，或与后备图不同域（外站直链）
+  function riskyFirst(list) {
+    if (!list || list.length < 2) return false;
+    var h = hostOf(list[0]);
+    return animUrl(list[0]) || (h && h !== hostOf(list[1]));
+  }
+  function imgFailMap() {
+    try {
+      var o = JSON.parse(sessionStorage.getItem(IMG_FAIL_KEY) || "{}");
+      return (o && typeof o === "object") ? o : {};
+    } catch (_) { return {}; }
+  }
+  function imgFailed(u) {
+    var o = imgFailMap(), ts = o[u];
+    if (!ts) return false;
+    if (Date.now() - ts > IMG_FAIL_TTL) {
+      delete o[u];
+      try { sessionStorage.setItem(IMG_FAIL_KEY, JSON.stringify(o)); } catch (_) {}
+      return false;
+    }
+    return true;
+  }
+  function markImgFailed(u) {
+    if (!u) return;
+    var o = imgFailMap();
+    o[u] = Date.now();
+    try { sessionStorage.setItem(IMG_FAIL_KEY, JSON.stringify(o)); } catch (_) {}
+  }
+  // 负缓存里仍有效的失败时间戳（0 = 没有 / 已过期）
+  function imgFailTs(u) {
+    var ts = imgFailMap()[u];
+    return ts && Date.now() - ts <= IMG_FAIL_TTL ? ts : 0;
+  }
+  function clearImgFail(u) {
+    var o = imgFailMap();
+    if (!u || !(u in o)) return;
+    delete o[u];
+    try { sessionStorage.setItem(IMG_FAIL_KEY, JSON.stringify(o)); } catch (_) {}
+  }
+
   function setCoverImage(img, images) {
     var list = (images || []).map(function (i) { return i && i.url; })
       .filter(function (u) { return typeof u === "string" && u; });
-    var i = 0;
+
+    // 需要「静态先行」的首图：动图，或与后备图不同域（外站直链）。
+    // TPDB 的 images[0] 常是 manyvids / phncdn 等外站 jpg，防盗链失败
+    // 前同样会空一段；不同域即视为需要探测（StashDB 首图与后备同域）。
+    var risky = riskyFirst(list) ? list[0] : "";
+    var rest = list.slice(risky ? 1 : 0);
+    // 10 分钟内确认失败 → 直接静态图；更早的失败仍先静态，但后台重探一次
+    var riskTs = risky ? imgFailTs(risky) : 0;
+    if (riskTs && Date.now() - riskTs < IMG_FAIL_RETRY) risky = "";
+
+    var idx = 0, curSrc = "", fallbackSrc = "";
     function next() {
-      if (i >= list.length) { img.style.visibility = "hidden"; return; }
-      img.src = list[i++];
+      // 已判定失败的候选直接跳过：切页重建卡片时不再重演「先空白再静态」
+      while (idx < rest.length && imgFailed(rest[idx])) idx++;
+      if (idx >= rest.length) { img.style.visibility = "hidden"; return; }
+      curSrc = rest[idx++];
+      fallbackSrc = curSrc;
+      img.style.visibility = "visible";
+      img.src = curSrc;
     }
-    img.onerror = next;
+    img.onerror = function () {
+      markImgFailed(curSrc);
+      next();
+    };
     next();
+
+    if (!risky) return;
+    // 超时（慢图）不算失败：保留静态图，不写负缓存（用户 2026-10-26）
+    probeUrl(risky, 15000).then(function (st) {
+      if (st === "error") { markImgFailed(risky); return; }
+      if (st !== "ok") return;
+      clearImgFail(risky); // 重探成功，解除负缓存
+      img.onerror = function () {
+        markImgFailed(risky);
+        if (fallbackSrc) {
+          img.onerror = function () { img.style.visibility = "hidden"; };
+          img.src = fallbackSrc;
+        } else {
+          img.style.visibility = "hidden";
+        }
+      };
+      img.style.visibility = "visible";
+      img.src = risky;
+    });
   }
 
   function buildSceneRow(item) {
@@ -3446,24 +3570,47 @@
     _state.modalLoading = true;
     hidePerformerCard();
     _carouselIdx = 0;
-    _modalImages = (item.images || []).map(function (i) { return i.url; });
+    var list = (item.images || []).map(function (i) { return i && i.url; })
+      .filter(function (u) { return typeof u === "string" && u; });
     _modalGalleryDone = false;
     _modalKeep = [];
     _modalExtra = [];
     _searchPage = 1;
     _searchResults = [];
 
-    // 外站直链可能被防盗链拒绝：先探测列表图，只保留能加载的
-    var list = _modalImages.slice();
-    _modalListProbed = Promise.all(list.map(probeUrlOk)).then(function (oks) {
-      return list.filter(function (u, i) { return oks[i]; });
-    });
-    _modalListProbed.then(function (keep) {
-      _modalKeep = keep;
-      if (_state.modal === item) recomputeModalImages();
-    });
-
+    // 外站直链可能被防盗链拒绝或只是很慢：弹层先显示静态后备图，
+    // 再逐张后台探测、加载成功才补进轮播（用户 2026-10-26：打开不能先空白）
+    var initial = list[0] || "";
+    if (riskyFirst(list)) initial = list[1];
+    _modalImages = initial ? [initial] : [];
+    _modalKeep = _modalImages.slice();
     buildModal(item);
+
+    var addKeep = function (u) {
+      if (_modalKeep.indexOf(u) >= 0) return;
+      _modalKeep = list.filter(function (x) { return x === u || _modalKeep.indexOf(x) >= 0; });
+      recomputeModalImages();
+    };
+    var probes = list.map(function (u) {
+      if (u === initial) return Promise.resolve();
+      // 10 分钟内确认失败的直接跳过；更早的失败仍重探（可能只是当时抖动）
+      var ts = imgFailTs(u);
+      if (ts && Date.now() - ts < IMG_FAIL_RETRY) return Promise.resolve();
+      return probeUrl(u, 15000).then(function (st) {
+        if (st === "ok") {
+          clearImgFail(u);
+          if (_state.modal === item) addKeep(u);
+        } else if (st === "error") {
+          markImgFailed(u);
+        }
+        // timeout：只是慢，不写负缓存，下次打开再试
+      });
+    });
+    // 4 秒后放行详情图合并（慢图探测继续在后台跑，成功后再补进轮播）
+    _modalListProbed = Promise.race([
+      Promise.all(probes),
+      new Promise(function (r) { setTimeout(r, 4000); }),
+    ]);
 
     // Fetch full detail in background
     fetchBoxSceneDetail(item.box, item.scene.id).then(function (detail) {
@@ -3804,14 +3951,32 @@
     oldCarousel.parentNode.replaceChild(fresh, oldCarousel);
   }
 
-  // 探测图片可加载性（TPDB 列表图多为外站直链，防盗链会拒绝）
-  function probeUrlOk(url) {
+  // 探测图片可加载性：resolve "ok" | "error" | "timeout"。
+  // 超时不等于失败——外站动图/大图可能只是慢（用户 2026-10-26）；
+  // 只有 onerror 才是真失败，才写入负缓存。
+  function probeUrl(url, timeoutMs) {
     return new Promise(function (resolve) {
-      if (!url) return resolve(false);
+      if (!url) return resolve("error");
       var im = new Image();
-      var t = setTimeout(function () { im.onload = im.onerror = null; resolve(false); }, 5000);
-      im.onload = function () { clearTimeout(t); resolve(true); };
-      im.onerror = function () { clearTimeout(t); resolve(false); };
+      var done = false;
+      var t = setTimeout(function () {
+        if (done) return;
+        done = true;
+        im.onload = im.onerror = null;
+        resolve("timeout");
+      }, timeoutMs || 15000);
+      im.onload = function () {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve("ok");
+      };
+      im.onerror = function () {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve("error");
+      };
       im.src = url;
     });
   }
@@ -3830,7 +3995,9 @@
     if (_modalGalleryDone) return;
     _modalGalleryDone = true;
 
-    var boxUrls = (detail.images || []).map(function (i) { return i.url; }).filter(Boolean);
+    // 已确认加载失败的外站图不进轮播，避免左右切换时出现空白（用户 2026-10-26）
+    var boxUrls = (detail.images || []).map(function (i) { return i.url; })
+      .filter(function (u) { return u && !imgFailed(u); });
     _modalExtra = dedupeUrls(_modalExtra.concat(boxUrls));
 
     var sc = detail.scene || {};
@@ -4802,6 +4969,7 @@
     callBoxSceneList: callBoxSceneList,
     callBoxPerformerList: callBoxPerformerList,
     isTPDBBox: isTPDBBox,
+    TPDB_MAX_PAGES_PER_ID: TPDB_MAX_PAGES_PER_ID,
     boxRateLimiter: _boxRateLimiter,
     // config
     getStashBoxes: getStashBoxes,

@@ -53,6 +53,7 @@
 
 - 每模块头部：标题 + 统计 + 「查看更多 →」（切到该模块钻取视图）。
 - 热门/即将发布两个 1 行模块左右并排（窄屏自动堆叠）；发现页设置可关闭并排（`mergeTrendPreview`，默认开 — 用户 2026-10-26）。
+- 并排开启时，设置页里「热门」与「即将发布」合并为**一个设置项**（用户 2026-10-26）：一个显示开关同时控制两者、一个行数值同时写入 `rows.trending` / `rows.preview`、一组上移/下移把两者视为整体移动（`pairAdjacentOrder` + `moveModulePair`）。关闭并排后恢复为两个独立设置项。
 - 各模块行数可在设置里调 1–3。
 
 ### 3.3 钻取模式
@@ -116,6 +117,11 @@
 
 - 主查询范围：**stash-box 有关联（有 stash_id）的本地演员**。
 - 查询：按 endpoint 分批（100/批）`queryScenes`，`date` 过滤窗口（窗口为 0 时不传 `date`）+ `performers INCLUDES`，`sort: DATE`，懒分页。
+- **拉取上限（2026-10-26 复核）**：当前是「先拉全 → 内存过滤排序 → UI 本地分页」，不是按页懒加载。
+  - 非 TPDB 源：`per_page=1000` 自动翻页，`BOX_MAX_PAGES=50` 硬上限（此前仅定义未使用，现已接入 `fetchScenesBatch`），防止源偷降 `per_page` 时无限翻页。
+  - TPDB 源：REST 按演员逐个取，`TPDB_MAX_PAGES_PER_ID=2`（每页 ≤100 → **每人最多 200 部**），窗口设为 0 也不会全量回溯；设置页在「回看窗口 = 0 且当前源为 TPDB」时显示该截断提示。`tpdbSinceScenes` 在「还有更早场景、但已到页数上限」时返回 `truncated=true`（同时修复了旧条件 `p < MAX+1` 会多取一页的问题），演员/工作室详情「发现」tab 仅在真截断时于结果计数下方提示「每位（站点）最多回溯 200 部，已达上限」（用户 2026-10-26）。
+  - localStorage 缓存只保留按发行日期最新的 1500 条（`CACHE_SCENES_CAP`），无限窗口下刷新后历史数据会变少。
+  - **拉取进度（4a，用户 2026-10-26）**：`fetchNewScenesForPerformers` 每完成一波批次回调 `onProgress(done,total)`；加载态在总览「有新发布的演员 / 最新发布 / 即将发布」与最新/发现演员钻取页显示「加载中… 已拉取 N/M 批」（仅 `total > 1` 时），每 400ms 节流重绘，完成或失败即清除。
 
 ### 4.2 窗口
 
@@ -174,13 +180,17 @@
 - **StashDB 全站热门榜原样展示，不过滤库内演员**——定位是"额外获取渠道"（binge 原版行为）。
 - 含库内演员的卡片加小角标区分。
 - 热门榜同时可喂"发现演员"模块的信息。
-- **TPDB 例外（2026-10-26 定案，A 方案）**：`sort=TRENDING` 在 TPDB REST 被降级为按入库时间（[stashDiscover.js](../stashDiscover/stashDiscover.js) 的 `tpdbGlobalPage`）。实测 `sort=trending/popularity/rating/views/top/top_week` 全部被忽略，`rating` 100 条全 0、无 `views` 字段；站点首页「Top Scenes This Week!」为登录后服务端渲染（Nuxt SSR），无 XHR/公开接口，`/scenes/trending`、`/trending` 均 404。因此**不接入本周热门**：TPDB 源下模块与 tab 统一改名「网站上新 / New on site」（副标题仍标出源名与「无热度榜 · 按入库时间」），不伪造热度排序。改名取通用词而非「TPDB上新」，因为副标题已带源名，后续若出现同样无热度榜的源也无需再改文案。
+- **TPDB 例外（2026-10-26 定案，A 方案）**：`sort=TRENDING` 在 TPDB REST 被降级为按入库时间（[stashDiscover.js](../stashDiscover/stashDiscover.js) 的 `tpdbGlobalPage`）。实测 `sort=trending/popularity/rating/views/top/top_week` 全部被忽略，`rating` 100 条全 0、无 `views` 字段；站点首页「Top Scenes This Week!」为登录后服务端渲染（Nuxt SSR），无 XHR/公开接口，`/scenes/trending`、`/trending` 均 404。因此**不接入本周热门**：TPDB 源下模块与 tab 统一改名「网站上新 / New on site」（副标题标出源名与「无热度榜 · 按入库时间」），不伪造热度排序。改名取通用词而非「TPDB上新」，因为副标题已带源名，后续若出现同样无热度榜的源也无需再改文案。
+- **排序口径复核（2026-10-26，官方 OpenAPI）**：`https://api.theporndb.net/specs?openapi.json`（v3.24.767）显示场景排序参数是 **`orderBy`**，枚举 `recently_created / recently_released / recently_updated / most_relevant / duration_* / former_*`（小写）；演员与站点用 `recently_created / recently_updated`（小写，文档里的大写枚举会被服务端拒绝）。实测 `sort=date&direction=desc` 与 `orderBy=recently_created` 的前 10 条 ID 完全一致——即插件现状就是「最新入库」，副标题「按入库时间」正确（早前「按发行日期」的判断有误，已回退）。不带排序参数的默认顺序并非 created desc（站点默认呈字母序），所以必须显式带排序；`tpdbGlobalPage` 已改为文档化的 `orderBy=recently_created`。仍无 trending/week 接口：首页「Top Scenes / Top Performers / Top Sites This Week」均为服务端计算，无 XHR；`/tools` 只是外链工具目录（JellyFin、Plex、Whisparr、Stash、社区刮削器、TMM、Namer 与 API、Register），唯一 API 入口是 `api.theporndb.net/docs`。
 - **TPDB 热门演员榜空状态兜底（v2.2.6）**：旧版缓存的 `trendingPerf.v1` 可能没有 `degraded` 字段（或为空但未标记），导致空状态退回「暂无可发现的演员」。现读取缓存与渲染时都按 `trendingDegraded()` 归一：TPDB 源恒视为 degraded，显示「该源不提供热门演员榜」。
 - **TPDB 封面回退与动图保留（v2.2.7）**：TPDB REST 的 `image` 多为外站直链（manyvids / phncdn / clips4sale），带防盗链，`<img>` 直连会失败（实测 24 张里 13 张）。现 `tpdbScene` 的 `images` 顺序为 外站图 → TPDB 自托管 `poster` / `background.full`，卡片 `onerror` 依次回退，不再直接隐藏留白；`background`/`background_back` 是对象，取 `.full` 而非当字符串。部分 `image` 为 `*_prev_tn.gif` 或 animated webp，弹层不再用 `findScene.images` 整体替换当前图，而是探测可加载性后与详情图、DMM 截图去重合并，动图封面打开后仍保留。
+- **TPDB 封面顺序调整（2026-10-26）**：`images` 改为 外站图 → 横版（`back_image` / `background.full` / `background_back.full`）→ 竖版（`poster` / `poster_image`）。此前竖版 `poster`（800×1200）排在横版背景之前，弹层第二张看起来是竖版封面；现在横版优先，列表回退顺序也同步生效。
+- **封面黑屏优化（2026-10-26，方案 A+B + 外站补丁）**：外站首图常为 gif/webp，直接赋 `img.src` 时网络失败需等浏览器超时才触发 `onerror`，期间封面空白（先黑屏再恢复静态图），且切页重建卡片会反复重演。现 `setCoverImage` 改为：首图**疑似动图（gif/webp）或与后备图不同域**时先显示静态后备图，同时用 `probeUrl(url, 15000)` 后台探测，通过后再替换（浏览器已缓存，无空档）；**只有 `onerror` 才算失败**，超时只表示「慢」、不写负缓存，探测失败把 URL 写入 `sessionStorage` 负缓存 `SSD:imgfail.v1`（TTL 12h，失败 **10 分钟后允许后台重探一次**，避免网络抖动把封面钉死 12 小时），`next()` 回退链也会跳过负缓存命中的候选——此前只有动图分支查负缓存，TPDB 的外站 jpg 首图每次切页都要空白 0.5–1.2s 再回退（实测负缓存 36 条全是 manyvids / phncdn / iwantclips 的 jpg）；重探成功会解除负缓存并恢复 `visibility`。单图或无静态后备时保持原直连行为。**场景弹层（2026-10-26 补）**：`openModal` 不再等 `Promise.all(probe)` 过滤后才显示，而是先挂静态后备图，再逐张后台探测、加载成功才按原顺序补进轮播；负缓存命中（10 分钟内）的 URL 直接跳过连探测都不发，弹层不再每次打开先空白，详情图里的已失败外站图也不进轮播。
 
 ## 5.1 设置项控件样式（用户 2026-10-26）
 
 - 「关注的演员新发布提醒」「热门与即将发布并排一行」使用**右侧滑块开关**（`.ssd-dp-switch`，原生 checkbox 视觉隐藏 + `::after` 圆钮），名称在左、开关靠右（`margin-left:auto`，窄屏 `align-self:flex-end`）。
+- 设置视图内容居中（用户 2026-10-26）：`.ssd-dp-settings` 加 `width:100%; max-width:860px; margin-inline:auto`，页面根 `.ssd-dp-page` 的其余视图仍占满可用宽度。
 - 「恢复默认布局」为右对齐紧凑按钮（`.ssd-dp-btn.ghost.sm.ssd-dp-reset`，`align-self:flex-end`），不占满整行。
 
 ## 6. 关注与通知系统（已确认）

@@ -1938,7 +1938,9 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  width: 100%;
   max-width: 860px;
+  margin-inline: auto; /* 设置内容居中（用户 2026-10-26） */
 }
 .ssd-dp-set-h {
   margin: 4px 0 0;

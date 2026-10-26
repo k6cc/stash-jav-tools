@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.2.6";
+  var PLUGIN_VERSION = "2.2.7";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -221,11 +221,21 @@
     });
   }
 
+  // TPDB 的 background / background_back 是对象 {full,large,medium,small}，
+  // 直接塞进 images 会得到 [object Object]（2026-10-26 修正）
+  function tpdbImgUrl(v) {
+    if (!v) return "";
+    if (typeof v === "string") return v;
+    return v.full || v.large || v.medium || v.small || "";
+  }
+
   function tpdbScene(raw) {
     if (!raw) return null;
     var site = raw.site || null;
     var imgs = [];
-    [raw.image, raw.poster, raw.poster_image, raw.back_image, raw.background, raw.background_back].forEach(function (u) {
+    // 顺序即封面回退顺序：外站直链（可能是 gif/动图）→ TPDB 自托管 poster/背景
+    [raw.image, raw.poster, raw.poster_image, raw.back_image,
+      tpdbImgUrl(raw.background), tpdbImgUrl(raw.background_back)].forEach(function (u) {
       if (u && !imgs.some(function (x) { return x.url === u; })) imgs.push({ url: u });
     });
     var urls = [];
@@ -3019,6 +3029,20 @@
     return wrap;
   }
 
+  // 封面候选依次回退：TPDB 的外站直链常因防盗链 403，失败后换下一张
+  //（images 里随后是 TPDB 自托管的 poster / background）
+  function setCoverImage(img, images) {
+    var list = (images || []).map(function (i) { return i && i.url; })
+      .filter(function (u) { return typeof u === "string" && u; });
+    var i = 0;
+    function next() {
+      if (i >= list.length) { img.style.visibility = "hidden"; return; }
+      img.src = list[i++];
+    }
+    img.onerror = next;
+    next();
+  }
+
   function buildSceneRow(item) {
     var sc = item.scene;
     var tr = document.createElement("tr");
@@ -3034,8 +3058,7 @@
       img.loading = "lazy";
       img.className = "image-thumbnail";
       img.alt = sc.title || sc.code || "";
-      img.src = item.images[0].url;
-      img.onerror = function () { this.style.visibility = "hidden"; };
+      setCoverImage(img, item.images);
       coverLink.appendChild(img);
     }
     coverTd.appendChild(coverLink);
@@ -3142,9 +3165,8 @@
       var img = document.createElement("img");
       img.className = "scene-card-preview-image";
       img.loading = "lazy";
-      img.src = item.images[0].url;
       img.alt = sc.title || sc.code || "";
-      img.onerror = function () { this.style.visibility = "hidden"; };
+      setCoverImage(img, item.images);
       preview.appendChild(img);
     }
 
@@ -3411,6 +3433,9 @@
   var _carouselIdx = 0;
   var _modalImages = []; // current open modal's image URL list (cover + DMM shots)
   var _modalGalleryDone = false;
+  var _modalListProbed = null;  // Promise<list 中实际可加载的 URL>
+  var _modalKeep = [];          // 探测通过的列表图（动图优先）
+  var _modalExtra = [];         // 详情图 + DMM 截图
   var _searchPage = 1;
   var _searchPerPage = 20;
   var _searchResults = [];
@@ -3423,8 +3448,21 @@
     _carouselIdx = 0;
     _modalImages = (item.images || []).map(function (i) { return i.url; });
     _modalGalleryDone = false;
+    _modalKeep = [];
+    _modalExtra = [];
     _searchPage = 1;
     _searchResults = [];
+
+    // 外站直链可能被防盗链拒绝：先探测列表图，只保留能加载的
+    var list = _modalImages.slice();
+    _modalListProbed = Promise.all(list.map(probeUrlOk)).then(function (oks) {
+      return list.filter(function (u, i) { return oks[i]; });
+    });
+    _modalListProbed.then(function (keep) {
+      _modalKeep = keep;
+      if (_state.modal === item) recomputeModalImages();
+    });
+
     buildModal(item);
 
     // Fetch full detail in background
@@ -3766,17 +3804,34 @@
     oldCarousel.parentNode.replaceChild(fresh, oldCarousel);
   }
 
-  // After detail loads, probe DMM for screenshots and merge into the carousel.
+  // 探测图片可加载性（TPDB 列表图多为外站直链，防盗链会拒绝）
+  function probeUrlOk(url) {
+    return new Promise(function (resolve) {
+      if (!url) return resolve(false);
+      var im = new Image();
+      var t = setTimeout(function () { im.onload = im.onerror = null; resolve(false); }, 5000);
+      im.onload = function () { clearTimeout(t); resolve(true); };
+      im.onerror = function () { clearTimeout(t); resolve(false); };
+      im.src = url;
+    });
+  }
+
+  // 列表图（动图优先）+ 详情图 + DMM 截图，统一去重排序后重挂轮播
+  function recomputeModalImages() {
+    if (!_state.modal) return;
+    var merged = dedupeUrls(_modalKeep.concat(_modalExtra));
+    if (!merged.length) return;
+    if (merged.join("|") === _modalImages.join("|")) return;
+    _modalImages = merged;
+    remountCarousel();
+  }
+
   function probeModalGallery(detail, item) {
     if (_modalGalleryDone) return;
     _modalGalleryDone = true;
 
-    // Seed with box detail images (cover)
     var boxUrls = (detail.images || []).map(function (i) { return i.url; }).filter(Boolean);
-    if (boxUrls.length) {
-      _modalImages = dedupeUrls(boxUrls);
-      remountCarousel();
-    }
+    _modalExtra = dedupeUrls(_modalExtra.concat(boxUrls));
 
     var sc = detail.scene || {};
     var contentId = null;
@@ -3784,25 +3839,25 @@
       if (!contentId && u.url) contentId = contentIdFromR18Url(u.url);
     });
     if (!contentId) contentId = deriveContentId(sc.code);
-    if (!contentId) return; // non-DMM scene: box cover is all we have
+
+    var flush = function () {
+      (_modalListProbed || Promise.resolve()).then(function () { recomputeModalImages(); });
+    };
 
     // Progressive merge (enumeration path reports each shot as found)
     var onImage = function (url) {
-      if (!_state.modal) return; // modal closed
-      if (_modalImages.indexOf(url) === -1) {
-        _modalImages.push(url);
-        remountCarousel();
-      }
+      _modalExtra = dedupeUrls(_modalExtra.concat([url]));
+      flush();
     };
 
+    if (!contentId) { flush(); return; } // non-DMM scene: covers are all we have
+
     probeDmmGallery(contentId, onImage).then(function (galleryUrls) {
-      if (!_state.modal) return;
-      var merged = dedupeUrls(_modalImages.concat(galleryUrls || []));
-      var changed = merged.length !== _modalImages.length;
-      _modalImages = merged;
-      if (changed) remountCarousel();
+      _modalExtra = dedupeUrls(_modalExtra.concat(galleryUrls || []));
+      flush();
     }).catch(function (e) {
       console.warn("[SSD] DMM gallery probe failed:", e);
+      flush();
     });
   }
 

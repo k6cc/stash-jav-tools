@@ -959,7 +959,9 @@
           if (raw) {
             var e = JSON.parse(raw);
             if (e && Date.now() - (e.fetchedAt || 0) < TRENDING_PERF_CACHE_TTL_MS && Array.isArray(e.performers)) {
-              return { source: base.source, fromCache: "fresh", performers: e.performers, degraded: e.degraded };
+              // 旧缓存可能没有 degraded 字段：TPDB 一律归一为 degraded
+              var deg = SSD.isTPDBBox({ endpoint: base.source.endpoint }) ? true : e.degraded;
+              return { source: base.source, fromCache: "fresh", performers: e.performers, degraded: deg };
             }
           }
         } catch (_) {}
@@ -1511,7 +1513,7 @@
 
   // TPDB 没有热度排序（2026-10-26 实证：REST/GraphQL 的 sort 全被忽略，
   // 也没有本周热门接口）→ 该源下「热门」实为全站最新入库。按 A 方案把模块
-  // 与 tab 都改名「最新上线 · 全站」，不伪造热度榜。
+  // 与 tab 都改名「网站上新」，不伪造热度榜。
   function currentSourceData() {
     return (_dp.d.trending && _dp.d.trending.source) ||
       (_dp.d.latest && _dp.d.latest.source) || null;
@@ -1521,7 +1523,12 @@
     return !!(s && s.endpoint && SSD.isTPDBBox({ endpoint: s.endpoint }));
   }
   function trendingTitle() {
-    return trendingOnTPDB() ? tc("最新上线 · 全站", "Newest · All sites") : tc("热门", "Trending");
+    return trendingOnTPDB() ? tc("网站上新", "New on site") : tc("热门", "Trending");
+  }
+  // TPDB 空状态兜底：旧缓存（2.2.4 前）可能没有 degraded 标志，
+  // 或缓存里的 performers 为空但未标记；该源一律视为「无热度榜」。
+  function trendingDegraded(tp) {
+    return !!(tp && (tp.degraded || trendingOnTPDB()));
   }
 
   function renderOverview(c) {
@@ -1680,7 +1687,7 @@
           }));
         });
         trendingPerfMinis({ limit: Math.max(0, rows.performers * 12 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
-        if (!g6.children.length) s6.appendChild(stateBox("empty", tp && tp.degraded
+        if (!g6.children.length) s6.appendChild(stateBox("empty", trendingDegraded(tp)
           ? tc("该源不提供热门演员榜；共同出演暂无可发现演员", "No trending list on this source; no co-starred performers to discover")
           : tc("暂无可发现的演员", "No performers to discover")));
         else { s6.appendChild(g6); trimRows(g6, rows.performers); }
@@ -1922,7 +1929,7 @@
       });
     } else {
       trendingPerfMinis().forEach(function (pm) { grid.appendChild(pm); });
-      if (!grid.children.length && _dp.d.trendingPerf && _dp.d.trendingPerf.degraded) {
+      if (!grid.children.length && trendingDegraded(_dp.d.trendingPerf)) {
         emptyMsg = tc("该源不提供热门演员榜（TPDB 没有热度排序）", "This source has no trending performers list (TPDB has no popularity sort)");
       }
     }

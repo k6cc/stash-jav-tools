@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.3.1";
+  var PLUGIN_VERSION = "2.4.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -2998,12 +2998,28 @@
   // including from the window resize handler — relayouts them all.
   function layoutCardGrid() {
     document.querySelectorAll(".ssd-card-grid").forEach(function (grid) {
+      var cards = grid.querySelectorAll(".scene-card");
+      // CSS grid 容器（发现页模块、窄屏演员弹窗）由网格轨道决定列宽：
+      // 清掉可能残留的 inline width 后跳过（用户 2026-10-27）
+      if (getComputedStyle(grid).display === "grid") {
+        for (var k = 0; k < cards.length; k++) cards[k].style.width = "";
+        return;
+      }
+      // 窄屏原生 Stash 卡片是单列全宽（实测 ≤576：容器宽 − 10px），旧公式
+      // 多减了 30px。只对演员/工作室详情 tab 生效；发现页网格是 CSS grid
+      // 已在上面跳过，演员弹窗 481–576 仍走公式（用户 2026-10-27）
+      var narrowNative = window.innerWidth <= 576 &&
+        !grid.closest(".ssd-dp-page") && !grid.closest(".ssd-dp-modal-scenes");
       var zoom = parseInt(grid.getAttribute("data-zoom"), 10);
       if (isNaN(zoom)) zoom = _state.zoom;
-      var maxUsable = Math.max(120, grid.clientWidth - 30);
-      var cols = Math.max(1, Math.ceil(maxUsable / ZOOM_WIDTHS[zoom]));
-      var cardW = maxUsable / cols - 10;
-      var cards = grid.querySelectorAll(".scene-card");
+      var cardW;
+      if (narrowNative) {
+        cardW = Math.max(120, grid.clientWidth - 10);
+      } else {
+        var maxUsable = Math.max(120, grid.clientWidth - 30);
+        var cols = Math.max(1, Math.ceil(maxUsable / ZOOM_WIDTHS[zoom]));
+        cardW = maxUsable / cols - 10;
+      }
       for (var i = 0; i < cards.length; i++) {
         cards[i].style.width = cardW + "px";
       }
@@ -3345,7 +3361,8 @@
     title.className = "card-section-title flex-aligned";
     var titleText = document.createElement("div");
     titleText.className = "TruncatedText";
-    titleText.style.setProperty("-webkit-line-clamp", "2");
+    // 行数由插件 CSS 控制（默认 2 行，发现页窄屏 1 行）——inline style 无法被
+    // 媒体查询覆盖，只能靠 !important，故迁到样式表（用户 2026-10-27）
     titleText.textContent = sc.title || sc.code || tc("无标题", "Untitled");
     title.appendChild(titleText);
     cardSection.appendChild(title);
@@ -3363,7 +3380,6 @@
     if (sc.details) {
       var desc = document.createElement("div");
       desc.className = "TruncatedText scene-card__description";
-      desc.style.setProperty("-webkit-line-clamp", "3");
       desc.textContent = sc.details;
       details.appendChild(desc);
     }
@@ -3654,12 +3670,18 @@
     closeBtn.onclick = closeModal;
     modal.appendChild(closeBtn);
 
+    // 内容装进内层滚动容器：关闭按钮悬浮在弹窗右上角，不随内容滚动
+    // （与演员弹窗 .ssd-dp-modal-body 同构 — 用户 2026-10-27）
+    var body = document.createElement("div");
+    body.className = "ssd-modal-body";
+    modal.appendChild(body);
+
     // Section 1: Carousel (cover + screenshots)
     var carouselSection = document.createElement("div");
     carouselSection.className = "ssd-modal-section";
     carouselSection.style.padding = "0";
     carouselSection.appendChild(buildCarousel(_modalImages, item.scene));
-    modal.appendChild(carouselSection);
+    body.appendChild(carouselSection);
 
     // Section 2: Action buttons
     var actionSection = document.createElement("div");
@@ -3691,20 +3713,20 @@
     btnRow.appendChild(searchBtn);
 
     actionSection.appendChild(btnRow);
-    modal.appendChild(actionSection);
+    body.appendChild(actionSection);
 
     // Section 3: Details (placeholder — filled by updateModalDetail)
     var details = document.createElement("div");
     details.className = "ssd-modal-section";
     details.setAttribute("data-ssd-details", "");
     renderDetailsInto(details, item.scene, item);
-    modal.appendChild(details);
+    body.appendChild(details);
 
     // Section 4: Search results
     var searchSection = document.createElement("div");
     searchSection.className = "ssd-modal-section";
     searchSection.setAttribute("data-ssd-search", "");
-    modal.appendChild(searchSection);
+    body.appendChild(searchSection);
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);

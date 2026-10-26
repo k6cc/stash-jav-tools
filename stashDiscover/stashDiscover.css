@@ -649,11 +649,12 @@
 }
 .ssd-modal {
   position: relative;
+  display: flex !important;
+  flex-direction: column;
   max-width: 820px !important;
   width: 100% !important;
   max-height: calc(100vh - 60px) !important;
-  overflow-y: auto !important;
-  scrollbar-gutter: stable !important;
+  overflow: hidden !important;
   margin: auto 0 !important;
   background: var(--ssd-modal-bg) !important;
   border-radius: 8px !important;
@@ -661,17 +662,26 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
 }
+/* 内容内层滚动：关闭按钮悬浮在弹窗右上角，不随内容滚出视野
+   （与 .ssd-dp-modal-body 同构 — 用户 2026-10-27） */
+.ssd-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  border-radius: inherit;
+}
 .ssd-modal-close {
   position: absolute;
   top: 10px;
   right: 12px;
   z-index: 10;
-  width: 32px;
-  height: 32px;
-  border: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 4px;
-  background: #555;
-  color: #ddd;
+  background: rgba(20, 20, 20, 0.7);
+  color: #fff;
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
@@ -724,16 +734,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, border-color 0.15s;
+  opacity: 0.42; /* 左右翻页弱化，避免与悬浮关闭按钮抢视线（用户 2026-10-27） */
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
   z-index: 5;
   line-height: 1;
 }
 .ssd-carousel-nav:hover:not(:disabled) {
+  /* 激活/悬停态也保持半透明，不抢关闭按钮视线（用户 2026-10-27） */
+  opacity: 0.7;
   background: rgba(0, 0, 0, 0.85);
   border-color: rgba(255, 255, 255, 0.5);
 }
+.ssd-carousel-nav:active:not(:disabled) { opacity: 0.55; }
 .ssd-carousel-nav:disabled {
-  opacity: 0.3;
+  opacity: 0.2;
   cursor: default;
 }
 .ssd-carousel-prev { left: 14px; }
@@ -1751,6 +1765,9 @@
   object-position: center;
 }
 .ssd-dp-pfinfo { min-width: 0; flex: 1 1 240px; }
+/* 弹窗头部（外部演员/工作室）信息列基准宽收小：iPhone SE 级窄屏名字仍在
+   头像右侧，不会折到头像下方；与箭头是否出现无关（用户 2026-10-27） */
+.ssd-dp-modal-head .ssd-dp-pfinfo { flex-basis: 120px; }
 .ssd-dp-pfname {
   font-size: 20px;
   font-weight: 700;
@@ -1778,6 +1795,9 @@
 }
 .ssd-dp-extbtn:hover { color: var(--sx-acc); border-color: var(--sx-acc); }
 .ssd-dp-extbtn svg { width: 14px; height: 14px; }
+/* 同位置返回按钮（本地演员详情右上角）——button 需补 a 的默认外观复位 */
+button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
+.ssd-dp-pfhead.has-back { padding-right: 52px; }
 .ssd-dp-pfactions {
   display: flex;
   flex-wrap: wrap;
@@ -1786,6 +1806,74 @@
 }
 /* 头像容器 + 国旗徽标（叠加头像左下角 — 用户 2026-10-25）*/
 .ssd-dp-pfav { position: relative; flex: none; }
+/* 头像图 + 国旗徽标的定位容器（头像翻页箭头以它为基准左右外挂） */
+.ssd-dp-pfpic { position: relative; line-height: 0; }
+/* 头像翻页（外部演员弹窗）：箭头在头像左右外侧。绝对定位 + 负偏移，
+   不占布局宽度 —— 箭头加载后头像不位移、名称列宽度也不变（用户 2026-10-27）。
+   12px：桌面分别落在头部 16px 内边距 / 16px 列间距里，窄屏正好各占 12px。 */
+.ssd-dp-avnav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.7;
+  z-index: 2;
+}
+.ssd-dp-avnav.prev { left: -12px; }
+.ssd-dp-avnav.next { right: -12px; }
+.ssd-dp-avnav:hover:not(:disabled) { opacity: 1; background: rgba(0, 0, 0, 0.8); }
+.ssd-dp-avnav:disabled { opacity: 0.25; cursor: default; }
+/* 头像张数徽标：右下角，沿用场景演员浮窗年龄徽标的样式（无底色 + 描边阴影）；
+   底边与国旗同为 6px，两者 16px 高 → 中心线在同一水平线上（用户 2026-10-27） */
+.ssd-dp-avcount { right: 4px; bottom: 6px; }
+/* 翻页加载：裁剪容器贴合头像 12px 圆角，轨道/滑动条只出现在圆角内侧的底边 */
+.ssd-dp-avload {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  display: none;
+  pointer-events: none;
+  z-index: 1;
+}
+.ssd-dp-avload::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.ssd-dp-avload.on { display: block; }
+.ssd-dp-avload > i {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 40%;
+  height: 2px;
+  background: var(--ssd-primary);
+  animation: ssd-avload 0.9s ease-in-out infinite;
+}
+@keyframes ssd-avload {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
 /* 国旗：与场景二级弹窗演员 popup 完全同款（用户 2026-10-25 第六轮：
    无底色、text-shadow 描边、img 柔影，弃粗黑底边）*/
 .ssd-dp-pfflag {
@@ -1842,12 +1930,14 @@
   margin-bottom: 12px;
   overflow: hidden;
 }
+/* 关注行：窄屏也不换行——名字/统计单行省略，按钮组收紧不折行
+   （用户 2026-10-27：宽度够，换行反而乱） */
 .ssd-dp-fgrp-head {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .ssd-dp-fgrp-head img {
   width: 52px;
@@ -1857,11 +1947,12 @@
   flex: none;
   background: var(--sx-ui2);
 }
-.ssd-dp-fgrp-info { min-width: 0; flex: 1 1 200px; }
+.ssd-dp-fgrp-info { min-width: 0; flex: 1 1 auto; }
 /* 整行可点展开/收起（详情、取消关注按钮除外）— 用户 2026-10-25 第七轮 */
 .ssd-dp-fgrp-head.is-toggle { cursor: pointer; }
 .ssd-dp-fgrp-head.is-toggle:hover { background: var(--sx-ui2); }
-.ssd-dp-fgrp-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.ssd-dp-fgrp-acts { display: flex; gap: 6px; flex: none; flex-wrap: nowrap; }
+.ssd-dp-fgrp-acts .ssd-dp-btn { padding: 5px 9px; }
 .ssd-dp-fgrp-body { padding: 4px 14px 14px; }
 
 /* 演员详情弹层（§3.5）*/
@@ -1898,18 +1989,21 @@
   position: absolute;
   top: 10px;
   right: 12px;
-  z-index: 2;
+  /* 必须高于卡片封面角标（.studio-overlay z-index:8），否则关闭按钮被工作室
+     名字压住（用户 2026-10-27 反馈） */
+  z-index: 20;
   width: 30px;
   height: 30px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 8px;
-  background: var(--sx-ui);
-  color: var(--sx-tx2);
+  /* 深色半透明（≈70%），压在头像/封面上也能看清（用户 2026-10-27） */
+  background: rgba(20, 20, 20, 0.7);
+  color: #fff;
   font-size: 22px;
   line-height: 1;
   cursor: pointer;
 }
-.ssd-dp-modal-close:hover { color: var(--sx-tx); background: var(--sx-ui2); }
+.ssd-dp-modal-close:hover { background: rgba(60, 60, 60, 0.85); color: #fff; }
 .ssd-dp-modal-head { margin-bottom: 12px; padding-right: 36px; }
 .ssd-dp-modal-head .ssd-dp-extbtn { position: static; }
 .ssd-dp-modal-scenes .ssd-dp-state { padding: 18px 0; }
@@ -1919,17 +2013,53 @@
   .ssd-dp-toolbar .grow { flex: 1 1 100%; max-width: none; }
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
-  .ssd-dp-pfavatar { width: 64px; height: 96px; }
+  .ssd-dp-pfhead.has-back { padding-right: 50px; }
+  /* 演员头像稍放大（原 64×96 太小 — 用户 2026-10-27） */
+  .ssd-dp-pfavatar { width: 72px; height: 108px; }
+  /* 窄屏头像翻页箭头收窄：12px 正好落在头部 12px 内边距 / 12px 列间距 */
+  .ssd-dp-avnav { width: 12px; height: 26px; font-size: 9px; }
   .ssd-dp-pfavatar--studio { width: clamp(132px, 42%, 240px); height: auto; max-height: 180px; }
   .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 0 2px; }
   .ssd-dp-pfflag img { width: 16px; height: 11px; }
+  /* 窄屏国旗贴 4px，张数徽标同步贴 4px，中心线仍对齐 */
+  .ssd-dp-avcount { bottom: 4px; }
   .ssd-dp-pfname { font-size: 17px; }
   .ssd-dp-grid.mini { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-  .ssd-dp-fgrp-head { padding: 10px; }
+  .ssd-dp-fgrp-head { padding: 10px; gap: 10px; }
   .ssd-dp-fgrp-head img { width: 44px; height: 44px; }
+  .ssd-dp-fgrp-acts { gap: 5px; }
+  .ssd-dp-fgrp-acts .ssd-dp-btn { padding: 4px 8px; font-size: 12px; }
   .ssd-dp-fgrp-body { padding: 2px 10px 10px; }
   .ssd-dp-modal-overlay { padding: 10px; }
   .ssd-dp-modal-body { padding: 14px; }
+
+  /* tab 长词（英文本地有更新/共同出演/热门演员榜等）：允许换行、收紧内边距，
+     不再溢出按钮压到相邻项上（用户 2026-10-27）；keep-all 保证中文不逐字断开
+     （「发现演员」不会被拆成 3+1 — 用户 2026-10-27 反馈） */
+  .ssd-dp-tab {
+    white-space: normal;
+    word-break: keep-all;
+    min-width: 0;
+    padding: 5px 8px;
+    line-height: 1.25;
+    text-align: center;
+    overflow-wrap: break-word;
+  }
+  /* 子 tab 按项数均分（2 项=已发布/预告，3 项=演员源），不留空格子 */
+  .ssd-dp-tabs.ssd-dp-subtabs { display: flex; }
+  .ssd-dp-subtabs .ssd-dp-tab { flex: 1 1 0; }
+}
+
+/* 极窄屏（≤480）再收一档字号/内边距，让英文长词在 4 列里也放得下；
+   320 级宽度改 3 列，不给主题字体差异留拆字风险。
+   主 tab 共 7 项，4 列时「图标 + 发现演员」放不下 → 极窄屏隐藏 tab 图标只留文字，
+   保证不换行（用户 2026-10-27 反馈：发现演员被拆成 3+1） */
+@media (max-width: 480px) {
+  .ssd-dp-tab { padding: 5px 7px; font-size: 12px; }
+  .ssd-dp-tabs:not(.ssd-dp-subtabs) .ssd-dp-tab > svg { display: none; }
+}
+@media (max-width: 339px) {
+  .ssd-dp-tabs:not(.ssd-dp-subtabs) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ─── 设置视图（§3.7：通用 / 总览模块开关·行数·排序）──────────────────────── */
@@ -2066,4 +2196,147 @@
   .ssd-dp-setrow { align-items: flex-start; flex-direction: column; gap: 8px; }
   .ssd-dp-setctl { align-self: flex-end; }
   .ssd-dp-switch { align-self: flex-end; }
+}
+
+/* ─── 卡片文字行数 ─────────────────────────────────────────────────────────
+   原先由 buildSceneCard 写 inline style，媒体查询无法覆盖（只能靠
+   !important）；迁到样式表后窄屏可无冲突地压缩（用户 2026-10-27）。
+   默认 2/3 行 = 演员详情 tab 的原生观感。 */
+.ssd-card-grid .card-section-title .TruncatedText { -webkit-line-clamp: 2; }
+.ssd-card-grid .scene-card__description { -webkit-line-clamp: 3; }
+
+/* 窄屏刷新反馈：标题图标旋转（刷新按钮在 ≤480 隐藏） */
+.ssd-dp-title svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
+
+/* ─── 窄屏发现页（≤480）：两列 + 卡片压缩 + 页头点击刷新 ──────────────────
+   发现页是自有设计，不追求 1:1 还原原生卡片；仅覆盖字号/行数/间距，
+   不改类名与颜色，主题映射照常生效（用户 2026-10-27）。 */
+
+@media (min-width: 481px) and (max-width: 576px) {
+  /* 这一段原先 minmax(230px) 会塌成单列，固定两列（用户 2026-10-27） */
+  .ssd-dp-page .ssd-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 481px) and (max-width: 720px) {
+  .ssd-dp-page { padding-left: 10px; padding-right: 10px; }
+}
+
+@media (max-width: 480px) {
+  .ssd-dp-page {
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
+
+  /* 发现页 + 演员弹窗内的场景网格：两列、列间距收紧 */
+  .ssd-dp-page .ssd-card-grid,
+  .ssd-dp-modal-scenes .ssd-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 6px;
+    row-gap: 10px;
+  }
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-card { margin: 0; }
+
+  /* 卡片压缩：标题 1 行 / 简介 2 行 · 11px / 日期 11px */
+  .ssd-dp-page .ssd-card-grid .card-section-title,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-section-title {
+    font-size: 12px;
+    line-height: 1.3;
+    margin-bottom: 2px;
+  }
+  .ssd-dp-page .ssd-card-grid .card-section-title .TruncatedText,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-section-title .TruncatedText {
+    -webkit-line-clamp: 1;
+  }
+  .ssd-dp-page .ssd-card-grid .scene-card__description,
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-card__description {
+    -webkit-line-clamp: 2;
+    font-size: 11px;
+    line-height: 1.35;
+    margin-top: 2px;
+  }
+  .ssd-dp-page .ssd-card-grid .scene-card__date,
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-card__date { font-size: 11px; }
+  .ssd-dp-page .ssd-card-grid .card-section .card-popovers,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-section .card-popovers { font-size: 10px; }
+  .ssd-dp-page .ssd-card-grid .card-section hr,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-section hr { margin: 4px 0; }
+
+  /* 卡片内边距/角标再收一档，避免窄卡被文字撑高（用户 2026-10-27） */
+  .ssd-dp-page .ssd-card-grid .card-section,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-section { padding: 6px 6px 0; }
+  .ssd-dp-page .ssd-card-grid .scene-card__details,
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-card__details { margin-bottom: 4px; }
+  .ssd-dp-page .ssd-card-grid .card-popovers,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-popovers { gap: 4px; }
+  .ssd-dp-page .ssd-card-grid .card-popovers .btn,
+  .ssd-dp-modal-scenes .ssd-card-grid .card-popovers .btn {
+    padding: 1px 5px;
+    min-height: 0;
+    height: 20px;
+    font-size: 10px;
+  }
+
+  /* 页头：刷新按钮隐藏，「logo+发现+状态文字」贴上、整块可点刷新；
+     右侧空白不绑定点击，保留 ← 的指向意义（用户 2026-10-27） */
+  .ssd-dp-head { gap: 6px; }
+  .ssd-dp-head .ssd-dp-refresh { display: none; }
+  .ssd-dp-title,
+  .ssd-dp-updated {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    cursor: pointer;
+  }
+  .ssd-dp-title:active,
+  .ssd-dp-updated:active { color: var(--sx-hi); }
+  .ssd-dp-title:focus-visible {
+    outline: 2px solid var(--sx-acc);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  .ssd-dp-updated { order: 1; font-size: 11.5px; }
+  .ssd-dp-updated::before { content: "← "; color: var(--sx-tx3); }
+  .ssd-dp-chips { order: 2; flex-basis: 100%; }
+  .ssd-dp-chips:empty { display: none; }
+
+  /* 封面角标贴边 + 缩小：原生 0.7rem/1rem 的四角留白收到 3–4px，
+     字号统一 10.5px；工作室行距压到 1.15（用户 2026-10-27）。
+     .ssd-overlay-box 挂在 .scene-card-preview（比 .thumbnail-section 矮 5px），
+     故 bottom:0 才与原生 specs 行同一视觉基线。 */
+  .ssd-dp-page .ssd-card-grid .studio-overlay,
+  .ssd-dp-modal-scenes .ssd-card-grid .studio-overlay {
+    top: 3px;
+    right: 4px;
+    font-size: 10.5px;
+    line-height: 1.15;
+    text-align: right;
+  }
+  .ssd-dp-page .ssd-card-grid .scene-specs-overlay,
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay {
+    bottom: 4px;
+    right: 4px;
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+  .ssd-dp-page .ssd-card-grid .scene-specs-overlay .overlay-duration,
+  .ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay .overlay-duration {
+    font-size: 10.5px;
+  }
+  .ssd-dp-page .ssd-overlay-preview,
+  .ssd-dp-modal-scenes .ssd-overlay-preview,
+  .ssd-dp-page .ssd-overlay-days,
+  .ssd-dp-modal-scenes .ssd-overlay-days,
+  .ssd-dp-page .ssd-overlay-inlib,
+  .ssd-dp-modal-scenes .ssd-overlay-inlib {
+    top: 3px;
+    left: 4px;
+    padding: 1px 5px;
+  }
+  .ssd-dp-page .ssd-overlay-box,
+  .ssd-dp-modal-scenes .ssd-overlay-box {
+    bottom: 0;
+    left: 4px;
+    padding: 1px 5px;
+  }
 }

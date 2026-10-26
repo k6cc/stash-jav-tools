@@ -1022,6 +1022,7 @@
     refreshing: false,
     followOpenKey: null, // 关注分组展开态（会话级；单一 key = 手风琴，最多展开一位）
     perfGroup: null,  // 演员过滤视图：actorsWithNew 分组引用
+    perfFrom: null,   // 进入演员过滤视图前的来源视图（返回按钮回到这里）
     studioGroup: null, // 工作室过滤视图：studio 分组引用
     refs: {},         // chrome 元素引用（head/tabs/toolbar/content）
   };
@@ -1186,6 +1187,7 @@
     settings: sv('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/>'),
     star: sv('<path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.2l-6.1 3.4 1.4-6.8L2.2 9.1l6.9-.8z"/>', "currentColor"),
     ext: sv('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+    back: sv('<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>'),
     refresh: sv('<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/>'),
     grid: sv('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
     list: sv('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>'),
@@ -1653,7 +1655,7 @@
             sub: tc("最新 " + (grp.newest || "—"), "newest " + (grp.newest || "—")),
             badge: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
             heart: followHas(grp.performer.stashId),
-            onClick: function () { _dp.perfGroup = grp; switchView("perfFilter"); },
+            onClick: function () { openPerfFilter(grp); },
           }));
         });
         s1.appendChild(g1);
@@ -1944,8 +1946,9 @@
     var src = ["local", "co", "hot"].indexOf(prefs.perfSrc) >= 0 ? prefs.perfSrc : "co";
 
     // 子切换（本地有更新 | 共同出演 | 热门榜）
+    // 英文标签缩短 + tab 允许换行，避免长词溢出按钮（用户 2026-10-27）
     var sub = el("div", "ssd-dp-tabs ssd-dp-subtabs");
-    [["local", tc("本地有更新", "Local updates")], ["co", tc("共同出演", "Co-starred")], ["hot", tc("热门演员榜", "Trending performers")]].forEach(function (pair) {
+    [["local", tc("本地有更新", "Local")], ["co", tc("共同出演", "Co-starred")], ["hot", tc("热门演员榜", "Trending")]].forEach(function (pair) {
       var b = el("button", "ssd-dp-tab" + (src === pair[0] ? " on" : ""), pair[1]);
       b.type = "button";
       b.addEventListener("click", function () {
@@ -1981,7 +1984,7 @@
           sub: tc("最新 " + (grp.newest || "—"), "newest " + (grp.newest || "—")),
           badge: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
           heart: followHas(grp.performer.stashId),
-          onClick: function () { _dp.perfGroup = grp; switchView("perfFilter"); },
+          onClick: function () { openPerfFilter(grp); },
         }));
       });
     } else if (src === "co") {
@@ -2053,14 +2056,21 @@
       addBtn.classList.remove("ok");
       addBtn.classList.add("err");
     }
+    // 头像翻页状态（详情加载后填充）：加入库用当前查看的这张头像
+    var avatarPager = { urls: [], idx: 0 };
     addBtn.addEventListener("click", function () {
       if (addBtn.disabled) return;
       addBtn.disabled = true;
       addBtn.textContent = tc("加入中…", "Adding…");
-      SSD.callGQL(
-        "mutation($input:PerformerCreateInput!){performerCreate(input:$input){id}}",
-        { input: { name: p.name, stash_ids: [{ endpoint: endpoint, stash_id: String(p.stashId) }] } }
-      ).then(function (r) {
+      var input = { name: p.name, stash_ids: [{ endpoint: endpoint, stash_id: String(p.stashId) }] };
+      var avatarUrl = avatarPager.urls[avatarPager.idx] || "";
+      fetchImageDataUrl(avatarUrl).then(function (dataUrl) {
+        if (dataUrl) input.image = dataUrl;
+        return SSD.callGQL(
+          "mutation($input:PerformerCreateInput!){performerCreate(input:$input){id}}",
+          { input: input }
+        );
+      }).then(function (r) {
         var created = r && r.performerCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "empty result"));
         markAdded();
@@ -2114,7 +2124,10 @@
       "query($id:ID!){findPerformer(id:$id){id name gender birth_date country aliases images{url}}}",
       { id: p.stashId }, BOX_TIMEOUT).then(function (r) {
         if (!_dpModal) return;
-        fillPerfDetail(h, r && r.findPerformer);
+        var pf = r && r.findPerformer;
+        fillPerfDetail(h, pf);
+        // 头像翻页：stash-box 头像常有多张，箭头贴在头像左右外侧
+        if (pf && pf.images && pf.images.length) avatarPager = buildAvatarPager(h, pf.images);
       }).catch(function () {});
 
     // 场景区填充：共同出演源 = 共演场景；热门源 = 懒加载近期场景（§3.5）
@@ -2158,20 +2171,23 @@
   }
 
   // ── 共享演员详情模块（演员过滤视图 + 发现演员弹层同构 — 用户 2026-10-25）──
-  // 结构：头像（左下角国旗徽标）｜名称 / 别名（名称正下方）/ 性别·年龄 / 统计行｜右上外链。
+  // 结构：头像（左下角国旗徽标）｜名称 / 别名（名称正下方）/ 性别·年龄 / 统计行。
   // 统计行（p.stat）放 info 列最后一行 = 详情区内部最下面（用户 2026-10-25 第四轮）。
   function buildPerfHead(p) {
     var head = el("div", "ssd-dp-pfhead" + (p.modal ? " ssd-dp-modal-head" : ""));
     var av = el("div", "ssd-dp-pfav");
+    // 内层包住头像+国旗：外层的左右留白留给头像翻页箭头（外部演员弹窗）
+    var pic = el("div", "ssd-dp-pfpic");
     var img = document.createElement("img");
     img.className = "ssd-dp-pfavatar";
     img.alt = p.name || "";
     img.src = p.image || letterAvatar(p.name);
     img.onerror = function () { this.src = letterAvatar(p.name); };
-    av.appendChild(img);
+    pic.appendChild(img);
     var flag = el("span", "ssd-dp-pfflag");
     flag.style.display = "none";
-    av.appendChild(flag);
+    pic.appendChild(flag);
+    av.appendChild(pic);
     head.appendChild(av);
     var info = el("div", "ssd-dp-pfinfo");
     info.appendChild(el("div", "ssd-dp-pfname", p.name || tc("未知演员", "Unknown")));
@@ -2183,13 +2199,84 @@
     if (p.stat) statLine.textContent = p.stat;
     info.appendChild(statLine);
     head.appendChild(info);
-    var ext = el("a", "ssd-dp-extbtn", I.ext);
-    ext.href = SSD.boxWebBase(p.endpoint) + "/performers/" + p.stashId;
-    ext.target = "_blank";
-    ext.rel = "noopener noreferrer";
-    ext.title = tc("在 stash-box 打开", "Open on stash-box");
-    head.appendChild(ext);
-    return { head: head, avatar: img, flag: flag, aliasLine: aliasLine, genderLine: genderLine, statLine: statLine, info: info };
+    // 详情区右上角外链图标已移除：外部演员弹窗由按钮区「品牌名 + ↗」承担，
+    // 本地演员详情该位置改为返回按钮（用户 2026-10-27）
+    return { head: head, av: av, avatar: img, flag: flag, aliasLine: aliasLine, genderLine: genderLine, statLine: statLine, info: info };
+  }
+
+  // 头像翻页（外部演员弹窗）：stash-box 的演员可有多张头像，箭头落在头像
+  // 左右外侧；返回 {urls, idx}，加入库时按 idx 取「最后查看」的那张
+  // （用户 2026-10-27）
+  function buildAvatarPager(h, images) {
+    var urls = [];
+    (images || []).forEach(function (im) {
+      var u = im && im.url;
+      if (u && urls.indexOf(u) < 0) urls.push(u);
+    });
+    var state = { urls: urls, idx: 0 };
+    if (!urls.length) return state;
+    h.avatar.src = urls[0];
+    if (urls.length < 2) return state;
+
+    var av = h.av;
+    var prev = el("button", "ssd-dp-avnav prev", "❮");
+    var next = el("button", "ssd-dp-avnav next", "❯");
+    prev.type = next.type = "button";
+    prev.title = tc("上一张头像", "Previous avatar");
+    next.title = tc("下一张头像", "Next avatar");
+    prev.setAttribute("aria-label", prev.title);
+    next.setAttribute("aria-label", next.title);
+
+    // 张数徽标（右下角，样式对齐场景演员浮窗的年龄徽标）
+    var count = el("span", "ssd-perf-badge ssd-dp-avcount");
+    // 翻页加载条（头像下边缘内侧），图片 load/error 后隐藏
+    var load = el("span", "ssd-dp-avload");
+    load.appendChild(document.createElement("i"));
+    function hideLoad() { load.classList.remove("on"); }
+    h.avatar.addEventListener("load", hideLoad);
+    h.avatar.addEventListener("error", hideLoad);
+
+    function show(i) {
+      var idx = Math.max(0, Math.min(urls.length - 1, i));
+      // 真正换图才亮加载条（首图可能已是当前图）
+      if (idx !== state.idx || !h.avatar.getAttribute("src")) load.classList.add("on");
+      state.idx = idx;
+      h.avatar.src = urls[idx];
+      prev.disabled = idx === 0;
+      next.disabled = idx === urls.length - 1;
+      count.textContent = (idx + 1) + "/" + urls.length;
+    }
+    prev.addEventListener("click", function () { show(state.idx - 1); });
+    next.addEventListener("click", function () { show(state.idx + 1); });
+    av.appendChild(prev);
+    av.appendChild(next);
+    av.appendChild(count);
+    av.appendChild(load);
+    show(0);
+    return state;
+  }
+
+  // 头像 → base64 data URL（performerCreate 的 image 只收 base64；
+  // 跨域取不到时返回 null，加入库流程继续、只是不带图）
+  function fetchImageDataUrl(url) {
+    if (!url) return Promise.resolve(null);
+    return fetch(url, { mode: "cors", credentials: "omit" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.blob();
+      })
+      .then(function (blob) {
+        return new Promise(function (resolve, reject) {
+          var fr = new FileReader();
+          fr.onload = function () { resolve(String(fr.result || "")); };
+          fr.onerror = function () { reject(new Error("read failed")); };
+          fr.readAsDataURL(blob);
+        });
+      })
+      .catch(function (e) {
+        console.warn("[SSD] avatar download skipped:", (e && e.message) || e);
+        return null;
+      });
   }
 
   // 详情补全：性别/年龄 → genderLine，别名 → 名称下方，国籍 → 头像国旗徽标，
@@ -2205,7 +2292,17 @@
     }
     if (bits.length) h.genderLine.textContent = bits.join(" · ");
     var al = pf.alias_list || pf.aliases;
-    if (al && al.length) h.aliasLine.textContent = tc("别名：", "Aliases: ") + al.join(" / ");
+    if (al && al.length) {
+      // 与演员详情「搜索关联演员」的别名结构一致：只列 3 个，其余用 +N 徽标
+      h.aliasLine.textContent = tc("别名：", "Aliases: ") + al.slice(0, 3).join(" / ");
+      if (al.length > 3) {
+        h.aliasLine.appendChild(document.createTextNode(" "));
+        var more = document.createElement("span");
+        more.className = "ssd-find-badge";
+        more.textContent = "+" + (al.length - 3);
+        h.aliasLine.appendChild(more);
+      }
+    }
     if (pf.images && pf.images[0] && pf.images[0].url) h.avatar.src = pf.images[0].url;
     var iso = countryIso(pf.country);
     if (iso) {
@@ -2241,6 +2338,14 @@
     return NAMES[s] || "";
   }
 
+  // 进入演员过滤视图：记录来源视图，详情页右上角返回时回到列表
+  // （总览卡片 / 本地有更新 / 关注「详情」— 用户 2026-10-27）
+  function openPerfFilter(grp) {
+    _dp.perfGroup = grp;
+    _dp.perfFrom = _dp.view || "performers";
+    switchView("perfFilter");
+  }
+
   // ── 演员过滤视图（§8.1：上半演员详情 + 下半场景卡）───────────────────────
   function renderPerfFilter(c) {
     var g = _dp.perfGroup;
@@ -2254,6 +2359,15 @@
     var h = buildPerfHead({ name: pf.name, image: pf.image, stashId: pf.stashId, endpoint: endpoint,
       stat: tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
         g.items.length + " new · newest " + (g.newest || "—")) });
+    // 右上角返回：回到进入本视图前的列表（总览 / 本地有更新 / 关注）
+    // — 取代原 stash-box 外链图标（用户 2026-10-27）
+    var backBtn = el("button", "ssd-dp-extbtn ssd-dp-backbtn", I.back);
+    backBtn.type = "button";
+    backBtn.title = tc("返回列表", "Back to list");
+    backBtn.setAttribute("aria-label", tc("返回列表", "Back to list"));
+    backBtn.addEventListener("click", function () { switchView(_dp.perfFrom || "performers"); });
+    h.head.appendChild(backBtn);
+    h.head.classList.add("has-back");
     c.appendChild(h.head);
 
     // 按钮区（§8.1：关注 ♥ / 发现 tab / 主页 / stash-box）
@@ -2276,11 +2390,14 @@
       window.location.assign("/performers/" + pf.localId);
     });
     acts.appendChild(tabBtn);
-    var homeBtn = el("button", "ssd-dp-btn", tc("主页", "Profile"));
-    homeBtn.type = "button";
-    homeBtn.addEventListener("click", function () { window.location.assign("/performers/" + pf.localId); });
-    acts.appendChild(homeBtn);
-    // stash-box 打开按钮已移除（详情区右上外链图标承担）— 用户 2026-10-25
+    // 原「主页」按钮 → 源站演员页（品牌名 + 外链图标）；详情区右上角外链
+    // 图标已改为返回按钮（用户 2026-10-27）
+    var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + I.ext);
+    boxBtn.href = SSD.boxWebBase(endpoint) + "/performers/" + pf.stashId;
+    boxBtn.target = "_blank";
+    boxBtn.rel = "noopener noreferrer";
+    boxBtn.title = tc("在 stash-box 打开", "Open on stash-box");
+    acts.appendChild(boxBtn);
     c.appendChild(acts);
 
     // 本地演员详情补全（性别/年龄/别名/国籍国旗）
@@ -2439,7 +2556,7 @@
       goBtn.type = "button";
       goBtn.addEventListener("click", function (e) {
         e.stopPropagation();
-        if (g) { _dp.perfGroup = g; switchView("perfFilter"); }
+        if (g) openPerfFilter(g);
         else if (f.localId) window.location.assign("/performers/" + f.localId);
       });
       rightBox.appendChild(goBtn);
@@ -2773,10 +2890,12 @@
 
     // ── 页头行（§3.1.1）：标题 + meta chips + 刷新 + 相对时间 ──
     var head = el("div", "ssd-dp-head");
-    head.appendChild(el("h2", "ssd-dp-title",
+    var title = el("h2", "ssd-dp-title",
       '<svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true"><path d="M192 32c0-17.7 14.3-32 32-32C383.1 0 512 128.9 512 288c0 17.7-14.3 32-32 32s-32-14.3-32-32C448 164.3 347.7 64 224 64c-17.7 0-32-14.3-32-32zM60.6 220.6L164.7 324.7l28.4-28.4c-.7-2.6-1.1-5.4-1.1-8.3c0-17.7 14.3-32 32-32s32 14.3 32 32s-14.3 32-32 32c-2.9 0-5.6-.4-8.3-1.1l-28.4 28.4L291.4 451.4c14.5 14.5 11.8 38.8-7.3 46.3C260.5 506.9 234.9 512 208 512C93.1 512 0 418.9 0 304c0-26.9 5.1-52.5 14.4-76.1c7.5-19 31.8-21.8 46.3-7.3zM224 96c106 0 192 86 192 192c0 17.7-14.3 32-32 32s-32-14.3-32-32c0-70.7-57.3-128-128-128c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></svg>' +
-      "<span>" + tc("发现", "Discover") + "</span>"));
-    refs.chips = el("span");
+      "<span>" + tc("发现", "Discover") + "</span>");
+    refs.title = title;
+    head.appendChild(title);
+    refs.chips = el("span", "ssd-dp-chips");
     head.appendChild(refs.chips);
     refs.refresh = el("button", "ssd-dp-refresh", I.refresh + "<span>" + tc("刷新", "Refresh") + "</span>");
     refs.refresh.type = "button";
@@ -2785,6 +2904,33 @@
     refs.updated = el("span", "ssd-dp-updated");
     head.appendChild(refs.updated);
     root.appendChild(head);
+
+    // 窄屏（≤480）：隐藏刷新按钮，「logo + 发现 + 状态文字」整块可点刷新；
+    // 右侧空白不绑定点击（既不误触，也保住 ← 的指向意义 — 用户 2026-10-27）
+    function narrowRefresh() {
+      if (window.innerWidth > 480) return;
+      doRefresh();
+    }
+    title.addEventListener("click", narrowRefresh);
+    refs.updated.addEventListener("click", narrowRefresh);
+    title.addEventListener("keydown", function (e) {
+      if (window.innerWidth > 480) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); doRefresh(); }
+    });
+    var mqNarrow = window.matchMedia ? window.matchMedia("(max-width: 480px)") : null;
+    function syncHeadA11y() {
+      if (!mqNarrow || mqNarrow.matches) {
+        title.setAttribute("role", "button");
+        title.setAttribute("tabindex", "0");
+        title.setAttribute("aria-label", tc("刷新发现页", "Refresh discover page"));
+      } else {
+        title.removeAttribute("role");
+        title.removeAttribute("tabindex");
+        title.removeAttribute("aria-label");
+      }
+    }
+    syncHeadA11y();
+    if (mqNarrow && mqNarrow.addEventListener) mqNarrow.addEventListener("change", syncHeadA11y);
 
     // ── 滑动开关组（§3.1.2）：7 模块 + 右侧独立设置 ──
     refs.tabs = el("div", "ssd-dp-tabs");
@@ -2942,6 +3088,10 @@
 
   function doRefresh() {
     if (_dp.refreshing) return;
+    // 窄屏标题整块可点：2 秒内重复点击忽略（用户 2026-10-27）
+    var now = Date.now();
+    if (now - (_dp.lastRefreshAt || 0) < 2000) return;
+    _dp.lastRefreshAt = now;
     _dp.refreshing = true;
     render();
     refreshAll().then(function () {
@@ -2977,7 +3127,15 @@
           '<span class="ssd-dp-chip">' + tc("数据源", "Source") + " <b>" + SSD.brandNameForEndpoint(d.source.endpoint, d.source.name) + "</b></span>";
       }
     }
-    if (refs.updated) refs.updated.textContent = relTime(_dp.fetchedAt);
+    // 窄屏刷新反馈：状态文字变「更新中…」+ 标题图标旋转（用户 2026-10-27）
+    if (refs.updated) {
+      refs.updated.textContent = _dp.refreshing ? tc("更新中…", "Updating…") : relTime(_dp.fetchedAt);
+      refs.updated.setAttribute("aria-busy", _dp.refreshing ? "true" : "false");
+    }
+    if (refs.title) {
+      var tsvg = refs.title.querySelector("svg");
+      if (tsvg) tsvg.classList.toggle("spinning", !!_dp.refreshing);
+    }
     if (refs.refresh) {
       refs.refresh.disabled = _dp.refreshing;
       var svg = refs.refresh.querySelector("svg");

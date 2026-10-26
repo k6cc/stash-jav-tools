@@ -559,7 +559,7 @@
     }
     return SSD.boxRateLimiter.submit(function () {
       return SSD.callBoxPerformerList(box,
-        { input: { sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: Math.max(perPage * 3, 90) } },
+        { sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: Math.max(perPage * 3, 90) },
         BOX_TIMEOUT);
     }).then(function (data) {
       var rows = ((data || {}).performers) || [];
@@ -574,7 +574,7 @@
       return Promise.all(Object.keys(allowed).map(function (g) {
         return SSD.boxRateLimiter.submit(function () {
           return SSD.callBoxPerformerList(box,
-            { input: { gender: g, sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: perPage } },
+            { gender: g, sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: perPage },
             20000);
         }).then(function (d) {
           return ((d || {}).performers) || [];
@@ -959,7 +959,7 @@
           if (raw) {
             var e = JSON.parse(raw);
             if (e && Date.now() - (e.fetchedAt || 0) < TRENDING_PERF_CACHE_TTL_MS && Array.isArray(e.performers)) {
-              return { source: base.source, fromCache: "fresh", performers: e.performers };
+              return { source: base.source, fromCache: "fresh", performers: e.performers, degraded: e.degraded };
             }
           }
         } catch (_) {}
@@ -967,7 +967,7 @@
       var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
       return fetchTrendingPerformers(box, opts.perPage || 24, genders).then(function (r) {
         try {
-          localStorage.setItem(LS_PREFIX + host + ":trendingPerf.v1", JSON.stringify({ fetchedAt: Date.now(), performers: r.performers }));
+          localStorage.setItem(LS_PREFIX + host + ":trendingPerf.v1", JSON.stringify({ fetchedAt: Date.now(), performers: r.performers, degraded: r.degraded }));
         } catch (_) {}
         return { source: base.source, fromCache: "network", performers: r.performers, degraded: r.degraded };
       });
@@ -1333,10 +1333,27 @@
     }, 150);
     setTimeout(function () { clearInterval(t); cb(); }, 60000); // 兜底
   }
+  // 源错误 → 具体原因（用户 2026-10-26：不再只显示 Unknown error）
+  var ERR_KIND_TEXT = {
+    timeout: ["请求超时：源响应太慢或被中断", "Timed out — the source did not respond in time"],
+    network: ["无法连接：网络错误或源不可达", "Unreachable — network error"],
+    auth: ["鉴权失败：请检查该源的 API Key", "Auth failed — check this source's API key"],
+    blocked: ["请求被源拒绝", "Rejected by the source"],
+    graphql: ["源接口返回错误", "The source API returned an error"],
+    parse: ["源返回了无法解析的响应", "Bad response from the source"],
+    unknown: ["未知错误", "Unknown error"],
+  };
   function errText(e) {
     if (!e) return tc("未知错误", "Unknown error");
     if (e.ssdKind === "no-box") return tc("未配置 stash-box，请先在 Stash 设置中添加", "No stash-box configured — add one in Stash settings first");
-    return SSD.boxErrText ? (SSD.boxErrText(e) || e.message || String(e)) : (e.message || String(e));
+    var pair = ERR_KIND_TEXT[e.ssdKind] || ERR_KIND_TEXT.unknown;
+    var zh = pair[0], en = pair[1];
+    var detail = String(e.message || "");
+    if (/^HTTP \d+/.test(detail)) {
+      zh += "（" + detail + "）";
+      en += " (" + detail + ")";
+    }
+    return tc(zh, en);
   }
 
   // ── 场景卡（SSD.buildSceneCard 原生结构 1:1 + 发现页徽标装饰）────────────
@@ -1487,15 +1504,20 @@
     render();
   }
 
+  // 热门 ∥ 即将发布是否并排成一行（用户 2026-10-26 可设置；默认开启）
+  function mergeTrendPreview() {
+    return dpPrefs().mergeTrendPreview !== false;
+  }
+
   function renderOverview(c) {
     var rows = overviewRows();
     var order = moduleOrder().filter(moduleShown);
     var i = 0;
     while (i < order.length) {
       var id = order[i], nxt = order[i + 1];
-      // 热门∥即将发布相邻时并排（duo），被排序拆开则各自全宽。
+      // 热门∥即将发布相邻时并排（duo），被排序拆开或关闭「并排」时各自全宽。
       // duo 先入文档再渲染模块——trimRows 需要真实布局才能数列数
-      if ((id === "trending" && nxt === "preview") || (id === "preview" && nxt === "trending")) {
+      if (mergeTrendPreview() && ((id === "trending" && nxt === "preview") || (id === "preview" && nxt === "trending"))) {
         var duo = el("div", "ssd-dp-duo");
         c.appendChild(duo);
         renderModule(id, duo, rows);
@@ -1525,7 +1547,13 @@
         more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
       if (!d) secBody(s1, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
-      else if (!(d.actorsWithNew || []).length) secBody(s1, null).appendChild(stateBox("empty", tc("回看期内没有新作品", "No new releases in the lookback window")));
+      else if (!(d.actorsWithNew || []).length) {
+        // 区分「没有可匹配的演员」与「窗口内确实没有新作品」（用户 2026-10-26）
+        var noLinked = !(d.linked || []).length;
+        secBody(s1, null).appendChild(stateBox("empty", noLinked
+          ? tc("本地演员还没有关联 stash-box 编号，无法匹配源数据", "No local performers are linked to stash-box IDs yet")
+          : tc("回看期内没有新作品", "No new releases in the lookback window")));
+      }
       else {
         var g1 = el("div", "ssd-dp-grid mini");
         d.actorsWithNew.slice(0, rows.actors * 12).forEach(function (grp) {
@@ -1550,7 +1578,7 @@
         count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 2 部", (d.latest || []).length + " unowned · max 2 per performer") : "",
         more: function () { switchView("latest"); },
       });
-      if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", null, retryLatest);
+      if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
         var g2 = sceneGrid(d.latest.slice(0, rows.latest * colsOf(240) + rows.latest));
@@ -1566,7 +1594,7 @@
         count: t ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜 · 不限库内", "Site-wide · not library-filtered") : "",
         more: function () { switchView("trending"); },
       });
-      if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", null, function () { retryDataset("trending"); });
+      if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", _dp.err.trending ? errText(_dp.err.trending) : null, function () { retryDataset("trending"); });
       else if (!(t.items || []).length) secBody(s3, null).appendChild(stateBox("empty", tc("榜单暂无内容", "Empty list")));
       else {
         var g3 = sceneGrid(t.items.slice(0, rows.trending * colsOf(240, true) + rows.trending), { inlib: true });
@@ -1583,7 +1611,7 @@
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
-      if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", null, retryLatest);
+      if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : null, retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
         var g4 = sceneGrid(d.preview.slice(0, rows.preview * colsOf(240, true) + rows.preview), { days: true });
@@ -1600,8 +1628,13 @@
         count: st ? tc((st.studioCount || 0) + " 个收藏工作室 · 每工作室最多 2 部", (st.studioCount || 0) + " favorites · max 2 per studio") : "",
         more: function () { switchView("studios"); },
       });
-      if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", null, function () { retryDataset("studios"); });
-      else if (!(st.items || []).length) secBody(s5, null).appendChild(stateBox("empty", tc("收藏的工作室暂无新作品", "No new releases from favorite studios")));
+      if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", _dp.err.studios ? errText(_dp.err.studios) : null, function () { retryDataset("studios"); });
+      else if (!(st.items || []).length) {
+        // 区分「还没有收藏工作室」与「收藏的工作室窗口内无新片」（用户 2026-10-26）
+        secBody(s5, null).appendChild(stateBox("empty", !st.studioCount
+          ? tc("还没有收藏工作室，先在本地库里收藏工作室", "No favorite studios yet — favorite some in your library")
+          : tc("收藏的工作室暂无新作品", "No new releases from favorite studios")));
+      }
       else {
         var g5 = sceneGrid(st.items.slice(0, rows.studios * colsOf(240) + rows.studios));
         g5.classList.add("ssd-dp-grid");
@@ -1630,7 +1663,9 @@
           }));
         });
         trendingPerfMinis({ limit: Math.max(0, rows.performers * 12 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
-        if (!g6.children.length) s6.appendChild(stateBox("empty", tc("暂无可发现的演员", "No performers to discover")));
+        if (!g6.children.length) s6.appendChild(stateBox("empty", tp && tp.degraded
+          ? tc("该源不提供热门演员榜；共同出演暂无可发现演员", "No trending list on this source; no co-starred performers to discover")
+          : tc("暂无可发现的演员", "No performers to discover")));
         else { s6.appendChild(g6); trimRows(g6, rows.performers); }
       }
       return;
@@ -1870,6 +1905,9 @@
       });
     } else {
       trendingPerfMinis().forEach(function (pm) { grid.appendChild(pm); });
+      if (!grid.children.length && _dp.d.trendingPerf && _dp.d.trendingPerf.degraded) {
+        emptyMsg = tc("该源不提供热门演员榜（TPDB 没有热度排序）", "This source has no trending performers list (TPDB has no popularity sort)");
+      }
     }
     if (!grid.children.length) c.appendChild(stateBox("empty", emptyMsg));
     else c.appendChild(grid);
@@ -2463,6 +2501,20 @@
     var secM = el("div", "ssd-dp-set-box");
     var order = moduleOrder();
     var curRows = overviewRows();
+    // 并排开关（用户 2026-10-26）：默认开启，仅影响总览里热门+即将发布相邻时
+    var rowJ = el("div", "ssd-dp-setrow");
+    var labJ = el("label", "ssd-dp-settoggle");
+    var cbJ = document.createElement("input");
+    cbJ.type = "checkbox";
+    cbJ.checked = mergeTrendPreview();
+    cbJ.addEventListener("change", function () {
+      dpSetPrefs({ mergeTrendPreview: cbJ.checked });
+      render();
+    });
+    labJ.appendChild(cbJ);
+    labJ.appendChild(el("span", null, tc("热门与即将发布并排一行", "Trending and Upcoming side by side")));
+    rowJ.appendChild(labJ);
+    secM.appendChild(rowJ);
     MODULE_DEFS.forEach(function (m) {
       var row = el("div", "ssd-dp-setrow");
       var lab = el("label", "ssd-dp-settoggle");

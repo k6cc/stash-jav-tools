@@ -1964,6 +1964,12 @@
 }
 .ssd-dp-setrow + .ssd-dp-setrow { border-top: 1px solid var(--sx-line); }
 .ssd-dp-setname { font-size: 13px; color: var(--sx-tx); }
+.ssd-dp-sethint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sx-tx2);
+  padding: 0 0 9px;
+}
 .ssd-dp-settoggle {
   display: inline-flex;
   align-items: center;
@@ -1998,6 +2004,7 @@
   cursor: pointer;
 }
 .ssd-dp-setsel:focus { border-color: var(--sx-acc); }
+.ssd-dp-setsel.num { width: 88px; }
 .ssd-dp-btn.sm { padding: 4px 9px; font-size: 12px; }
 .ssd-dp-btn:disabled { opacity: 0.38; cursor: default; }
 .ssd-dp-btn.loading { opacity: 0.6; pointer-events: none; }

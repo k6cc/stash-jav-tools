@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.2.2";
+  var PLUGIN_VERSION = "2.2.3";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -381,20 +381,10 @@
     }
     if (perf.length === 1) return tpdbIdPage(box, "performer", perf[0], pageNum, perPage, dir, timeoutMs);
     if (stud.length === 1) return tpdbIdPage(box, "studio", stud[0], pageNum, perPage, dir, timeoutMs);
-    if (perf.length || stud.length) {
-      var wantP = {}, wantS = {};
-      perf.forEach(function (id) { wantP[id] = 1; });
-      stud.forEach(function (id) { wantS[id] = 1; });
-      return tpdbGlobalPage(box, pageNum, perPage, inp.sort, dir, timeoutMs).then(function (r) {
-        r.scenes = r.scenes.filter(function (s) {
-          if (perf.length && (s.performers || []).some(function (a) {
-            return a.performer && wantP[a.performer.id];
-          })) return true;
-          if (stud.length && s.studio && wantS[s.studio.id]) return true;
-          return false;
-        });
-        return r;
-      });
+    if (!since && (perf.length || stud.length)) {
+      // 窗口不限（0 天）：按 id 逐个取，避免退化成全站页 + 客户端过滤
+      return tpdbSinceScenes(box, perf.length ? "performer" : "studio",
+        perf.length ? perf : stud, "", perPage, timeoutMs);
     }
     return tpdbGlobalPage(box, pageNum, perPage, inp.sort, dir, timeoutMs);
   }
@@ -4868,14 +4858,17 @@
     return Promise.all([getStashBoxes(), getPluginSettings()]).then(function (res) {
       var boxes = res[0] || [];
       var settings = res[1] || {};
-      var recentDays = parseInt(settings.recentDays, 10);
-      if (!(recentDays > 0)) recentDays = 30; // §4.2 default lookback
-      var cutoff = localDateStr(new Date(Date.now() - recentDays * 86400000));
+      // 角标属于发现页：窗口取发现页设置（SSD:dp:prefs），与发现页关注列表同口径；
+      // 演员详情 tab 的长窗仍由插件设置 recentDays 驱动（用户 2026-10-26）。
+      var prefs = {};
+      try { prefs = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {}; } catch (_) {}
+      var recentDays = parseInt(prefs.recentDays, 10);
+      if (isNaN(recentDays) || recentDays < 0) recentDays = 30; // 发现页默认短窗
+      var cutoff = recentDays > 0 ? localDateStr(new Date(Date.now() - recentDays * 86400000)) : null;
 
       // 关注页是单源口径（只显示当前数据源的新作，用户 2026-10-25 第七轮），
       // 角标同样只统计当前数据源，避免「角标有未读、关注页却全是暂无新作品」。
-      var wanted = "";
-      try { wanted = String(((JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {}).source) || ""); } catch (_) {}
+      var wanted = String(prefs.source || "");
       if (!wanted) wanted = String(settings.preferredBox || "");
       wanted = wanted.toLowerCase();
       var byEndpoint = {};
@@ -4898,12 +4891,14 @@
         var box = boxByEp[ep];
         if (!box) return Promise.resolve(null);
         return _boxRateLimiter.submit(function () {
-          return callBoxSceneList(box, {
-            date: { value: cutoff, modifier: "GREATER_THAN" },
+          var input = {
             performers: { value: byEndpoint[ep], modifier: "INCLUDES" },
             sort: "DATE", direction: "DESC",
             page: 1, per_page: 100,
-          });
+          };
+          // 0 = 不限：不带日期过滤
+          if (cutoff) input.date = { value: cutoff, modifier: "GREATER_THAN" };
+          return callBoxSceneList(box, input);
         }).then(function (qs) {
           return { ep: ep, ids: byEndpoint[ep], scenes: (qs && qs.scenes) || [] };
         }).catch(function () { return null; }); // a failed box keeps its cached count next round

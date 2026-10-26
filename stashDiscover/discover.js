@@ -285,6 +285,19 @@
     return isNaN(n) ? dflt : n;
   }
 
+  // 发现页回看窗口（用户 2026-10-26）：总览短窗、演员 tab 长窗，两者独立。
+  // 发现页窗口持久化在 localStorage（发现页「设置」）；演员 tab 仍用插件设置。
+  var DP_LOOKBACK_DEFAULT = 30;
+  function dpRecentDays() {
+    var v = toNum(dpPrefs().recentDays, DP_LOOKBACK_DEFAULT);
+    return v < 0 ? DP_LOOKBACK_DEFAULT : v;
+  }
+
+  function lookbackText(days, zh) {
+    if (days > 0) return zh ? "回看 " + days + " 天" : "lookback " + days + "d";
+    return zh ? "回看：不限" : "lookback: unlimited";
+  }
+
   // 活动数据源：localStorage 持久化值（若仍有效）→ yml preferredBox → 第一个
   function resolveSource(boxes, ymlSettings) {
     var prefs = dpPrefs();
@@ -410,13 +423,15 @@
     var page = 1;
     function one() {
       return SSD.boxRateLimiter.submit(function () {
-        // TPDB 的 queryScenes 恒返回空 → 内部自动切 REST（按演员逐个取并筛日期）
-        return SSD.callBoxSceneList(box, {
-          date: { value: sinceIsoDate, modifier: "GREATER_THAN" },
+        var input = {
           performers: { value: performerStashIds, modifier: "INCLUDES" },
           sort: "DATE", direction: "DESC",
           page: page, per_page: BOX_PAGE_SIZE,
-        }, BOX_TIMEOUT);
+        };
+        // 0 = 不限：不带日期过滤（GraphQL 的 date.value 不允许 null）
+        if (sinceIsoDate) input.date = { value: sinceIsoDate, modifier: "GREATER_THAN" };
+        // TPDB 的 queryScenes 恒返回空 → 内部自动切 REST（按演员逐个取并筛日期）
+        return SSD.callBoxSceneList(box, input, BOX_TIMEOUT);
       });
     }
     function next(qs) {
@@ -720,7 +735,7 @@
       var yml = r[1] || {};
       var src = resolveSource(boxes, yml);
       if (!src) throw { ssdKind: "no-box", message: "no stash-box configured" };
-      var recentDays = toNum(yml.recentDays, 30);
+      var recentDays = dpRecentDays();
       var since = recentDays > 0 ? SSD.recentCutoffDate(recentDays) : null;
       var previewDays = toNum(yml.previewDays, 7);
       var previewCutoff = SSD.previewCutoffDate(previewDays);
@@ -1503,8 +1518,9 @@
       var s1 = sec(parent, {
         icon: I.star, title: tc("有新发布的演员", "Performers with releases"),
         count: d ? tc((d.actorsWithNew || []).length + " 位演员 · " + (d.actorsWithNew || []).reduce(function (n, g) { return n + g.items.length; }, 0) +
-          " 部新作品 · 回看 " + d.recentDays + " 天",
-          (d.actorsWithNew || []).length + " performers · lookback " + d.recentDays + "d") : "",
+          " 部新作品 · " + lookbackText(d.recentDays, true),
+          (d.actorsWithNew || []).length + " performers · " + (d.actorsWithNew || []).reduce(function (n, g) { return n + g.items.length; }, 0) +
+          " new · " + lookbackText(d.recentDays, false)) : "",
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
         more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
@@ -2362,6 +2378,31 @@
     });
     rowS.appendChild(srcSel);
     secG.appendChild(rowS);
+
+    // 回看窗口（发现页口径；用户 2026-10-26：总览短窗、演员 tab 长窗）
+    var rowW = el("div", "ssd-dp-setrow");
+    rowW.appendChild(el("span", "ssd-dp-setname", tc("回看窗口（天）", "Lookback window (days)")));
+    var inpW = document.createElement("input");
+    inpW.type = "number";
+    inpW.min = "0"; inpW.max = "3650"; inpW.step = "1";
+    inpW.className = "ssd-dp-setsel num";
+    inpW.value = String(dpRecentDays());
+    inpW.addEventListener("change", function () {
+      var v = parseInt(inpW.value, 10);
+      if (isNaN(v) || v < 0) v = DP_LOOKBACK_DEFAULT;
+      if (v > 3650) v = 3650;
+      inpW.value = String(v);
+      dpSetPrefs({ recentDays: v });
+      _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
+      if (SSD.pollFollowed) SSD.pollFollowed(true);
+      ensureData(viewDataKeys(_dp.view));
+      render();
+    });
+    rowW.appendChild(inpW);
+    secG.appendChild(rowW);
+    secG.appendChild(el("div", "ssd-dp-sethint", tc(
+      "0 = 不限。仅作用于发现页；演员详情「发现」标签的窗口在插件设置的 Recent Window 中调整。",
+      "0 = unlimited. Applies to the Discover page only; the performer-page Discover tab uses Recent Window in the plugin settings.")));
 
     // 通知开关（独立 key SSD:dp:notify，主 JS 轮询与导航角标读取；§6.4）
     var rowN = el("div", "ssd-dp-setrow");

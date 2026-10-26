@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.3.0";
+  var PLUGIN_VERSION = "2.3.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -2897,10 +2897,10 @@
       capInfo.className = "ssd-count-info ssd-count-line text-muted";
       var capCount = TPDB_MAX_PAGES_PER_ID * 100;
       capInfo.textContent = _state.entityType === "studio"
-        ? tc("当前源按站点逐个取片：每个站点最多回溯 " + capCount + " 部，已达上限。",
-          "This source fetches per site: at most " + capCount + " scenes each; this list reached that limit.")
-        : tc("当前源按演员逐个取片：每位演员最多回溯 " + capCount + " 部，已达上限。",
-          "This source fetches per performer: at most " + capCount + " scenes each; this list reached that limit.");
+        ? tc("当前源每个工作室最多回溯 " + capCount + " 部，已达上限。",
+          "This source is limited to " + capCount + " scenes per studio; this list reached that limit.")
+        : tc("当前源每位演员最多回溯 " + capCount + " 部，已达上限。",
+          "This source is limited to " + capCount + " scenes per performer; this list reached that limit.");
       pane.appendChild(capInfo);
     }
 

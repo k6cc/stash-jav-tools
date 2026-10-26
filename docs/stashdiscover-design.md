@@ -174,6 +174,12 @@
 - **StashDB 全站热门榜原样展示，不过滤库内演员**——定位是"额外获取渠道"（binge 原版行为）。
 - 含库内演员的卡片加小角标区分。
 - 热门榜同时可喂"发现演员"模块的信息。
+- **TPDB 例外（2026-10-26 定案，A 方案）**：`sort=TRENDING` 在 TPDB REST 被降级为按入库时间（[stashDiscover.js](../stashDiscover/stashDiscover.js) 的 `tpdbGlobalPage`）。实测 `sort=trending/popularity/rating/views/top/top_week` 全部被忽略，`rating` 100 条全 0、无 `views` 字段；站点首页「Top Scenes This Week!」为登录后服务端渲染（Nuxt SSR），无 XHR/公开接口，`/scenes/trending`、`/trending` 均 404。因此**不接入本周热门**：TPDB 源下模块与 tab 统一改名「最新上线 · 全站 / Newest · All sites」，文案注明「无热度榜 · 按入库时间」，不伪造热度排序。
+
+## 5.1 设置项控件样式（用户 2026-10-26）
+
+- 「关注的演员新发布提醒」「热门与即将发布并排一行」使用**右侧滑块开关**（`.ssd-dp-switch`，原生 checkbox 视觉隐藏 + `::after` 圆钮），名称在左、开关靠右（`margin-left:auto`，窄屏 `align-self:flex-end`）。
+- 「恢复默认布局」为右对齐紧凑按钮（`.ssd-dp-btn.ghost.sm.ssd-dp-reset`，`align-self:flex-end`），不占满整行。
 
 ## 6. 关注与通知系统（已确认）
 

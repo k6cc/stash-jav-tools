@@ -1987,6 +1987,56 @@
   accent-color: var(--sx-bl);
   cursor: pointer;
 }
+/* 右侧滑块开关（用户 2026-10-26：勾选框不好看） */
+.ssd-dp-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  cursor: pointer;
+  user-select: none;
+}
+.ssd-dp-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.ssd-dp-switch-track {
+  display: block;
+  box-sizing: border-box;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--sx-ui3);
+  background: var(--sx-ui3);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.ssd-dp-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sx-tx2);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.ssd-dp-switch input:checked + .ssd-dp-switch-track {
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+.ssd-dp-switch input:checked + .ssd-dp-switch-track::after {
+  transform: translateX(18px);
+  background: var(--sx-paper);
+}
+.ssd-dp-switch input:focus-visible + .ssd-dp-switch-track {
+  outline: 2px solid var(--sx-bl);
+  outline-offset: 2px;
+}
 .ssd-dp-setctl {
   display: inline-flex;
   align-items: center;
@@ -2006,10 +2056,12 @@
 .ssd-dp-setsel:focus { border-color: var(--sx-acc); }
 .ssd-dp-setsel.num { width: 88px; }
 .ssd-dp-btn.sm { padding: 4px 9px; font-size: 12px; }
+.ssd-dp-btn.ssd-dp-reset { align-self: flex-end; }
 .ssd-dp-btn:disabled { opacity: 0.38; cursor: default; }
 .ssd-dp-btn.loading { opacity: 0.6; pointer-events: none; }
 
 @media (max-width: 720px) {
   .ssd-dp-setrow { align-items: flex-start; flex-direction: column; gap: 8px; }
   .ssd-dp-setctl { align-self: flex-end; }
+  .ssd-dp-switch { align-self: flex-end; }
 }

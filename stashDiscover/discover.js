@@ -1509,6 +1509,21 @@
     return dpPrefs().mergeTrendPreview !== false;
   }
 
+  // TPDB 没有热度排序（2026-10-26 实证：REST/GraphQL 的 sort 全被忽略，
+  // 也没有本周热门接口）→ 该源下「热门」实为全站最新入库。按 A 方案把模块
+  // 与 tab 都改名「最新上线 · 全站」，不伪造热度榜。
+  function currentSourceData() {
+    return (_dp.d.trending && _dp.d.trending.source) ||
+      (_dp.d.latest && _dp.d.latest.source) || null;
+  }
+  function trendingOnTPDB() {
+    var s = currentSourceData();
+    return !!(s && s.endpoint && SSD.isTPDBBox({ endpoint: s.endpoint }));
+  }
+  function trendingTitle() {
+    return trendingOnTPDB() ? tc("最新上线 · 全站", "Newest · All sites") : tc("热门", "Trending");
+  }
+
   function renderOverview(c) {
     var rows = overviewRows();
     var order = moduleOrder().filter(moduleShown);
@@ -1590,8 +1605,10 @@
     }
     if (id === "trending") {
       var s3 = sec(parent, {
-        icon: I.trending, title: tc("热门", "Trending"),
-        count: t ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜 · 不限库内", "Site-wide · not library-filtered") : "",
+        icon: I.trending, title: trendingTitle(),
+        count: t ? (trendingOnTPDB()
+          ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 无热度榜 · 按入库时间", "No popularity ranking — newest first")
+          : tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜 · 不限库内", "Site-wide · not library-filtered")) : "",
         more: function () { switchView("trending"); },
       });
       if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", _dp.err.trending ? errText(_dp.err.trending) : null, function () { retryDataset("trending"); });
@@ -2382,6 +2399,19 @@
   }
 
   // ── 设置视图（§3.7：全部即时生效，localStorage 持久化）────────────────────
+  // 右侧滑块开关（用户 2026-10-26：勾选框不好看）
+  function switchToggle(checked, onChange, ariaLabel) {
+    var lab = el("label", "ssd-dp-switch");
+    var inp = document.createElement("input");
+    inp.type = "checkbox";
+    inp.checked = !!checked;
+    if (ariaLabel) inp.setAttribute("aria-label", ariaLabel);
+    inp.addEventListener("change", function () { onChange(inp.checked); });
+    lab.appendChild(inp);
+    lab.appendChild(el("span", "ssd-dp-switch-track"));
+    return lab;
+  }
+
   function renderSettings(c) {
     var prefs = dpPrefs();
     var wrap = el("div", "ssd-dp-settings");
@@ -2443,18 +2473,17 @@
       "0 = unlimited. Applies to the Discover page only; the performer-page Discover tab uses Recent Window in the plugin settings.")));
 
     // 通知开关（独立 key SSD:dp:notify，主 JS 轮询与导航角标读取；§6.4）
+    // 右侧滑块（用户 2026-10-26：勾选框不好看）
+    var notifyLabel = tc("关注的演员新发布提醒（导航角标）", "New-release alerts for followed performers (nav badge)");
     var rowN = el("div", "ssd-dp-setrow");
-    var labN = el("label", "ssd-dp-settoggle");
-    var cbN = document.createElement("input");
-    cbN.type = "checkbox";
-    try { cbN.checked = localStorage.getItem("SSD:dp:notify") !== "0"; } catch (_) { cbN.checked = true; }
-    cbN.addEventListener("change", function () {
-      try { localStorage.setItem("SSD:dp:notify", cbN.checked ? "1" : "0"); } catch (_) {}
+    rowN.appendChild(el("span", "ssd-dp-setname", notifyLabel));
+    var notifyOn = true;
+    try { notifyOn = localStorage.getItem("SSD:dp:notify") !== "0"; } catch (_) {}
+    var swN = switchToggle(notifyOn, function (on) {
+      try { localStorage.setItem("SSD:dp:notify", on ? "1" : "0"); } catch (_) {}
       try { window.dispatchEvent(new CustomEvent("ssd:notify-changed")); } catch (_) {}
-    });
-    labN.appendChild(cbN);
-    labN.appendChild(el("span", null, tc("关注的演员新发布提醒（导航角标）", "New-release alerts for followed performers (nav badge)")));
-    rowN.appendChild(labN);
+    }, notifyLabel);
+    rowN.appendChild(swN);
     secG.appendChild(rowN);
 
     // 从收藏导入（§6.2；P5 工厂复用）
@@ -2502,18 +2531,15 @@
     var order = moduleOrder();
     var curRows = overviewRows();
     // 并排开关（用户 2026-10-26）：默认开启，仅影响总览里热门+即将发布相邻时
+    // 右侧滑块（用户 2026-10-26：勾选框不好看）
+    var mergeLabel = tc("热门与即将发布并排一行", "Trending and Upcoming side by side");
     var rowJ = el("div", "ssd-dp-setrow");
-    var labJ = el("label", "ssd-dp-settoggle");
-    var cbJ = document.createElement("input");
-    cbJ.type = "checkbox";
-    cbJ.checked = mergeTrendPreview();
-    cbJ.addEventListener("change", function () {
-      dpSetPrefs({ mergeTrendPreview: cbJ.checked });
+    rowJ.appendChild(el("span", "ssd-dp-setname", mergeLabel));
+    var swJ = switchToggle(mergeTrendPreview(), function (on) {
+      dpSetPrefs({ mergeTrendPreview: on });
       render();
-    });
-    labJ.appendChild(cbJ);
-    labJ.appendChild(el("span", null, tc("热门与即将发布并排一行", "Trending and Upcoming side by side")));
-    rowJ.appendChild(labJ);
+    }, mergeLabel);
+    rowJ.appendChild(swJ);
     secM.appendChild(rowJ);
     MODULE_DEFS.forEach(function (m) {
       var row = el("div", "ssd-dp-setrow");
@@ -2528,7 +2554,7 @@
         render();
       });
       lab.appendChild(cb);
-      lab.appendChild(el("span", null, tc(m.zh, m.en)));
+      lab.appendChild(el("span", null, m.id === "trending" ? trendingTitle() : tc(m.zh, m.en)));
       row.appendChild(lab);
 
       var ctl = el("div", "ssd-dp-setctl");
@@ -2568,7 +2594,7 @@
 
     // 恢复默认（清 prefs：order/modules/rows/source/perPage/sort/mode 全回默认；
     // notify 是独立 key，保留用户选择）
-    var reset = el("button", "ssd-dp-btn ghost", tc("恢复默认布局", "Reset to defaults"));
+    var reset = el("button", "ssd-dp-btn ghost sm ssd-dp-reset", tc("恢复默认布局", "Reset to defaults"));
     reset.type = "button";
     reset.addEventListener("click", function () {
       try { localStorage.removeItem(LS_PREFIX + "prefs"); } catch (_) {}
@@ -2840,6 +2866,9 @@
       refs.tabs.querySelectorAll(".ssd-dp-tab").forEach(function (t) {
         t.classList.toggle("on", t.dataset.view === _dp.view);
       });
+      // TPDB 下「热门」实为全站最新（A 方案）：tab 文案随当前源同步
+      var tb = refs.tabs.querySelector('[data-view="trending"] span');
+      if (tb) tb.textContent = trendingTitle();
     }
     if (refs.gridBtn && refs.listBtn) {
       refs.gridBtn.classList.toggle("on", _dp.mode !== "list");

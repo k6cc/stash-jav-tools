@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.4.1";
+  var PLUGIN_VERSION = "2.4.4";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -5172,15 +5172,27 @@
     }).then(function (results) {
       var marks = {};
       try { marks = ((JSON.parse(localStorage.getItem(DP_READ_KEY) || "null") || {}).marks) || {}; } catch (_) {}
+      // 「预告也计入提醒」（默认关，用户 2026-10-27 语义反转）：关闭时预告场景
+      // 不计入导航角标。旧 key skipPreviewNotify 兼容读 —— discover.js 挂载时
+      // 会把旧值迁移成 notifyPreviewScenes，但本函数可能在它之前就跑。
+      var skipPrev = true;
+      try {
+        var pf = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {};
+        var prevNotify = pf.notifyPreviewScenes === true ||
+          (pf.notifyPreviewScenes === undefined && pf.skipPreviewNotify === false);
+        skipPrev = !prevNotify;
+      } catch (_) {}
+      var today = localDateStr(new Date());
       var n = 0;
       (results || []).forEach(function (r) {
         if (!r) return;
         var set = {};
         r.ids.forEach(function (id) { set[String(id)] = true; });
         (r.scenes || []).forEach(function (sc) {
+          if (skipPrev && sc.release_date && sc.release_date > today) return;
           if (marks[r.ep + ":" + String(sc.id || "").toLowerCase()]) return;
-          ((sc.performers || [])).forEach(function (pf) {
-            var pid = pf && pf.performer && pf.performer.id;
+          ((sc.performers || [])).forEach(function (pf2) {
+            var pid = pf2 && pf2.performer && pf2.performer.id;
             if (pid && set[String(pid)]) n++;
           });
         });

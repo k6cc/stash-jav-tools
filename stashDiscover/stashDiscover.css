@@ -1450,8 +1450,11 @@
 
 .ssd-nav-item .ssd-nav-badge {
   position: absolute;
+  /* 左上角（用户 2026-10-27）：右上角与「发现」文字重叠 10px，左上角是空位，
+     压到 logo 一点无妨。 */
   top: 2px;
-  right: 2px;
+  left: 2px;
+  z-index: 2;
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
@@ -1551,9 +1554,13 @@
    flex column 里塌缩到内容宽（卡少时缩成单列）；b) 图片加载前卡的
    aspect-ratio 链未定，卡片被瞬时拉到整行宽（trimRows 行数测量失真）。
    grid 列结构（minmax 230px = zoom-0 标准卡宽）不依赖图片加载，布局即刻稳定 */
+/* 场景网格列宽：minmax 从 230 降到 210 —— 230 在临界宽度会"差几像素掉一列"，
+   平板竖屏尤其明显（768 档内容宽 695，3 列需 710 差 15px；1024 的 duo 半宽 468，
+   2 列需 470 差 2px 直接掉成 1 列）。210 让 695 能排 3 列，卡片仍有 225px
+   （用户 2026-10-27 iPad 实测） */
 .ssd-dp-page .ssd-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 10px;
 }
 .ssd-dp-page .ssd-card-grid .scene-card { margin: 0; }
@@ -1584,12 +1591,19 @@
   border-color: var(--sx-edge);
   box-shadow: var(--sx-sh);
 }
-.ssd-dp-mini img {
+/* 头像框：爱心要骑在圆形边框左下角，需要这个定位基准 */
+.ssd-dp-mini-ava {
+  position: relative;
+  flex: none;
   width: 44px;
   height: 44px;
+}
+.ssd-dp-mini-ava img {
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  flex: none;
   background: var(--sx-ui2);
 }
 .ssd-dp-mini-name {
@@ -1609,6 +1623,9 @@
   text-overflow: ellipsis;
 }
 .ssd-dp-mini-sub.has-unread { color: var(--sx-re-tx); font-weight: 600; }
+/* 不可断行的片段（日期等）：折行只允许发生在外层空格处，
+   否则浏览器会在连字符后断开，出现「2026-10-」/「08」这种半截日期 */
+.ssd-dp-nw { white-space: nowrap; }
 .ssd-dp-mini-badge {
   position: absolute;
   /* 骑在卡片右上角外沿（不再叠在名字行上）— 用户 2026-10-25 */
@@ -1626,14 +1643,24 @@
 }
 .ssd-dp-mini-badge.co { background: color-mix(in srgb, var(--sx-bl) 18%, transparent); color: var(--sx-bl-tx); }
 .ssd-dp-mini-badge.hot { background: color-mix(in srgb, var(--sx-or) 18%, transparent); color: var(--sx-or-tx); }
+/* 已关注爱心：骑在圆形头像边框左下角（原来是卡片右下角，离头像太远）
+   背景圈用卡片底色 + 描边，让爱心从头像边缘"浮"出来，不被照片吃掉 */
 .ssd-mini-heart {
   position: absolute;
-  bottom: 8px;
-  right: 8px;
+  left: -3px;
+  bottom: -3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--sx-ui);
+  box-shadow: 0 0 0 2px var(--sx-ui);
   color: var(--sx-ma);
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
-.ssd-mini-heart svg { width: 13px; height: 13px; }
+.ssd-mini-heart svg { width: 11px; height: 11px; }
 
 /* 场景卡徽标（§3.2/§5）——top/left 与原生 .studio-overlay（0.7rem）同基线 */
 .ssd-overlay-days {
@@ -1722,14 +1749,60 @@
   border-color: var(--sx-acc);
   color: var(--sx-acc-tx);
 }
-.ssd-dp-btn.primary:hover { background: var(--sx-acc-d); border-color: var(--sx-acc-d); color: var(--sx-acc-tx); }
+.ssd-dp-btn.primary:hover {
+  /* --sx-acc-d 由 derive() 生成；兜底到本色，避免任何主题下 hover 变透明发白 */
+  background: var(--sx-acc-d, var(--sx-acc));
+  border-color: var(--sx-acc-d, var(--sx-acc));
+  color: var(--sx-acc-tx);
+}
 .ssd-dp-btn.ghost { background: transparent; }
 .ssd-dp-btn.ghost.danger { color: var(--sx-re-tx); }
 .ssd-dp-btn.ghost.danger:hover { border-color: var(--sx-re); background: color-mix(in srgb, var(--sx-re) 10%, transparent); }
+/* tonal（半实心）：关注行「详情 / 取关」用。比 ghost 明显，又不像 primary 那样
+   一屏十几行会连成色带（用户 2026-10-27：三个按钮原来看不出主次） */
+.ssd-dp-btn.tonal {
+  background: color-mix(in srgb, var(--sx-acc) 13%, transparent);
+  border-color: color-mix(in srgb, var(--sx-acc) 40%, transparent);
+  color: var(--sx-acc);
+}
+.ssd-dp-btn.tonal:hover {
+  background: color-mix(in srgb, var(--sx-acc) 22%, transparent);
+  border-color: var(--sx-acc);
+  color: var(--sx-acc);
+}
+.ssd-dp-btn.tonal.danger {
+  background: color-mix(in srgb, var(--sx-re) 11%, transparent);
+  border-color: color-mix(in srgb, var(--sx-re) 38%, transparent);
+  color: var(--sx-re-tx);
+}
+.ssd-dp-btn.tonal.danger:hover {
+  background: color-mix(in srgb, var(--sx-re) 20%, transparent);
+  border-color: var(--sx-re);
+  color: var(--sx-re-tx);
+}
 .ssd-dp-btn.loved { border-color: var(--sx-ma); color: var(--sx-ma-tx); }
+/* 纯图标按钮（关注行「取关」）：只放一个 SVG，宽度不随中英文文案变化 */
+.ssd-dp-btn.icon-only { padding: 7px 9px; gap: 0; }
+.ssd-dp-btn.icon-only svg { width: 14px; height: 14px; }
+.ssd-dp-fgrp-acts .ssd-dp-btn.icon-only { padding: 5px 7px; }
 /* 已加入/加入失败：实底白字保证可读（用户 2026-10-25 第五轮：浅字在按钮底色上难读）*/
 .ssd-dp-btn.ok { background: var(--sx-gr); border-color: var(--sx-gr); color: #fff; pointer-events: none; }
 .ssd-dp-btn.err { background: var(--sx-re); border-color: var(--sx-re); color: #fff; }
+/* 点击反馈（用户 2026-10-27）：按压 + 忙碌态转圈 + 结果态轻微弹一下 */
+.ssd-dp-btn:active { transform: scale(0.97); }
+.ssd-dp-btn.busy { color: var(--sx-tx2); border-color: var(--sx-edge); }
+.ssd-dp-btn.busy svg { animation: ssd-dp-spin 0.9s linear infinite; }
+.ssd-dp-btn.ok, .ssd-dp-btn.err { animation: ssd-dp-pop 0.32s ease-out; }
+@keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
+@keyframes ssd-dp-pop {
+  0% { transform: scale(0.94); }
+  60% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ssd-dp-btn:active { transform: none; }
+  .ssd-dp-btn.busy svg, .ssd-dp-btn.ok, .ssd-dp-btn.err { animation: none; }
+}
 
 /* 演员/工作室过滤视图详情区（§8.1/§8.2）*/
 .ssd-dp-pfhead {
@@ -1918,10 +1991,19 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-dp-followbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* 左：统计；右：按钮组靠 margin-left:auto 顶到最右。
+     原 space-between 在 3 个子元素时会把中间按钮推到页面正中（用户 2026-10-27） */
+  justify-content: flex-start;
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 14px;
+}
+.ssd-dp-followbar-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 .ssd-dp-fgrp {
   border: 1px solid var(--sx-ui3);
@@ -1951,8 +2033,39 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 /* 整行可点展开/收起（详情、取消关注按钮除外）— 用户 2026-10-25 第七轮 */
 .ssd-dp-fgrp-head.is-toggle { cursor: pointer; }
 .ssd-dp-fgrp-head.is-toggle:hover { background: var(--sx-ui2); }
-.ssd-dp-fgrp-acts { display: flex; gap: 6px; flex: none; flex-wrap: nowrap; }
+.ssd-dp-fgrp-acts { display: flex; gap: 6px; flex: none; flex-wrap: nowrap; align-items: center; }
 .ssd-dp-fgrp-acts .ssd-dp-btn { padding: 5px 9px; }
+/* 展开箭头：只在字形上做文章（无边框无底色），hover 才浮出浅底 —
+   与旁边两个带色底的按钮形成"工具 / 操作"的层级差（用户 2026-10-27） */
+.ssd-dp-fgrp-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  margin-right: 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sx-tx2);
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ssd-dp-fgrp-caret svg {
+  width: 14px;
+  height: 14px;
+  transform: rotate(-90deg); /* 收起：朝右 */
+  transition: transform 0.18s ease;
+}
+.ssd-dp-fgrp-caret.open svg { transform: rotate(0deg); } /* 展开：朝下 */
+.ssd-dp-fgrp-caret:hover { background: var(--sx-ui2); color: var(--sx-hi); }
+.ssd-dp-fgrp-caret:active { transform: scale(0.94); }
+@media (prefers-reduced-motion: reduce) {
+  .ssd-dp-fgrp-caret svg { transition: none; }
+  .ssd-dp-fgrp-caret:active { transform: none; }
+}
 .ssd-dp-fgrp-body { padding: 4px 14px 14px; }
 
 /* 演员详情弹层（§3.5）*/
@@ -2057,6 +2170,17 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 @media (max-width: 480px) {
   .ssd-dp-tab { padding: 5px 7px; font-size: 12px; }
   .ssd-dp-tabs:not(.ssd-dp-subtabs) .ssd-dp-tab > svg { display: none; }
+  /* 极窄屏：迷你演员卡收紧一档（头像 44→38、内边距/间距 10→8），文字列多出 12px，
+     360px 下「最新 2026-10-08」能单行放下，不再被截成「最新 2026-1…」（用户 2026-10-27） */
+  .ssd-dp-mini { padding: 8px; gap: 8px; }
+  .ssd-dp-mini-ava { width: 38px; height: 38px; }
+  /* 再窄就折行，而不是省略。日期整体不可断（.ssd-dp-nw），只会断在「最新」之后 */
+  .ssd-dp-mini-sub {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35;
+  }
 }
 @media (max-width: 339px) {
   .ssd-dp-tabs:not(.ssd-dp-subtabs) { grid-template-columns: repeat(3, minmax(0, 1fr)); }

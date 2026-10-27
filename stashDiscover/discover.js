@@ -1656,6 +1656,8 @@
   // ── 模块段（§3.2）────────────────────────────────────────────────────────
   function sec(parent, o) {
     var s = el("section", "ssd-dp-sec");
+    // 模块标识：供 CSS 给标题图标上色（与主 tab 图标同一套色相 — 用户 2026-10-27）
+    if (o.mod) s.setAttribute("data-mod", o.mod);
     var h = el("div", "ssd-dp-sec-head");
     h.appendChild(el("h2", "ssd-dp-sec-title", (o.icon || "") + "<span>" + o.title + "</span>"));
     if (o.count) h.appendChild(el("span", "ssd-dp-sec-count", o.count));
@@ -1819,7 +1821,7 @@
       var aw = (d ? (d.actorsWithNew || []) : []).filter(function (g) { return notifyItems(g).length > 0; });
       var awScenes = aw.reduce(function (n, g) { return n + notifyItems(g).length; }, 0);
       var s1 = sec(parent, {
-        icon: I.star, title: tc("有新发布的演员", "Performers with releases"),
+        icon: I.star, title: tc("有新发布的演员", "Performers with releases"), mod: "actors",
         count: d ? tc(aw.length + " 位演员 · " + awScenes + " 部新作品 · " + lookbackText(d.recentDays, true),
           aw.length + " performers · " + awScenes + " new · " + lookbackText(d.recentDays, false)) : "",
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
@@ -1858,7 +1860,7 @@
     if (id === "latest") {
       // 模块：最新发布（原生场景卡，每人 cap 2）
       var s2 = sec(parent, {
-        icon: I.latest, title: tc("最新发布", "Latest"),
+        icon: I.latest, title: tc("最新发布", "Latest"), mod: "latest",
         count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 2 部", (d.latest || []).length + " unowned · max 2 per performer") : "",
         more: function () { switchView("latest"); },
       });
@@ -1874,7 +1876,7 @@
     }
     if (id === "trending") {
       var s3 = sec(parent, {
-        icon: I.trending, title: trendingTitle(),
+        icon: I.trending, title: trendingTitle(), mod: "trending",
         count: t ? (trendingOnTPDB()
           ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 无热度榜 · 按入库时间", "No popularity ranking — newest first")
           : tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜 · 不限库内", "Site-wide · not library-filtered")) : "",
@@ -1892,7 +1894,7 @@
     }
     if (id === "preview") {
       var s4 = sec(parent, {
-        icon: I.preview, title: tc("即将发布", "Upcoming"),
+        icon: I.preview, title: tc("即将发布", "Upcoming"), mod: "preview",
         count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length) : "",
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
@@ -1910,7 +1912,7 @@
     if (id === "studios") {
       // 模块：工作室新发布（收藏工作室，cap 2/工作室）
       var s5 = sec(parent, {
-        icon: I.studios, title: tc("工作室新发布", "Studio releases"),
+        icon: I.studios, title: tc("工作室新发布", "Studio releases"), mod: "studios",
         count: st ? tc((st.studioCount || 0) + " 个收藏工作室 · 每工作室最多 2 部", (st.studioCount || 0) + " favorites · max 2 per studio") : "",
         more: function () { switchView("studios"); },
       });
@@ -1932,7 +1934,7 @@
     if (id === "performers") {
       // 模块：发现演员（共同出演 ∥ 热门榜）
       var s6 = sec(parent, {
-        icon: I.performers, title: tc("发现演员", "Discover performers"),
+        icon: I.performers, title: tc("发现演员", "Discover performers"), mod: "performers",
         count: tc("不在库 · 共同出演 / 热门榜", "Not in library · co-starred / trending"),
         more: function () { switchView("performers"); },
       });
@@ -2326,7 +2328,8 @@
       if (already) markAdded();
     }).catch(function () {});
     acts.appendChild(addBtn);
-    // 源按钮：外链图标（与详情区右上角一致，弃 ↗ 文字箭头 — 用户 2026-10-25 第五轮）
+    // 源按钮：品牌名 + 外链图标（弃 ↗ 文字箭头 — 用户 2026-10-25 第五轮；
+    // 详情区右上角那颗在 2026-10-27 已换成返回按钮，这里不再与之对应）
     var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + I.ext);
     boxBtn.href = SSD.boxWebBase(endpoint) + "/performers/" + p.stashId;
     boxBtn.target = "_blank";
@@ -2590,7 +2593,7 @@
         g.items.length + " new · newest " + (g.newest || "—")) });
     // 右上角返回：回到进入本视图前的列表（总览 / 本地有更新 / 关注）
     // — 取代原 stash-box 外链图标（用户 2026-10-27）
-    var backBtn = el("button", "ssd-dp-extbtn ssd-dp-backbtn", I.back);
+    var backBtn = el("button", "ssd-dp-extbtn", I.back);
     backBtn.type = "button";
     backBtn.title = tc("返回列表", "Back to list");
     backBtn.setAttribute("aria-label", tc("返回列表", "Back to list"));
@@ -2647,13 +2650,24 @@
     var endpoint = st.source.endpoint;
     var studio = g.studio || {};
 
-    var head = el("div", "ssd-dp-pfhead ssd-dp-pfhead--studio");
+    var head = el("div", "ssd-dp-pfhead has-back");
+    // 1:1 小方框（用户 2026-10-27）：图片 contain 保证不裁切，横版 logo 的留白
+    // 用同一张图放大模糊后铺底，观感上框是满的。图片和铺底由同一 src 驱动，
+    // 加载失败时一起退回字母头像。
+    var pic = el("div", "ssd-dp-studiopic");
     var img = document.createElement("img");
     img.className = "ssd-dp-pfavatar ssd-dp-pfavatar--studio";
     img.alt = studio.name || "";
-    img.src = studio.image || letterAvatar(studio.name);
-    img.onerror = function () { this.src = letterAvatar(studio.name); };
-    head.appendChild(img);
+    function setPic(src) {
+      img.src = src;
+      // 铺底走 CSS 变量：模糊层是伪元素，容器本身不能自带 background-image，
+      // 否则图片 contain 区域之外会露出一份未模糊的原图
+      pic.style.setProperty("--ssd-studio-bg", 'url("' + String(src).replace(/"/g, "%22") + '")');
+    }
+    setPic(studio.image || letterAvatar(studio.name));
+    img.onerror = function () { setPic(letterAvatar(studio.name)); };
+    pic.appendChild(img);
+    head.appendChild(pic);
     var info = el("div", "ssd-dp-pfinfo");
     info.appendChild(el("div", "ssd-dp-pfname", studio.name || ""));
     var meta = el("div", "ssd-dp-pfmeta");
@@ -2661,12 +2675,14 @@
       g.items.length + " new · newest " + (g.newest || "—") + " · favorited");
     info.appendChild(meta);
     head.appendChild(info);
-    var ext = el("a", "ssd-dp-extbtn", I.ext);
-    ext.href = SSD.boxWebBase(endpoint) + "/studios/" + studio.stashId;
-    ext.target = "_blank";
-    ext.rel = "noopener noreferrer";
-    ext.title = tc("在 stash-box 打开", "Open on stash-box");
-    head.appendChild(ext);
+    // 右上角返回（用户 2026-10-27）：进到工作室详情后比「去 stash-box」更常用的是
+    // 回列表；外链在下方 acts 里已有同名按钮，不重复。
+    var back = el("button", "ssd-dp-extbtn", I.back);
+    back.type = "button";
+    back.title = tc("返回工作室列表", "Back to studios");
+    back.setAttribute("aria-label", tc("返回工作室列表", "Back to studios"));
+    back.addEventListener("click", function () { switchView("studios"); });
+    head.appendChild(back);
     c.appendChild(head);
 
     var acts = el("div", "ssd-dp-pfactions");

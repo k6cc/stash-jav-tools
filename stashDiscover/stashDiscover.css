@@ -1213,7 +1213,12 @@
   width: 13px;
   height: 13px;
   flex: none;
+  /* 文字「刷新」跟随主题，图标单独带色（用户 2026-10-27）——
+     与文字色 mixed 一次，明暗主题下都不糊 */
+  color: color-mix(in srgb, #38bdf8 80%, var(--sx-tx1b));
+  transition: filter 0.15s;
 }
+.ssd-dp-refresh:hover svg { filter: brightness(1.15) saturate(1.08); }
 
 .ssd-dp-refresh svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
 @keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
@@ -1251,6 +1256,20 @@
 }
 
 .ssd-dp-tab svg { width: 1em; height: 1em; flex: none; }
+
+/* ─── 主 tab 图标配色（用户 2026-10-27）─────────────────────────────────
+   文字仍跟随主题（--sx-tx1b / --sx-hi），只有图标各带色相，便于扫读定位。
+   每个色值都与当前文字色 mixed 一次：深色主题下文字色偏亮 → 图标自动提亮，
+   浅色主题下偏暗 → 图标自动压深。同一套色值在两种主题下都不会糊。
+   设置是工具入口而非内容分类，保持中性色，不参与配色。 */
+.ssd-dp-tab[data-view="overview"] svg   { color: color-mix(in srgb, #60a5fa 78%, var(--sx-tx1b)); }
+.ssd-dp-tab[data-view="follow"] svg     { color: color-mix(in srgb, #f472b6 78%, var(--sx-tx1b)); }
+.ssd-dp-tab[data-view="latest"] svg     { color: color-mix(in srgb, #34d399 78%, var(--sx-tx1b)); }
+.ssd-dp-tab[data-view="trending"] svg   { color: color-mix(in srgb, #fb923c 78%, var(--sx-tx1b)); }
+.ssd-dp-tab[data-view="performers"] svg { color: color-mix(in srgb, #a78bfa 78%, var(--sx-tx1b)); }
+.ssd-dp-tab[data-view="studios"] svg    { color: color-mix(in srgb, #22d3ee 78%, var(--sx-tx1b)); }
+/* 悬停/选中只提亮，不改色相 */
+.ssd-dp-tab:hover svg, .ssd-dp-tab.on svg { filter: brightness(1.12) saturate(1.06); }
 
 .ssd-dp-tab:hover { color: var(--sx-hi); }
 
@@ -1378,12 +1397,25 @@
   font-weight: 650;
   color: var(--sx-hi);
   display: inline-flex;
-  align-items: center;
+  /* 基线对齐而不是居中：标题右侧还有「0 位演员 · 回看 30 天」这类小字，
+     只有按文字基线对齐才看着是一行（用户 2026-10-27 反馈错位）。 */
+  align-items: baseline;
   gap: 0.45rem;
   margin: 0;
 }
 
-.ssd-dp-sec-title svg { width: 1em; height: 1em; color: var(--sx-acc); }
+.ssd-dp-sec-title svg { width: 1em; height: 1em; color: var(--sx-acc); align-self: center; }
+
+/* ─── 总览模块标题图标配色（用户 2026-10-27）─────────────────────────────
+   与主 tab 图标同一套色相，扫读时「关注/最新/热门」在页面上下能对应起来。
+   同样与 --sx-tx1b mixed 一次，深浅主题自动适配，不写死亮度。
+   「即将发布」无对应 tab，取唯一剩余的蓝（未来感），与热门橙拉开距离。 */
+.ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-title svg     { color: color-mix(in srgb, #f472b6 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="latest"] .ssd-dp-sec-title svg     { color: color-mix(in srgb, #34d399 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="trending"] .ssd-dp-sec-title svg   { color: color-mix(in srgb, #fb923c 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="preview"] .ssd-dp-sec-title svg    { color: color-mix(in srgb, #60a5fa 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="studios"] .ssd-dp-sec-title svg    { color: color-mix(in srgb, #22d3ee 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="performers"] .ssd-dp-sec-title svg { color: color-mix(in srgb, #a78bfa 78%, var(--sx-tx1b)); }
 
 .ssd-dp-sec-count { font-size: 12px; color: var(--sx-tx2); }
 
@@ -1886,13 +1918,40 @@
   flex: none;
   background: var(--sx-ui2);
 }
-/* 工作室详情图（左图右文）：随容器宽度自适应并尽量铺满，按原始比例完整显示（不裁切）
-   — 用户 2026-10-25 第七轮 */
-.ssd-dp-pfavatar--studio {
-  width: clamp(240px, 32%, 460px);
-  max-width: 100%;
-  height: auto;
-  max-height: 260px;
+/* 工作室详情图：固定 1:1 方框，边长约为原来自适应大图的一半（用户 2026-10-27）。
+   图片 contain → 完整显示不裁切；工作室 logo 多是超横版（实测 3.7~5.2:1），
+   方形框里上下必然留白，留白处铺同一张图放大模糊后的副本，观感上框是满的、
+   主体不被裁掉。想退回纯色留白，删掉下面 ::before 那段即可。 */
+.ssd-dp-studiopic {
+  position: relative;
+  width: 136px;
+  height: 136px;
+  flex: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: var(--sx-ui2);
+}
+/* 铺底单独一层：直接给容器设 background-image 会露出一份未模糊的原图
+   （图片 contain 区域之外透明），所以图只挂在伪元素上。
+   图片地址由 JS 写成 --ssd-studio-bg。 */
+.ssd-dp-studiopic::before {
+  content: "";
+  position: absolute;
+  inset: -14%;
+  background-image: var(--ssd-studio-bg, none);
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) saturate(1.2) brightness(0.62);
+}
+/* 选择器带父级提高特异性：窄屏媒体查询里有 `.ssd-dp-pfavatar{width:72px;
+   height:108px}`（竖版演员头像用），同特异性且写在后面会把这里的 100% 盖掉，
+   结果是移动端图只有 72×108、撑不满 104×104 的方框（用户 2026-10-27 反馈）。 */
+.ssd-dp-studiopic .ssd-dp-pfavatar--studio {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: none;
   object-fit: contain;
   object-position: center;
 }
@@ -1922,12 +1981,11 @@
   border-radius: 8px;
   color: var(--sx-tx2);
   background: var(--sx-ui2);
-  text-decoration: none;
   transition: color 0.15s, border-color 0.15s;
 }
 .ssd-dp-extbtn:hover { color: var(--sx-acc); border-color: var(--sx-acc); }
 .ssd-dp-extbtn svg { width: 14px; height: 14px; }
-/* 同位置返回按钮（本地演员详情右上角）——button 需补 a 的默认外观复位 */
+/* 详情区右上角的返回按钮（演员 / 工作室共用）——button 需补 a 的默认外观复位 */
 button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-dp-pfhead.has-back { padding-right: 52px; }
 .ssd-dp-pfactions {
@@ -2190,7 +2248,13 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-pfavatar { width: 72px; height: 108px; }
   /* 窄屏头像翻页箭头收窄：12px 正好落在头部 12px 内边距 / 12px 列间距 */
   .ssd-dp-avnav { width: 12px; height: 26px; font-size: 9px; }
-  .ssd-dp-pfavatar--studio { width: clamp(132px, 42%, 240px); height: auto; max-height: 180px; }
+  .ssd-dp-studiopic { width: 104px; height: 104px; }
+  /* 窄屏信息列基准宽收小：240px 基准下 104(图)+12(间距)+240 > 可用宽，
+     工作室头会折行成「图片独占一行、右边全空」；收到 140 后与演员头一致，
+     都是图在左、名字在右（用户 2026-10-27 反馈移动端观感）。
+     必须排除弹窗头：弹窗头同样带 .ssd-dp-pfhead，它有自己的 120px 基准
+     （让名字在 iPhone SE 级窄屏仍留在头像右侧），不能被这条盖掉。 */
+  .ssd-dp-pfhead:not(.ssd-dp-modal-head) .ssd-dp-pfinfo { flex-basis: 140px; }
   .ssd-dp-pfflag { left: 4px; bottom: 4px; padding: 0 2px; }
   .ssd-dp-pfflag img { width: 16px; height: 11px; }
   /* 窄屏国旗贴 4px，张数徽标同步贴 4px，中心线仍对齐 */

@@ -909,6 +909,13 @@
   color: var(--ssd-modal-text);
   margin-bottom: 10px;
 }
+/* 结果被截断时的说明行（总数 vs 实际下发条数） */
+.ssd-search-truncated {
+  font-size: 12px;
+  color: var(--ssd-modal-muted);
+  margin: -6px 0 10px;
+  line-height: 1.4;
+}
 .ssd-search-loading {
   font-size: 13px;
   color: var(--ssd-modal-muted);
@@ -2225,6 +2232,17 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   line-height: 1.5;
   color: var(--sx-tx2);
   padding: 0 0 9px;
+}
+/* 设置写入失败（localStorage 配额满）的就地提示 */
+.ssd-dp-setwarn {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sx-err, #d9534f);
+  background: color-mix(in srgb, var(--sx-err, #d9534f) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sx-err, #d9534f) 35%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
 }
 .ssd-dp-settoggle {
   display: inline-flex;

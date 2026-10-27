@@ -334,9 +334,17 @@
     var prefs = dpPrefs();
     var wanted = prefs.source || (ymlSettings && ymlSettings.preferredBox) || "";
     var pick = null;
-    for (var i = 0; i < boxes.length; i++) {
-      var b = boxes[i];
-      if (wanted && (b.name === wanted || b.endpoint === wanted)) { pick = b; break; }
+    if (wanted) {
+      // endpoint 才是唯一键；name 分支只为兼容旧版本存下的值（也可能是
+      // yml preferredBox，那里本来就是域名片段）
+      for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].endpoint === wanted) { pick = boxes[i]; break; }
+      }
+      if (!pick) {
+        for (var j = 0; j < boxes.length; j++) {
+          if (boxes[j].name === wanted) { pick = boxes[j]; break; }
+        }
+      }
     }
     if (!pick) pick = boxes[0] || null;
     return pick ? { name: pick.name, endpoint: pick.endpoint, apiKey: pick.api_key || "", host: hostOf(pick.endpoint) } : null;
@@ -1144,7 +1152,13 @@
       var p = dpPrefs();
       Object.keys(patch || {}).forEach(function (k) { p[k] = patch[k]; });
       localStorage.setItem(LS_PREFIX + "prefs", JSON.stringify(p));
-    } catch (_) {}
+      return true;
+    } catch (err) {
+      // 配额满时 setItem 抛 QuotaExceededError：以前静默吞掉，用户以为改了，
+      // 一刷新就回到旧值（论坛反馈「选完 TPDB 切不回来」的候选原因）
+      console.warn("[SSD] prefs write failed:", err);
+      return false;
+    }
   }
 
   // 一次性迁移（用户 2026-10-27）：旧 key skipPreviewNotify（"预告不提醒"，默认开）
@@ -1523,6 +1537,8 @@
     blocked: ["请求被源拒绝", "Rejected by the source"],
     graphql: ["源接口返回错误", "The source API returned an error"],
     parse: ["源返回了无法解析的响应", "Bad response from the source"],
+    fatal: ["数据加载失败", "Failed to load data"],
+    "no-ids": ["缺少 stash-box 编号", "No stash-box ID"],
     unknown: ["未知错误", "Unknown error"],
   };
   function errText(e) {
@@ -1530,8 +1546,11 @@
     if (e.ssdKind === "no-box") return tc("未配置 stash-box，请先在 Stash 设置中添加", "No stash-box configured — add one in Stash settings first");
     var pair = ERR_KIND_TEXT[e.ssdKind] || ERR_KIND_TEXT.unknown;
     var zh = pair[0], en = pair[1];
-    var detail = String(e.message || "");
-    if (/^HTTP \d+/.test(detail)) {
+    // 明细一律附上：以前只有 "HTTP xxx" 才拼进去，于是 TPDB 在发现页的任何
+    // 异常都只剩一句 "Unknown error"，用户和作者都拿不到线索（论坛反馈）
+    var detail = String(e.message || "").trim();
+    if (detail && detail !== "unknown") {
+      if (detail.length > 160) detail = detail.slice(0, 160) + "…";
       zh += "（" + detail + "）";
       en += " (" + detail + ")";
     }
@@ -1751,9 +1770,10 @@
   // 设置页提示用：当前选中的源是否 TPDB（数据尚未就绪时也能判断）
   function sourceIsTPDB() {
     var boxes = _dp.boxes || [];
-    var name = (_dp.d.latest && _dp.d.latest.source && _dp.d.latest.source.name) || dpPrefs().source || "";
+    var src = _dp.d.latest && _dp.d.latest.source;
+    var key = (src && (src.endpoint || src.name)) || dpPrefs().source || "";
     for (var i = 0; i < boxes.length; i++) {
-      if (boxes[i].name === name || boxes[i].endpoint === name) return SSD.isTPDBBox(boxes[i]);
+      if (boxes[i].name === key || boxes[i].endpoint === key) return SSD.isTPDBBox(boxes[i]);
     }
     return boxes.length === 1 && SSD.isTPDBBox(boxes[0]);
   }
@@ -2816,6 +2836,17 @@
     return lab;
   }
 
+  // 设置写入失败时的就地提示（配额满 → 改动刷新即丢）
+  function settingsWarn(wrap, text) {
+    if (!wrap) return;
+    var old = wrap.querySelector(".ssd-dp-setwarn");
+    if (old) old.remove();
+    var box = document.createElement("div");
+    box.className = "ssd-dp-setwarn";
+    box.textContent = text;
+    wrap.insertBefore(box, wrap.firstChild);
+  }
+
   function renderSettings(c) {
     var prefs = dpPrefs();
     var wrap = el("div", "ssd-dp-settings");
@@ -2831,17 +2862,28 @@
     srcSel.className = "ssd-dp-setsel";
     (_dp.boxes || []).forEach(function (b) {
       var op = document.createElement("option");
-      op.value = b.name;
+      // value 用 endpoint：box 的 name 由用户填写、可以重复（Stash 新增
+      // stash-box 时默认名就是 "StashDB"），同名时 select 会恒定命中第一项，
+      // 表现就是「选了 TPDB 之后切不回 StashDB」（论坛反馈）
+      op.value = b.endpoint;
       op.textContent = SSD.brandNameForEndpoint(b.endpoint, b.name);
       srcSel.appendChild(op);
     });
     var dNow = _dp.d.latest;
     // 回显：数据就绪用实际源；未就绪（切换后重载中/失败）回显持久化选择，
     // 避免误导性地跳回下拉第一项
-    if (dNow && dNow.source && dNow.source.name) srcSel.value = dNow.source.name;
-    else if (prefs.source) srcSel.value = prefs.source;
+    if (dNow && dNow.source) srcSel.value = dNow.source.endpoint || dNow.source.name || "";
+    else if (prefs.source) {
+      // 旧版存的是 box name，这里顺带解析成 endpoint 完成迁移
+      var chosen = resolveSource(_dp.boxes || [], null);
+      srcSel.value = (chosen && chosen.endpoint) || prefs.source;
+    }
     srcSel.addEventListener("change", function () {
-      dpSetPrefs({ source: srcSel.value });
+      if (!dpSetPrefs({ source: srcSel.value })) {
+        settingsWarn(wrap, tc(
+          "保存失败：浏览器本地存储已满。请先在设置里「重置」清出空间，改完的选择一刷新就会丢。",
+          "Could not save: browser storage is full. Reset the settings to free space — changes will be lost on refresh."));
+      }
       _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
       // 角标按当前数据源统计（单源口径），切源后立即重算一次
       if (SSD.pollFollowed) SSD.pollFollowed(true);

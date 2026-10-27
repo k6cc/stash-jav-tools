@@ -31,6 +31,9 @@ if _PLUGIN_DIR not in sys.path:
 PLUGIN_ID = "stashDiscover"
 RESULT_MARKER = "[SSD_RESULT]"
 ERROR_MARKER = "[SSD_ERROR]"
+# 单次搜索下发给前端的条数上限：一条结果带标题/磁力/大小/做种数，50 条
+# 已经够翻三页，再多只会把日志行撑大（见 count 与 truncated 的注释）
+SEARCH_RESULT_LIMIT = 50
 
 
 class StashInterface:
@@ -104,11 +107,30 @@ def log_warn(msg):
 def log_error(msg):
     print(f"\x01e\x02[{PLUGIN_ID}] {msg}", file=sys.stderr, flush=True)
 
+# 结果/错误通过 Stash 的全局日志流回传给前端，而日志里没有请求边界：多个任务
+# 交错、上一次请求迟到落库，都会让「取最新一条 [SSD_RESULT]」读到别人的结果
+# （论坛反馈：搜演员 A 之后再搜 B，显示的还是 A 的结果）。每次任务带一个前端
+# 生成的 requestId，回写进 payload，前端只认自己那个。
+_REQUEST_ID = ""
+
+def set_request_id(rid):
+    global _REQUEST_ID
+    _REQUEST_ID = str(rid or "").strip()
+
 def emit_result(obj):
+    if _REQUEST_ID and isinstance(obj, dict):
+        obj = dict(obj)
+        obj["rid"] = _REQUEST_ID
     print(f"{RESULT_MARKER} {json.dumps(obj, ensure_ascii=False)}", file=sys.stderr, flush=True)
 
 def emit_error(msg):
-    print(f"{ERROR_MARKER} {msg}", file=sys.stderr, flush=True)
+    # 带 rid 时输出 JSON（前端按 rid 过滤），否则保持旧的纯文本格式，
+    # 让未升级的前端仍能读到错误文案
+    if _REQUEST_ID:
+        payload = json.dumps({"rid": _REQUEST_ID, "message": msg}, ensure_ascii=False)
+        print(f"{ERROR_MARKER} {payload}", file=sys.stderr, flush=True)
+    else:
+        print(f"{ERROR_MARKER} {msg}", file=sys.stderr, flush=True)
 
 
 def http_request(url, method="GET", data=None, headers=None, timeout=30):
@@ -257,8 +279,17 @@ def do_search(stash, query):
         return
 
     results = _parse_torznab(body)
-    log_info(f"Jackett returned {len(results)} results")
-    emit_result({"mode": "search", "query": query, "count": len(results), "results": results[:50]})
+    # count 必须与真正下发的条数分开：以前 count 报总数、payload 却截到 50，
+    # 前端抬头显示 230 条而列表只有 50（论坛反馈「230 results 只显示几条」）
+    total = len(results)
+    shown = results[:SEARCH_RESULT_LIMIT]
+    log_info(f"Jackett returned {total} results (showing {len(shown)})")
+    emit_result({
+        "mode": "search", "query": query,
+        "count": total, "shown": len(shown),
+        "truncated": total > SEARCH_RESULT_LIMIT,
+        "results": shown,
+    })
 
 
 def do_push_download(stash, magnet, savepath=""):
@@ -311,7 +342,12 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath):
         data={"username": username, "password": password},
         timeout=15,
     )
-    if status != 200 or body.strip() != "Ok.":
+    # qBittorrent ≤5.2：登录成功返回 200 + body "Ok."
+    # qBittorrent 5.3.0：改成 204 No Content（空 body），会话 cookie 仍在
+    # Set-Cookie 里 —— 老代码硬判 200 会把成功的登录当成失败（论坛反馈）
+    if status == 204 or (status == 200 and body.strip() == "Ok."):
+        pass
+    else:
         emit_error(f"qBittorrent login failed (HTTP {status}): {body[:100]}")
         return
 
@@ -355,6 +391,7 @@ def main():
             fragment = json.loads(sys.stdin.read())
 
         stash = StashInterface(fragment)
+        set_request_id(stash.get_arg("rid", ""))
         mode = stash.get_mode()
 
         if mode == "search":

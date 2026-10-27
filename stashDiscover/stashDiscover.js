@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.4.4";
+  var PLUGIN_VERSION = "2.4.5";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -36,6 +36,7 @@
     "javstash.org": "JAVStash",
     "stashdb.org": "StashDB",
     "theporndb.net": "TPDB",
+    "pmvstash.org": "PMVStash",
   };
 
   // ─── i18n ────────────────────────────────────────────────────────────────
@@ -251,6 +252,12 @@
     return v.full || v.large || v.medium || v.small || "";
   }
 
+  // TPDB 偶尔会给出非数组字段（错误包体、字段改名），直接 .map 会抛
+  // TypeError → 前端只能显示 "Unknown error"（论坛反馈发现页报未知错误）
+  function asArr(v) {
+    return Array.isArray(v) ? v : [];
+  }
+
   function tpdbScene(raw) {
     if (!raw) return null;
     var site = raw.site || null;
@@ -263,7 +270,7 @@
     });
     var urls = [];
     if (raw.url) urls.push({ url: raw.url, site: { name: (site && site.name) || "" } });
-    (raw.links || []).forEach(function (l) {
+    asArr(raw.links).forEach(function (l) {
       var u = typeof l === "string" ? l : (l && l.url);
       if (u && !urls.some(function (x) { return x.url === u; })) {
         urls.push({ url: u, site: { name: (site && site.name) || "" } });
@@ -281,7 +288,7 @@
         id: site.uuid || (site.id != null ? String(site.id) : ""),
         name: site.name || "",
       } : null,
-      performers: (raw.performers || []).map(function (p) {
+      performers: asArr(raw.performers).map(function (p) {
         // 场景内演员是站点级记录；stash-box 的演员 id 是站点无关的 parent id
         var par = p.parent || null;
         var img = p.image || p.thumbnail || p.face ||
@@ -295,7 +302,7 @@
           },
         };
       }),
-      tags: (raw.tags || []).map(function (t) {
+      tags: asArr(raw.tags).map(function (t) {
         return { id: t.uuid || (t.id != null ? String(t.id) : ""), name: t.name || "" };
       }),
       images: imgs,
@@ -303,7 +310,7 @@
   }
 
   function tpdbResult(j, reverse) {
-    var scenes = ((j && j.data) || []).map(tpdbScene).filter(Boolean);
+    var scenes = asArr(j && j.data).map(tpdbScene).filter(Boolean);
     if (reverse) scenes.reverse();
     var meta = (j && j.meta) || {};
     return {
@@ -347,7 +354,7 @@
         encodeURIComponent(id) + "/scenes?per_page=" + perPage;
       function step(p) {
         return tpdbGet(box, path + "&page=" + p, timeoutMs).then(function (j) {
-          var rows = (j && j.data) || [];
+          var rows = asArr(j && j.data);
           var reachedOld = false;
           rows.forEach(function (raw) {
             var s = tpdbScene(raw);
@@ -4560,12 +4567,33 @@
 
   // ─── Action: Search Resources (Jackett via Python backend) ────────────────
 
-  // Default query: code for JAV scenes, title for western ones (auto-fallback).
-  // An editable search bar is mounted above the results so the query can be
-  // corrected per scene (long titles, custom keywords, ...).
+  // 番号形态判定：只有真的像番号才拿 code 当搜索词。
+  // stash-box 的 code 不保证是番号 —— TPDB 场景的 code 来自 external_id，
+  // 实测形如 "japanhdv.com-6097"（站点域名 + 站点内 ID），拿它搜 Jackett
+  // 只会得到无关结果（论坛反馈：「有 ID 时结果完全不相关，没有 ID 时反而准确」）。
+  function looksLikeCode(v) {
+    var s = String(v || "").trim();
+    if (!s || s.length > 24) return false;
+    if (/[\s.]/.test(s)) return false;                       // 空格或域名点 = 不是番号
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s)) return false;   // uuid
+    if (/^\d{6}[-_]\d{2,4}$/.test(s)) return true;            // 051424_001 类无码番号
+    if (!/\d/.test(s)) return false;                          // 无数字 = slug / 标题
+    // SSIS-001 / T28-123 / FC2-PPV-1234567 / 1pondo-123456
+    return /^[A-Za-z0-9]{2,12}[-_](?:\d{2,7}|[A-Za-z]{2,4}[-_]\d{1,7})$/.test(s);
+  }
+
+  // 搜索词：番号形 code 优先（JAV 场景标题是日文长句，搜不出结果），
+  // 否则一律用标题 —— western 场景本来就没有番号。
+  function searchQueryFor(sc) {
+    var code = String((sc && sc.code) || "").trim();
+    var title = String((sc && sc.title) || "").trim();
+    if (code && looksLikeCode(code)) return code;
+    return title || code;
+  }
+
   function handleSearchResources(item, btn) {
     var sc = _state.modalDetail ? _state.modalDetail.scene : item.scene;
-    var defaultQuery = sc.code || sc.title || "";
+    var defaultQuery = searchQueryFor(sc);
     if (!defaultQuery) {
       showModalNotice(tc("无法构建搜索词（无番号或标题）", "Cannot build search query (no code or title)"), "error");
       return;
@@ -4649,14 +4677,16 @@
     results.appendChild(loading);
     scrollModalToBottom();
 
+    var rid = newRequestId();
     runPluginTask(TASK_SEARCH, [
       { key: "mode", value: { str: "search" } },
       { key: "query", value: { str: query } },
+      { key: "rid", value: { str: rid } },
     ]).then(function (jobId) {
       if (!jobId) throw new Error(tc("任务提交失败", "Task submission failed"));
-      return pollJob(jobId);
+      return searchBudgetMs().then(function (budget) { return pollJob(jobId, budget); });
     }).then(function () {
-      return fetchSearchResult();
+      return waitSearchResult(rid);
     }).then(function (result) {
       btn.disabled = false;
       btn.textContent = tc("搜索资源", "Search Resources");
@@ -4682,9 +4712,16 @@
     ).then(function (r) { return (r && r.runPluginTask) || null; });
   }
 
-  function pollJob(jobId) {
+  // 每次任务一个 requestId：结果/错误都带着它回传，前端只认自己那个。
+  // 只靠「日志里第一条 marker」会把上一次（或并行任务）的结果当成这次的
+  // —— 论坛反馈：搜完演员 A 再搜 B，显示的还是 A 的结果。
+  function newRequestId() {
+    return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function pollJob(jobId, timeoutMs) {
     var startTime = Date.now();
-    var timeout = 60000;
+    var timeout = timeoutMs || 60000;
     return new Promise(function (resolve, reject) {
       function tick() {
         callGQL("query($i:FindJobInput!){findJob(input:$i){id status}}", { i: { id: jobId } })
@@ -4702,22 +4739,65 @@
     });
   }
 
-  function fetchSearchResult() {
+  // 前端任务预算 = 后端 Jackett 超时 + 30s 调度余量。以前前端固定 60s 而后端
+  // 默认 120s：前端先报超时，后端的结果随后才落日志，下一次搜索就会读到它。
+  function searchBudgetMs() {
+    return getPluginSettings().then(function (s) {
+      var sec = parseInt((s && s.jackettTimeout) || "", 10);
+      if (!(sec > 0)) sec = 120;
+      return sec * 1000 + 30000;
+    }).catch(function () { return 150000; });
+  }
+
+  // "marker 后面的负载"：新格式是 JSON，老格式（或日志被截断）解析不出 JSON
+  function readMarkerPayload(msg, marker) {
+    var i = msg.indexOf(marker);
+    if (i === -1) return null;
+    var raw = msg.substring(i + marker.length).trim();
+    try { return JSON.parse(raw); } catch (e) { return { __raw: raw }; }
+  }
+
+  // 返回 null = 本次结果还没出现在日志里（交给 waitSearchResult 重试）
+  function fetchSearchResult(rid) {
     return callGQL("query{logs{level message}}", {}).then(function (r) {
       var logs = (r && r.logs) || [];
-      // Stash logs are newest-first: the first marker found is the latest run's
       for (var i = 0; i < logs.length; i++) {
         var msg = (logs[i] || {}).message || "";
-        var errIdx = msg.indexOf(ERROR_MARKER);
-        if (errIdx !== -1) throw new Error(msg.substring(errIdx + ERROR_MARKER.length).trim());
-        var resultIdx = msg.indexOf(RESULT_MARKER);
-        if (resultIdx !== -1) {
-          var jsonStr = msg.substring(resultIdx + RESULT_MARKER.length).trim();
-          try { return JSON.parse(jsonStr); } catch (e) { console.warn("[SSD] result parse failed:", e); }
+        if (msg.indexOf(ERROR_MARKER) !== -1) {
+          var err = readMarkerPayload(msg, ERROR_MARKER);
+          if (!err || err.rid !== rid) continue;
+          throw new Error(err.message || err.__raw || tc("搜索失败", "Search failed"));
+        }
+        if (msg.indexOf(RESULT_MARKER) !== -1) {
+          var res = readMarkerPayload(msg, RESULT_MARKER);
+          if (!res || res.rid !== rid) continue;
+          // 解析失败就是失败，不能顺手拿更旧的一条顶替（那正是串结果的来源）
+          if (res.__raw) throw new Error(tc("结果解析失败（日志可能被截断）",
+            "Could not parse results (log may be truncated)"));
+          return res;
         }
       }
-      return { count: 0, results: [] };
+      return null;
     });
+  }
+
+  // job 结束 ≠ 日志已落库：等一小会儿再判失败（以前读一次就返回，容易读到
+  // 上一次的旧结果）
+  function waitPayload(reader, rid, missingMsg) {
+    var deadline = Date.now() + 5000;
+    function attempt() {
+      return reader(rid).then(function (res) {
+        if (res) return res;
+        if (Date.now() > deadline) throw new Error(missingMsg);
+        return new Promise(function (resolve) { setTimeout(resolve, 300); }).then(attempt);
+      });
+    }
+    return attempt();
+  }
+
+  function waitSearchResult(rid) {
+    return waitPayload(fetchSearchResult, rid, tc("任务已完成但没收到搜索结果，请重试",
+      "Task finished without returning results — please retry"));
   }
 
   function renderSearchResults(section, result) {
@@ -4729,6 +4809,19 @@
     header.className = "ssd-search-header";
     header.textContent = tc("搜索结果 (", "Search Results (") + (result.count || 0) + ")";
     section.appendChild(header);
+
+    // 后端只下发前 SEARCH_RESULT_LIMIT 条：抬头报总数、列表却更短时说清楚，
+    // 否则就是"日志说 230 条，插件里只有几条"（论坛反馈）
+    if (result.truncated) {
+      var shown = _searchResults.length;
+      var hint = document.createElement("div");
+      hint.className = "ssd-search-truncated";
+      hint.textContent = tc(
+        "共 " + (result.count || 0) + " 条，仅显示前 " + shown + " 条，加番号或关键词可缩小范围",
+        (result.count || 0) + " results — showing the first " + shown +
+          ", refine the query to narrow it down");
+      section.appendChild(hint);
+    }
 
     if (_searchResults.length === 0) {
       var empty = document.createElement("div");
@@ -4862,13 +4955,18 @@
       pushBtn.onclick = function () {
         pushBtn.disabled = true;
         pushBtn.textContent = tc("推送中...", "Pushing...");
+        var prId = newRequestId();
         runPluginTask(TASK_PUSH, [
           { key: "mode", value: { str: "push_download" } },
           { key: "magnet", value: { str: res.magnet } },
+          { key: "rid", value: { str: prId } },
         ]).then(function (jobId) {
           if (!jobId) throw new Error("Task submission failed");
           return pollJob(jobId);
-        }).then(function () { return fetchPushResult(); })
+        }).then(function () {
+          return waitPayload(fetchPushResult, prId, tc("任务已完成但没收到推送结果",
+            "Task finished without a push result"));
+        })
         .then(function () {
           pushBtn.textContent = tc("已推送 ✓", "Pushed ✓");
           pushBtn.classList.add("ssd-btn-success");
@@ -4895,18 +4993,24 @@
     return row;
   }
 
-  function fetchPushResult() {
+  // 返回 null = 本次推送还没出现在日志里（交给 waitPayload 重试）
+  function fetchPushResult(rid) {
     return callGQL("query{logs{level message}}", {}).then(function (r) {
       var logs = (r && r.logs) || [];
-      // Stash logs are newest-first (see fetchSearchResult)
       for (var i = 0; i < logs.length; i++) {
         var msg = (logs[i] || {}).message || "";
         if (msg.indexOf(ERROR_MARKER) !== -1) {
-          throw new Error(msg.substring(msg.indexOf(ERROR_MARKER) + ERROR_MARKER.length).trim());
+          var err = readMarkerPayload(msg, ERROR_MARKER);
+          if (!err || err.rid !== rid) continue;
+          throw new Error(err.message || err.__raw || tc("推送失败", "Push failed"));
         }
-        if (msg.indexOf(RESULT_MARKER) !== -1) return true;
+        if (msg.indexOf(RESULT_MARKER) !== -1) {
+          var res = readMarkerPayload(msg, RESULT_MARKER);
+          if (!res || res.rid !== rid) continue;
+          return true;
+        }
       }
-      return true;
+      return null;
     });
   }
 

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.4.0";
+  var PLUGIN_VERSION = "2.4.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -108,12 +108,31 @@
     return e;
   }
 
+  // ─── Base URL (sub-path deployments) ─────────────────────────────────────
+  // Stash served behind a reverse proxy with X-Forwarded-Prefix runs under a
+  // sub-path (e.g. https://host/stash/) and rewrites <base href> to that
+  // prefix. Root-absolute internal URLs ("/graphql", "/settings", "/plugins/…")
+  // ignore <base href> and would hit the domain root, so every internal URL
+  // goes through this helper. Absolute and data/blob URLs pass through.
+  function appUrl(path) {
+    var p = String(path == null ? "" : path);
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(p) ||
+      p.indexOf("data:") === 0 || p.indexOf("blob:") === 0) return p;
+    try {
+      var base = document.baseURI || (location.origin + "/");
+      if (base.charAt(base.length - 1) !== "/") base += "/";
+      return new URL(p.replace(/^\/+/, ""), base).toString();
+    } catch (_) {
+      return p;
+    }
+  }
+
   // ─── GraphQL helpers ─────────────────────────────────────────────────────
 
   function callGQL(query, variables) {
     var payload = { query: query };
     if (variables) payload.variables = variables;
-    return fetch("/graphql", {
+    return fetch(appUrl("/graphql"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1611,7 +1630,7 @@
       retryBtn.onclick = retryLoad;
       actions.appendChild(retryBtn);
       var setBtn = makePanelBtn(tc("打开设置", "Open settings"), "secondary");
-      setBtn.onclick = function () { window.open("/settings", "_blank", "noopener,noreferrer"); };
+      setBtn.onclick = function () { window.open(appUrl("/settings"), "_blank", "noopener,noreferrer"); };
       actions.appendChild(setBtn);
 
     } else if (vs === "no-box") {
@@ -1622,7 +1641,7 @@
       retryBtn2.onclick = retryLoad;
       actions.appendChild(retryBtn2);
       var setBtn2 = makePanelBtn(tc("打开设置", "Open settings"), "secondary");
-      setBtn2.onclick = function () { window.open("/settings", "_blank", "noopener,noreferrer"); };
+      setBtn2.onclick = function () { window.open(appUrl("/settings"), "_blank", "noopener,noreferrer"); };
       actions.appendChild(setBtn2);
 
     } else if (vs === "no-ids") {
@@ -3534,7 +3553,7 @@
       var img = document.createElement("img");
       img.className = "image-thumbnail";
       img.alt = p.name || "";
-      img.src = "/performer/" + lp.id + "/image";
+      img.src = appUrl("/performer/" + lp.id + "/image");
       imgWrap.appendChild(img);
       row.appendChild(imgWrap);
       var name = document.createElement("span");
@@ -4249,7 +4268,7 @@
     // Local performer avatar when mapped (fast, internal); box image otherwise
     var localMap = (_state.localPerformerMaps || {})[(item.endpoint || "").toLowerCase()] || {};
     var lp = localMap[String(performer.id).toLowerCase()];
-    var imgSrc = lp ? ("/performer/" + lp.id + "/image")
+    var imgSrc = lp ? appUrl("/performer/" + lp.id + "/image")
       : (((performer.images || [])[0] || {}).url || "");
 
     // Mount immediately with a fixed-size portrait skeleton (instant feedback);
@@ -4986,6 +5005,8 @@
     version: PLUGIN_VERSION,
     // GraphQL
     callGQL: callGQL,
+    // internal URL builder (respects sub-path deployments — see appUrl)
+    appUrl: appUrl,
     callBoxGQL: callBoxGQL,
     // TPDB REST fallback（列表接口故障）
     callBoxSceneList: callBoxSceneList,
@@ -5344,7 +5365,7 @@
     // 都会 revalidate），无版本参数的 URL 会被浏览器启发式缓存——插件更新后
     // 用户看到的还是旧 discover.js（2026-10-25 实测踩坑）。时间戳参数强制
     // 每次文档加载都拉新，与 ui.* 文件的 no-cache 语义对齐。
-    s.src = "/plugin/" + PLUGIN_ID + "/assets/discover.js?t=" + Date.now();
+    s.src = appUrl("/plugin/" + PLUGIN_ID + "/assets/discover.js?t=" + Date.now());
     s.onerror = function () {
       console.warn("[SSD] discover.js failed to load — check the plugin directory");
     };

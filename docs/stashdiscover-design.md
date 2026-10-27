@@ -26,6 +26,7 @@
 - 标签："发现"，图标：卫星天线 `faSatelliteDish`（FA6 solid）。语义与"轮询接收关注演员新作信号"机制自洽，整页概念闭环。兜底：FA 不可用时用内联 SVG（path 取自 `svgs/solid/satellite-dish.svg`）。
 - 路由：`/plugins/stashDiscover`（`PluginApi.register.route`）。
 - React 页面组件 + ref/useEffect 挂载 vanilla 渲染（curator 同款模式）。
+- **子路径部署（v2.4.1，论坛需求）**：Stash 用反向代理挂在 `/stash/` 等子路径时会把 `<base href>` 改写成该前缀（`X-Forwarded-Prefix`）。所有内部 URL 统一走 `appUrl()`（`new URL(path, document.baseURI)`，自动补 base 末尾斜杠、放行 http(s)/data/blob），否则 `/graphql`、`/settings`、`/plugin/…`、`/performer/…/image` 会打到域名根 404。已覆盖：`callGQL`、两处「打开设置」、两张本地演员头像、`discover.js` 注入、发现页 4 处 `location.assign`。`register.route`/nav `to` 走 Stash 自带 basename，无需处理；Python 后端直连 `host:port`，不经过代理，也不受影响。
 
 ## 3. 页面结构
 

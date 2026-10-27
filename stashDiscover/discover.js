@@ -1893,7 +1893,7 @@
              "No favorited studios yet. Favorite (♥) studios in Stash and their new releases will show up here."));
         var goStash = el("button", "ssd-dp-btn primary", tc("去 Stash 查看", "Open Stash studios"));
         goStash.type = "button";
-        goStash.addEventListener("click", function () { window.location.assign("/studios"); });
+        goStash.addEventListener("click", function () { window.location.assign(SSD.appUrl("/studios")); });
         noFav.appendChild(goStash);
         c.appendChild(noFav);
       } else {
@@ -2387,7 +2387,7 @@
     tabBtn.title = tc("去该演员页的「发现」标签", "Open this performer's Discover tab");
     tabBtn.addEventListener("click", function () {
       try { sessionStorage.setItem("SSD:dp:openTab", String(pf.localId)); } catch (_) {}
-      window.location.assign("/performers/" + pf.localId);
+      window.location.assign(SSD.appUrl("/performers/" + pf.localId));
     });
     acts.appendChild(tabBtn);
     // 原「主页」按钮 → 源站演员页（品牌名 + 外链图标）；详情区右上角外链
@@ -2444,7 +2444,7 @@
     if (studio.localId) {
       var homeBtn = el("button", "ssd-dp-btn", tc("工作室主页", "Studio page"));
       homeBtn.type = "button";
-      homeBtn.addEventListener("click", function () { window.location.assign("/studios/" + studio.localId); });
+      homeBtn.addEventListener("click", function () { window.location.assign(SSD.appUrl("/studios/" + studio.localId)); });
       acts.appendChild(homeBtn);
     }
     var boxBtn = el("a", "ssd-dp-btn", SSD.brandNameForEndpoint(endpoint) + I.ext);
@@ -2557,7 +2557,7 @@
       goBtn.addEventListener("click", function (e) {
         e.stopPropagation();
         if (g) openPerfFilter(g);
-        else if (f.localId) window.location.assign("/performers/" + f.localId);
+        else if (f.localId) window.location.assign(SSD.appUrl("/performers/" + f.localId));
       });
       rightBox.appendChild(goBtn);
       var unfBtn = el("button", "ssd-dp-btn ghost danger", "♥");

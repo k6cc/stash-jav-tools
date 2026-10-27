@@ -1624,7 +1624,9 @@
   }
 
   function miniPerfCard(o) {
-    var c = el("div", "ssd-dp-mini");
+    // 已关注 → 卡片底色轻染（CSS 里 color-mix 在主色上算，跟主题走）。
+    // 关注页用的是行式卡片，不走这里，所以「已关注模块」不会被整片上色。
+    var c = el("div", "ssd-dp-mini" + (o.heart ? " is-followed" : ""));
     // 头像单独包一层：已关注爱心要骑在圆形头像边框上，得有个定位基准
     var ava = el("div", "ssd-dp-mini-ava");
     var img = document.createElement("img");
@@ -1643,6 +1645,8 @@
     c.appendChild(tx);
     if (o.badge) {
       var b = el("span", "ssd-dp-mini-badge" + (o.badgeKind ? " " + o.badgeKind : ""), o.badge);
+      // 角标为省宽度用简写（「新作 3」），完整说法留在 title 里
+      if (o.badgeTitle) b.title = o.badgeTitle;
       c.appendChild(b);
     }
     if (o.onClick) c.addEventListener("click", function (e) { o.onClick(e, c); });
@@ -1834,11 +1838,14 @@
       else {
         var g1 = el("div", "ssd-dp-grid mini");
         aw.slice(0, rows.actors * 12).forEach(function (grp) {
+          var cnt = notifyItems(grp).length;
           g1.appendChild(miniPerfCard({
             name: grp.performer.name,
             image: grp.performer.image,
             sub: subLatest(notifyNewest(grp)),
-            badge: tc(notifyItems(grp).length + " 部新作品", notifyItems(grp).length + " new"),
+            // 角标用「新作 3」：与英文 "3 new" 等宽，完整说法进 title
+            badge: tc("新作 " + cnt, cnt + " new"),
+            badgeTitle: tc(cnt + " 部新作品", cnt + " new"),
             heart: followHas(grp.performer.stashId),
             onClick: function () { openPerfFilter(grp); },
           }));
@@ -1936,9 +1943,9 @@
           g6.appendChild(miniPerfCard({
             name: cs.meta.name,
             image: cs.meta.image,
-            sub: tc("共同出演 ×" + cs.scenes, "co-starred ×" + cs.scenes),
+            sub: coSub(cs),
             badge: tc("共同出演", "Co-star"), badgeKind: "co",
-            onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items }); },
+            onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items, coWith: cs.coWith }); },
           }));
         });
         trendingPerfMinis({ limit: Math.max(0, rows.performers * 12 - g6.children.length) }).forEach(function (pm) { g6.appendChild(pm); });
@@ -1963,8 +1970,12 @@
     if (!d || !d.linked) return [];
     var lib = {};
     d.linked.forEach(function (p) { lib[String(p.stashId)] = true; });
-    var counts = {}, meta = {};
+    var counts = {}, meta = {}, coWith = {};
     (d.actorsWithNew || []).forEach(function (g) {
+      // 记住这位共演者是「跟谁同场」的：卡片副标题要说清入选原因，
+      // 只写「共同出演 ×64」看不出这 64 场是和谁演的（用户 2026-10-27）
+      var srcId = String((g.performer && g.performer.stashId) || "");
+      var srcName = (g.performer && g.performer.name) || "";
       g.items.forEach(function (it) {
         ((it.scene && it.scene.performers) || []).forEach(function (pp) {
           var pf = pp && pp.performer;
@@ -1975,12 +1986,42 @@
           if (!counts[pid]) counts[pid] = { n: 0, items: [] };
           counts[pid].n++;
           if (counts[pid].items.length < 12) counts[pid].items.push(it);
+          if (!coWith[pid]) coWith[pid] = {};
+          var w = coWith[pid][srcId] || (coWith[pid][srcId] = { name: srcName, n: 0 });
+          w.n++;
         });
       });
     });
     return Object.keys(counts).map(function (k) {
-      return { meta: meta[k], scenes: counts[k].n, items: counts[k].items };
+      // 按同场场景数降序：同一共演者可能同时与多位已关注演员同场
+      var list = Object.keys(coWith[k] || {}).map(function (x) { return coWith[k][x]; })
+        .sort(function (a, b) { return b.n - a.n; });
+      return { meta: meta[k], scenes: counts[k].n, items: counts[k].items, coWith: list };
     }).sort(function (a, b) { return b.scenes - a.scenes; }).slice(0, 12);
+  }
+
+  // 共演卡副标题：说清「跟谁一起演」，而不是只给一个没有指向的场景数
+  // （用户 2026-10-27：「共同出演 ×64」看不出这 64 场是和谁演的）
+  function coSub(cs) {
+    var list = cs.coWith || [];
+    if (!list.length) return tc("共同出演", "Co-star");
+    var more = list.length - 1;
+    // 副标题只负责「和谁」；类型由角标「共同出演」交代，不必重复说「共演」
+    return tc("与 " + list[0].name + (more ? " +" + more : ""),
+              "with " + list[0].name + (more ? " +" + more : ""));
+  }
+
+  // 弹窗里有整行宽度，把「和谁 + 几场」写全
+  function coStat(p) {
+    var list = p.coWith || [];
+    var n = p.scenes || 0;
+    if (!list.length) return tc("共同出演 " + n + " 部", "in " + n + " scenes");
+    if (list.length > 1) {
+      return tc("与 " + list[0].name + " 等 " + list.length + " 人共同出演 " + n + " 部",
+                "with " + list[0].name + " and " + (list.length - 1) + " more · " + n + " scenes");
+    }
+    return tc("与 " + list[0].name + " 共同出演 " + n + " 部",
+              "with " + list[0].name + " · " + n + " scenes");
   }
   // 热门演员榜迷你卡（§3.5 子源 2；过滤已在库 §3.5）
   function trendingPerfMinis(o) {
@@ -1997,7 +2038,9 @@
       out.push(miniPerfCard({
         name: pf.name,
         image: pf.image,
-        sub: tc((pf.sceneCount || 0) + " 部作品 · 最近有新作", (pf.sceneCount || 0) + " scenes"),
+        // 只留作品数：「· 最近有新作」在窄卡里必然被省略号吃掉
+        // （实测 1280 下文字需 125px、可用只有 113px — 用户 2026-10-27）
+        sub: tc((pf.sceneCount || 0) + " 部作品", (pf.sceneCount || 0) + " scenes"),
         badge: tc("热门榜 #" + rank, "Trending #" + rank), badgeKind: "hot",
         onClick: function () { openPerfModal({ src: "hot", stashId: pf.stashId, name: pf.name, image: pf.image, sceneCount: pf.sceneCount, rank: rank }); },
       }));
@@ -2167,7 +2210,8 @@
           name: nm,
           image: grp.performer.image,
           sub: subLatest(grp.newest),
-          badge: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
+          badge: tc("新作 " + grp.items.length, grp.items.length + " new"),
+          badgeTitle: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
           heart: followHas(grp.performer.stashId),
           onClick: function () { openPerfFilter(grp); },
         }));
@@ -2178,9 +2222,9 @@
         grid.appendChild(miniPerfCard({
           name: cs.meta.name,
           image: cs.meta.image,
-          sub: tc("共同出演 ×" + cs.scenes, "co-starred ×" + cs.scenes),
+          sub: coSub(cs),
           badge: tc("共同出演", "Co-star"), badgeKind: "co",
-          onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items }); },
+          onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items, coWith: cs.coWith }); },
         }));
       });
     } else {
@@ -2220,7 +2264,7 @@
     // 头部：共享演员详情模块（与演员过滤视图同构 — 用户 2026-10-25）
     // 统计行走详情区 info 列（第四轮：不放按钮区下面）
     var statText = p.src === "co"
-      ? tc("共同出演 ×" + (p.scenes || 0), "Co-starred ×" + (p.scenes || 0))
+      ? coStat(p)
       : tc("热门榜 #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " 部作品", "Trending #" + (p.rank || "?") + " · " + (p.sceneCount || 0) + " scenes");
     var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true, stat: statText });
     body.appendChild(h.head);
@@ -3177,12 +3221,17 @@
     head.appendChild(title);
     refs.chips = el("span", "ssd-dp-chips");
     head.appendChild(refs.chips);
-    refs.refresh = el("button", "ssd-dp-refresh", I.refresh + "<span>" + tc("刷新", "Refresh") + "</span>");
-    refs.refresh.type = "button";
-    refs.refresh.addEventListener("click", doRefresh);
-    head.appendChild(refs.refresh);
+    // 顺序：状态文字在前、刷新按钮在后。刷新按钮固定贴最右，状态文字靠
+    // margin-left:auto 吸在按钮左侧 —— 文字从「刚刚更新」变成「12 分钟前」
+    // 只向左生长，按钮不会被推着跑（用户 2026-10-27）
     refs.updated = el("span", "ssd-dp-updated");
     head.appendChild(refs.updated);
+    refs.refresh = el("button", "ssd-dp-refresh",
+      I.refresh + "<span>" + tc("刷新", "Refresh") + "</span>");
+    refs.refresh.type = "button";
+    refs.refresh.setAttribute("aria-label", tc("刷新发现页", "Refresh discover page"));
+    refs.refresh.addEventListener("click", doRefresh);
+    head.appendChild(refs.refresh);
     root.appendChild(head);
 
     // 窄屏（≤480）：隐藏刷新按钮，「logo + 发现 + 状态文字」整块可点刷新；

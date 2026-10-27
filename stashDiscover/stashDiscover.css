@@ -1175,8 +1175,14 @@
 
 .ssd-dp-chip b { color: var(--sx-tx); font-weight: 600; }
 
-.ssd-dp-head .ssd-dp-refresh {
+/* 状态文字吸在刷新按钮左侧：文字变长只向左生长，按钮位置不动
+   （用户 2026-10-27：要在最右且不能被文字挤走） */
+.ssd-dp-updated {
+  font-size: 12px;
+  color: var(--sx-tx3);
+  white-space: nowrap;
   margin-left: auto;
+  text-align: right;
 }
 
 .ssd-dp-refresh {
@@ -1200,14 +1206,17 @@
 .ssd-dp-refresh:hover { color: var(--sx-hi); border-top-color: var(--sx-edge); }
 .ssd-dp-refresh:disabled { opacity: 0.5; cursor: default; }
 
+/* 按钮内的刷新图标：svg 无 width/height 属性时在 flex 里会被压成 0 宽
+   而不显示（用户 2026-10-27 反馈「刷新前没有转圈符号」） */
+.ssd-dp-refresh svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
 .ssd-dp-refresh svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
 @keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
-
-.ssd-dp-updated {
-  font-size: 12px;
-  color: var(--sx-tx3);
-  white-space: nowrap;
-}
 
 /* ─── 滑动开关组（§3.1.2，InsightsI18n .ins-tabs 胶囊风格）───────────────── */
 
@@ -1552,9 +1561,7 @@
 .ssd-dp-tab .ssd-dp-tab-dot { margin-left: 2px; }
 .ssd-dp-tab.set { margin-left: 6px; }
 
-/* 刷新按钮旋转 */
-.ssd-dp-refresh svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
-@keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
+/* 刷新按钮旋转动画见上方 .ssd-dp-refresh svg.spinning */
 
 /* 模块内场景网格（复用主 JS .ssd-card-grid 的卡片类；容器改为 CSS grid）。
    原容器的 flex-wrap + 卡片 margin:0 auto 有两个问题：a) 在 .ssd-dp-sec 的
@@ -1588,15 +1595,30 @@
   padding: 10px;
   border: 1px solid var(--sx-ui3);
   border-radius: 10px;
-  background: var(--sx-ui);
+  /* 卡片底色走变量：爱心的背景圈要跟卡片同一色才会「隐身」，
+     已关注卡改了底色时不必再维护第二处色值（用户 2026-10-27） */
+  --ssd-mini-bg: var(--sx-ui);
+  background: var(--ssd-mini-bg);
   cursor: pointer;
   overflow: visible; /* badge 凸出到卡外右上角，不能裁剪 — 用户 2026-10-25 */
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
 }
 .ssd-dp-mini:hover {
   transform: translateY(-2px);
   border-color: var(--sx-edge);
   box-shadow: var(--sx-sh);
+}
+/* 已关注：底色按主题主色轻染（10%），描边同色加深。
+   全部用 color-mix 在现有 token 上算，切主题/明暗自动跟随，不写死任何色值。
+   只在「混排列表」（有新发布的演员、演员筛选视图）里出现——
+   关注页用的是行式卡片（.ssd-dp-fgrp），不在这一套里。 */
+.ssd-dp-mini.is-followed {
+  --ssd-mini-bg: color-mix(in srgb, var(--sx-acc) 10%, var(--sx-ui));
+  border-color: color-mix(in srgb, var(--sx-acc) 35%, var(--sx-ui3));
+}
+/* hover 要压过上面的描边（同特异性后写生效），所以单独给已关注卡一档 */
+.ssd-dp-mini.is-followed:hover {
+  border-color: color-mix(in srgb, var(--sx-acc) 62%, var(--sx-ui3));
 }
 /* 头像框：爱心要骑在圆形边框左下角，需要这个定位基准 */
 .ssd-dp-mini-ava {
@@ -1623,7 +1645,9 @@
 }
 .ssd-dp-mini-sub {
   font-size: 11.5px;
-  color: var(--sx-tx3);
+  /* tx3 在深色主题下只有约 2:1 对比度，日期几乎糊进卡片底色（用户 2026-10-27）。
+     tx2 是站内统一的「次级文字」档，实测 4.0:1，仍低于标题但能看清。 */
+  color: var(--sx-tx2);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -1651,23 +1675,46 @@
 .ssd-dp-mini-badge.co { background: color-mix(in srgb, var(--sx-bl) 18%, transparent); color: var(--sx-bl-tx); }
 .ssd-dp-mini-badge.hot { background: color-mix(in srgb, var(--sx-or) 18%, transparent); color: var(--sx-or-tx); }
 /* 已关注爱心：骑在圆形头像边框左下角（原来是卡片右下角，离头像太远）
-   背景圈用卡片底色 + 描边，让爱心从头像边缘"浮"出来，不被照片吃掉 */
+   背景圈和描边取卡片底色变量（--ssd-mini-bg），卡片换成染色底时爱心依然"隐身"。
+   偏移 -6px：圆心落到头像边框外侧，背景圈不再吃掉一大块人脸
+   （用户 2026-10-27：侵入面积再少一点） */
 .ssd-mini-heart {
   position: absolute;
-  left: -3px;
-  bottom: -3px;
-  width: 17px;
-  height: 17px;
+  left: -6px;
+  bottom: -6px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: var(--sx-ui);
-  box-shadow: 0 0 0 2px var(--sx-ui);
+  background: var(--ssd-mini-bg, var(--sx-ui));
+  box-shadow: 0 0 0 2px var(--ssd-mini-bg, var(--sx-ui));
   color: var(--sx-ma);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
 }
-.ssd-mini-heart svg { width: 11px; height: 11px; }
+.ssd-mini-heart svg {
+  width: 13px;
+  height: 13px;
+  transform-origin: center;
+}
+/* 悬停小卡：心形跳一次（进入时播放一次，移出即复位，再次进入再跳）。
+   缩放只作用在内部 svg 上——背景圈与描边是容器的 box-shadow，不参与动画，
+   否则整颗"徽章"会跟着一起鼓起来（用户 2026-10-27）。
+   iteration-count 固定 1，动画跑完停在末帧的 scale(1)，不会持续抽动 */
+.ssd-dp-mini:hover .ssd-mini-heart svg {
+  animation: ssd-mini-beat 0.62s cubic-bezier(0.3, 0.7, 0.4, 1) 1;
+}
+@keyframes ssd-mini-beat {
+  0% { transform: scale(1); }
+  28% { transform: scale(1.34); }
+  52% { transform: scale(0.94); }
+  74% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ssd-dp-mini:hover .ssd-mini-heart svg { animation: none; }
+}
 
 /* 场景卡徽标（§3.2/§5）——top/left 与原生 .studio-overlay（0.7rem）同基线 */
 .ssd-overlay-days {
@@ -1791,7 +1838,13 @@
 /* 纯图标按钮（关注行「取关」）：只放一个 SVG，宽度不随中英文文案变化 */
 .ssd-dp-btn.icon-only { padding: 7px 9px; gap: 0; }
 .ssd-dp-btn.icon-only svg { width: 14px; height: 14px; }
-.ssd-dp-fgrp-acts .ssd-dp-btn.icon-only { padding: 5px 7px; }
+/* 关注行：图标按钮收窄是为省宽度（见上），但垂直 padding 跟着压到 5px 后，
+   内容从文字行盒 18.75px 变成图标 14px → 比「详情」矮 4.75px（用户 2026-10-27）。
+   align-self:stretch 让它自动等高，字号/英文换行变化都不用再手调。 */
+.ssd-dp-fgrp-acts .ssd-dp-btn.icon-only {
+  padding: 5px 7px;
+  align-self: stretch;
+}
 /* 已加入/加入失败：实底白字保证可读（用户 2026-10-25 第五轮：浅字在按钮底色上难读）*/
 .ssd-dp-btn.ok { background: var(--sx-gr); border-color: var(--sx-gr); color: #fff; pointer-events: none; }
 .ssd-dp-btn.err { background: var(--sx-re); border-color: var(--sx-re); color: #fff; }
@@ -1800,7 +1853,6 @@
 .ssd-dp-btn.busy { color: var(--sx-tx2); border-color: var(--sx-edge); }
 .ssd-dp-btn.busy svg { animation: ssd-dp-spin 0.9s linear infinite; }
 .ssd-dp-btn.ok, .ssd-dp-btn.err { animation: ssd-dp-pop 0.32s ease-out; }
-@keyframes ssd-dp-spin { to { transform: rotate(360deg); } }
 @keyframes ssd-dp-pop {
   0% { transform: scale(0.94); }
   60% { transform: scale(1.05); }
@@ -2181,6 +2233,9 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
      360px 下「最新 2026-10-08」能单行放下，不再被截成「最新 2026-1…」（用户 2026-10-27） */
   .ssd-dp-mini { padding: 8px; gap: 8px; }
   .ssd-dp-mini-ava { width: 38px; height: 38px; }
+  /* 爱心跟着头像等比收一档（默认 20px 是给 44px 头像的比例） */
+  .ssd-mini-heart { width: 18px; height: 18px; left: -5px; bottom: -5px; }
+  .ssd-mini-heart svg { width: 12px; height: 12px; }
   /* 再窄就折行，而不是省略。日期整体不可断（.ssd-dp-nw），只会断在「最新」之后 */
   .ssd-dp-mini-sub {
     white-space: normal;
@@ -2437,7 +2492,13 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
     outline-offset: 2px;
     border-radius: 6px;
   }
-  .ssd-dp-updated { order: 1; font-size: 11.5px; }
+  /* 窄屏按钮已隐藏：状态文字回到标题右侧贴着，不需要吸右 */
+  .ssd-dp-updated {
+    order: 1;
+    font-size: 11.5px;
+    margin-left: 0;
+    text-align: left;
+  }
   .ssd-dp-updated::before { content: "← "; color: var(--sx-tx3); }
   .ssd-dp-chips { order: 2; flex-basis: 100%; }
   .ssd-dp-chips:empty { display: none; }

@@ -15,7 +15,7 @@
   window.__pdmLoaded = true;
 
   var MIN_VERSION = [0, 31, 0];
-  var PLUGIN_VERSION = "1.6.6";
+  var PLUGIN_VERSION = "1.6.7";
   console.log("[pdm] performerMerge v" + PLUGIN_VERSION + " loaded");
 
   // ==================== i18n ====================
@@ -50,12 +50,29 @@
     }
   })();
 
+  // ─── 子路径部署辅助 ───────────────────────────────────────────────
+  // Stash 经反向代理挂在子路径下（如 /stash/，X-Forwarded-Prefix）时，index.html 的
+  // <base href> 会被改写成 /stash/，根绝对路径 "/graphql" 会打到站点根 → 404。
+  // 本站内部地址统一走 appUrl()，以 document.baseURI 为基准拼接；外部地址原样返回。
+  function appUrl(path) {
+    var p = String(path == null ? "" : path);
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(p) ||
+      p.indexOf("data:") === 0 || p.indexOf("blob:") === 0) return p;
+    try {
+      var base = document.baseURI || (location.origin + "/");
+      if (base.charAt(base.length - 1) !== "/") base += "/";
+      return new URL(p.replace(/^\/+/, ""), base).toString();
+    } catch (_) {
+      return p;
+    }
+  }
+
   // ==================== GraphQL ====================
 
   function callGQL(query, variables) {
     var payload = { query: query };
     if (variables) payload.variables = variables;
-    return fetch("/graphql", {
+    return fetch(appUrl("/graphql"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

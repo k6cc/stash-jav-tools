@@ -363,6 +363,9 @@ A: 钩子模式下的临时任务目录，用于后台进程读取连接信息�
 
 ## 变更历史
 
+### 1.9.8
+- **修复子路径部署下编辑页按钮失效**：反向代理挂 `/stash/` 时，按钮的 GraphQL 请求（提交任务/轮询状态/读取日志）改为按 `<base href>` 拼接，不再打到站点根导致 404；后台钩子与批量任务直连 Stash 自身地址，不受影响
+
 ### 1.9.7
 - **钩子派生后台时输出 stash 日志**：`Scene.Update.Post` 检测到 extrafanart 并成功启动后台进程时输出一行日志（`Scene {id} '<场景标题或文件名>': extrafanart found, background started`），前台不再完全静默；后台详细结果日志仍在 `.sgs_pending/{scene_id}.log`（detached 进程无法写 stash 日志）；输出管道显式重配置为 UTF-8，修复 Windows 下中日文标题乱码
 

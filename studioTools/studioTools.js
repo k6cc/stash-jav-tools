@@ -1,5 +1,5 @@
 /**
- * Studio Tools v1.5.9
+ * Studio Tools v1.5.10
  *
  * 合并自 studioMerge v1.0.0 + studioSearch v2.2.0
  * - 工作室合并：将一个工作室合并到另一个工作室（参考 Stash 原生合并对话框风格，Stash ID 多实例值合并）
@@ -17,6 +17,23 @@ try {
   // 重复执行会堆积 MutationObserver、嵌套包装 pushState，跳过后续执行
   if (window.__studioToolsLoaded) return;
   window.__studioToolsLoaded = true;
+
+  // ─── 子路径部署辅助 ───────────────────────────────────────────────
+  // Stash 经反向代理挂在子路径下（如 /stash/，X-Forwarded-Prefix）时，index.html 的
+  // <base href> 会被改写成 /stash/，根绝对路径 "/graphql" 会打到站点根 → 404。
+  // 本站内部地址统一走 appUrl()，以 document.baseURI 为基准拼接；外部地址原样返回。
+  function appUrl(path) {
+    var p = String(path == null ? "" : path);
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(p) ||
+      p.indexOf("data:") === 0 || p.indexOf("blob:") === 0) return p;
+    try {
+      var base = document.baseURI || (location.origin + "/");
+      if (base.charAt(base.length - 1) !== "/") base += "/";
+      return new URL(p.replace(/^\/+/, ""), base).toString();
+    } catch (_) {
+      return p;
+    }
+  }
 
   // ===== 共享常量 =====
   var GRAPHQL_ENDPOINT = "/graphql";
@@ -50,7 +67,7 @@ try {
 
   // ===== 共享工具 =====
   function graphql(query, variables) {
-    return fetch(GRAPHQL_ENDPOINT, {
+    return fetch(appUrl(GRAPHQL_ENDPOINT), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: query, variables: variables || {} })

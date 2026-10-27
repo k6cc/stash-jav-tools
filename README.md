@@ -6,7 +6,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 
 | 插件 | 版本 | 类型 | 说明 |
 |------|------|------|------|
-| [sceneTranslate](./sceneTranslate/) | 2.9.3 | Python + UI | 场景/图片/图库编辑页一键翻译（Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置） |
+| [sceneTranslate](./sceneTranslate/) | 2.9.4 | Python + UI | 场景/图片/图库编辑页一键翻译（Google/Microsoft/Baidu/DeepL/OpenAI，Stash UI 可配置） |
 | [sceneGallerySync](./sceneGallerySync/) | 1.9.7 | Python + UI | 扫描入库时自动创建图库并关联影片 |
 | [studioTools](./studioTools/) | 1.5.9 | 纯 UI | 工作室合并 + 多源搜索更新 StashDB/ThePornDB/JAVStash |
 | [JavStashLinker](./JavStashLinker/) | 1.5.10 | Python + UI | 批量匹配 JAVStash 演员 ID：场景反推 + 名称搜索 + 手动搜索（证据评级，自动补图补信息） |

@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.9.3
+ * Scene Translate Plugin v2.9.4
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout/proxyPort) are stored in
@@ -94,6 +94,23 @@ try {
     );
   }
 
+  // ─── Sub-path deployment helper ───────────────────────────────────
+  // Stash 经反向代理挂在子路径下（如 /stash/，X-Forwarded-Prefix）时，index.html 的
+  // <base href> 会被改写成 /stash/，根绝对路径 "/graphql" 会打到站点根 → 404。
+  // 本站内部地址统一走 appUrl()，以 document.baseURI 为基准拼接；外部地址原样返回。
+  function appUrl(path) {
+    var p = String(path == null ? "" : path);
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(p) ||
+      p.indexOf("data:") === 0 || p.indexOf("blob:") === 0) return p;
+    try {
+      var base = document.baseURI || (location.origin + "/");
+      if (base.charAt(base.length - 1) !== "/") base += "/";
+      return new URL(p.replace(/^\/+/, ""), base).toString();
+    } catch (_) {
+      return p;
+    }
+  }
+
   // ─── Stash GraphQL (Plugin Settings) ───────────────────────────────
   // 插件设置存储在 Stash 的 config.yml 中，通过 GraphQL 读写。
   // 这样不依赖代理在线就能拿到目标语言，解决 google_free 离线模式下的配置读取问题。
@@ -101,7 +118,7 @@ try {
   var PLUGIN_ID = "sceneTranslate";
 
   function callGQL(query, variables) {
-    return fetch("/graphql", {
+    return fetch(appUrl("/graphql"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: query, variables: variables || {} }),

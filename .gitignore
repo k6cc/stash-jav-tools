@@ -29,6 +29,9 @@ forum-post-*.md
 # 论坛帖截图草稿（随帖子草稿一起留在本地，不随仓库发布）
 docs/*.png
 
+# 插件开发过程文档（设计/API 排查/实施计划，只在本地；不随仓库发布）
+docs/stashdiscover-*.md
+
 # agent 工作区数据（记忆/会话，不提交）
 .workbuddy/
 

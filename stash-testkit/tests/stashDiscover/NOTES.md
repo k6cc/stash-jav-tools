@@ -65,14 +65,18 @@ TPDB 的站点是两层结构，网页导航也分两个入口：**`Sites`**（�
 - **同名分裂是 TPDB 侧的数据问题**：`/performers?q=Emma%20Reed` 返回 6 条同名 parent，片量 59 / 1 / 105 / 2 / 71 / 0；stash_id 解析到的那条（`467421`）只有 1 条，`disambiguation` 是「Brunette, c2018, MVGCash」。插件只认 stash_id，显示 1 条是如实反映，不是 bug。**不要自动合并同名**：同一批结果里 `97320` 已有 105 条但 aliases 是 `Emma FTV / Laveah Smart`，明显是另一个人。
 - 真正 0 条的演员也存在（Emiru Natsumi Saki `261004`，名字搜到的仍是同一条、0 条场景），UI 不该把这种情况当失败。
 
-### 加入库（sceneCreate）三处必须绕开的坑
+### 加入库（sceneCreate）：三个源都验过，坑集中在封面和标签
 
-复现脚本 `verify_add_to_library.py`（dry-run 默认，`--apply` 写库，`--cleanup` 删场景）。
+复现脚本 `verify_add_to_library.py --source stashdb|javstash|theporndb`（dry-run 默认，`--apply` 写库，`--cleanup` 删场景）。
 
-- **封面不能进 `sceneCreate`**：Stash 会同步下载外链图，TPDB 的 CDN 拉不动时整个 mutation 报
-  `processing cover image: Get \"...\": EOF`，场景一条都建不出来。改成先建场景、再 `sceneUpdate{cover_image}`，失败只丢封面。`performerCreate` 的 `image` 同理，失败要退化成不带图再试一次。
+- **封面不能进 `sceneCreate`**：Stash 会同步下载外链图，拉不动时整个 mutation 报
+  `processing cover image: ...`，场景一条都建不出来。改成先建场景、再 `sceneUpdate{cover_image}`，失败只丢封面；`performerCreate` 的 `image` 同理，失败降级成不带图。
+- **封面 URL 要按「谁托管」排序，不能照源给的顺序**。stashdb/javstash 的图在源站自己的域（`stashdb.org/images/*`、`javstash.org/images/*`），稳定；TPDB 的 `image` 字段是**抓来的外站直链**，26 个域名里 13 个下载失败（`ods.manyvids.com` 404、`cruel-handjobs.com` 直接断连），而 TPDB 自家的 `background.full`（`cdn.theporndb.net`）和 `poster`（`thumb.theporndb.net`）26/26 可用。`tpdbScene` 已把候选顺序改成 background → poster → 外站 image，入库时按候选链最多试 3 个（第一个失败不代表全失败）。同一张图实测：外站直链 `http error 404`，TPDB CDN 成功。
 - **标签不能逐个 `tagCreate`**：本地库把英文名挂在中文标签上做别名（「金发」的别名含 `Blonde Hair (Female)`），逐个建会报 `name 'X' is used as alias for 'Y'`，实测 10 个标签丢 8 个。改成一次 `findTags(filter:{per_page:-1}){tags{id name aliases}}` 建 name+alias 索引，命中就不建。
+- **全量索引也可能漏别名**：库在后台扫描时新标签陆续出现，索引建好之后才入库的标签查不到，`tagCreate` 又被别名拒掉，标签就丢了。`findOrCreateTag` 在建失败（或返回空）时按 `q=<name>` 回查一次，把别名占用的标签认回来。
+- **演员头像直接给 Stash URL，别在浏览器里转 data URL**：`performerCreate.image` 两种都收，但浏览器 `fetch` 要 CORS，stashdb / javastash 的图没有 CORS 头，转 data URL 会静默失败、演员建出来没头像。现在先交 URL（Stash 服务端下载），失败才回落 data URL，最后无图。实测三源都能落头像（`image_path` 非空）。
 - **场景内演员的 `id` 是站点级记录**，本地 stash_id 要用 `parent.id`（`tpdbScene` 已按此取）。本地没有这个编号时按 `performerCreate` 补建并带 `stash_ids`，否则加入的片显示「无演员」。新建工作室同样要带 `stash_ids`，只有按名字撞到已有工作室时才不写（不改用户既有数据）。
+- **三源实测结果**（测试库 `localhost:9999`，每源一条未拥有场景，跑完即删）：stashdb `START-649` / `SDJS-383`、javstash `DSUVR-010`、theporndb `92c840f9` 全部建库成功，stash_ids / 演员 / 工作室 / 标签（5/5、10/10、9/9）齐备，封面均落在成功候选上，回查 `stash_id_endpoint` 命中 1。
 
 ## 显示口径
 
@@ -85,7 +89,7 @@ TPDB 的站点是两层结构，网页导航也分两个入口：**`Sites`**（�
 - 关联/覆盖实测用临时演员 **97 = ZZ SSD Test（本上花梨）**、**98 = ZZ SSD Test2**，测完已 `performerDestroy` 删除；`preferredBox` 临时改 `stashdb` 后已还原 `javstash.org`（连同 `jackettUrl/jackettApiKey/recentDays:180/previewDays:"7"`）。
 - Jackett 实例：`http://192.168.3.190:9117`（API key 在实例插件设置）。
 - TPDB key：`E:/stashAPP/config.yml` 里该 stash-box 块的 `apikey`；`probe_tpdb_api.py` 与 `node_tpdb_harness.js` 都从那里读，不打印。
-- **本机库没有 TPDB 演员**（`stash_id_endpoint` 过滤为 `https://theporndb.net/graphql` 的场景数为 0），发现页三块的实际渲染只能在有 TPDB 数据的真实库上验；本机能验的只有适配层的逻辑与失败路径。
+- **本机库的 TPDB 数据是测试加的**（3 个工作室 + 4 个演员），只够验适配层与入库链路；发现页三块的完整渲染仍需真实库。
 - 浏览器实测用 Chrome DevTools MCP：点击后**轮询等元素出现再断言**（异步渲染/预载/回填，立即 evaluate 会读到中间态）。
 
 ## 无数据兜底面板（v2.0.0）

@@ -2356,14 +2356,25 @@
       if (addBtn.disabled) return;
       addBtn.disabled = true;
       addBtn.textContent = tc("加入中…", "Adding…");
-      var input = { name: p.name, stash_ids: [{ endpoint: endpoint, stash_id: String(p.stashId) }] };
-      var avatarUrl = avatarPager.urls[avatarPager.idx] || "";
-      fetchImageDataUrl(avatarUrl).then(function (dataUrl) {
-        if (dataUrl) input.image = dataUrl;
+      var baseInput = { name: p.name, stash_ids: [{ endpoint: endpoint, stash_id: String(p.stashId) }] };
+      var avatarUrl = avatarPager.urls[avatarPager.idx] || p.image || "";
+      function create(input) {
         return SSD.callGQL(
           "mutation($input:PerformerCreateInput!){performerCreate(input:$input){id}}",
           { input: input }
         );
+      }
+      // 头像先直接把 URL 交给 Stash 服务端下载：浏览器侧 fetch 受 CORS 限制，
+      // stashdb / javstash 的图没有 CORS 头，转 data URL 会静默失败、头像丢失。
+      // 只有源站图连 Stash 也拉不动时，才退回浏览器转 data URL，最后才是无图。
+      var first = avatarUrl
+        ? create(Object.assign({ image: avatarUrl }, baseInput))
+        : create(baseInput);
+      first.catch(function (e) {
+        if (!avatarUrl || !/image|avatar|download|HTTP/i.test(String((e && e.message) || e))) throw e;
+        return fetchImageDataUrl(avatarUrl).then(function (dataUrl) {
+          return create(dataUrl ? Object.assign({ image: dataUrl }, baseInput) : baseInput);
+        });
       }).then(function (r) {
         var created = r && r.performerCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "empty result"));

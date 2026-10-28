@@ -440,10 +440,12 @@
     if (!raw) return null;
     var site = raw.site || null;
     var imgs = [];
-    // 顺序即封面回退顺序：外站直链（可能是 gif/动图）→ 横版背景 → 竖版 poster
-    // 横版（back_image / background / background_back）优先于竖版，符合弹层观感
-    [raw.image, raw.back_image, tpdbImgUrl(raw.background), tpdbImgUrl(raw.background_back),
-      raw.poster, raw.poster_image].forEach(function (u) {
+    // 顺序即封面回退顺序。TPDB 自家 CDN 在前，抓来的外站直链在后：
+    // 实测 26 个外站域名里 13 个下载失败（ods.manyvids.com 404、cruel-handjobs 断连），
+    // 而 cdn.theporndb.net 与 thumb.theporndb.net 26/26 可用。横版 background 优先
+    // （Stash 封面是横版位），竖版 poster 次之，外站 image 只作最后兜底。
+    [tpdbImgUrl(raw.background), raw.poster, raw.image,
+      tpdbImgUrl(raw.background_back), raw.back_image, raw.poster_image].forEach(function (u) {
       if (u && !imgs.some(function (x) { return x.url === u; })) imgs.push({ url: u });
     });
     var urls = [];
@@ -4788,7 +4790,11 @@
       // 封面不塞进 sceneCreate：Stash 会同步下载外链图，TPDB 的 CDN 连不上时
       // 整条入库直接失败（实测 "processing cover image: ... EOF"）。场景先落地，
       // 封面单独补，失败只丢封面。
-      var coverUrl = (item.images[0] || {}).url || "";
+      // 候选链逐个试：外站直链各有防盗链规则，第一个失败不代表全都失败。
+      var coverList = (item.images && item.images.length ? item.images : (sc.images || []))
+        .map(function (im) { return (im && im.url) || ""; })
+        .filter(Boolean)
+        .slice(0, 3);
 
       return callGQL(
         "mutation($input:SceneCreateInput!){sceneCreate(input:$input){id title code}}",
@@ -4796,15 +4802,18 @@
       ).then(function (data) {
         var created = data && data.sceneCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "Create returned empty result"));
-        if (!coverUrl) return created;
-        return callGQL(
-          "mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}",
-          { input: { id: created.id, cover_image: coverUrl } }
-        ).then(function () { return created; })
-          .catch(function (e) {
-            console.warn("[SSD] cover image not set:", (e && e.message) || e);
-            return created;
+        function tryCover(i) {
+          if (i >= coverList.length) return created;
+          return callGQL(
+            "mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}",
+            { input: { id: created.id, cover_image: coverList[i] } }
+          ).catch(function (e) {
+            console.warn("[SSD] cover not set (candidate " + (i + 1) + "):",
+              (e && e.message) || e);
+            return tryCover(i + 1);
           });
+        }
+        return tryCover(0);
       });
     }).then(function (created) {
       if (created && created.id) {
@@ -4898,14 +4907,35 @@
     if (!key) return Promise.resolve(null);
     return loadTagIndex().then(function (idx) {
       if (idx && idx[key]) return idx[key];
+      // 建不出来（名字被别人挂成别名 / 返回 null）时按名字回查一次再认。
+      // 索引是入库前一次性拉的，后台扫描期间新增的标签/别名查不到，建又会被
+      // 「name 'X' is used as alias for 'Y'」拒掉，不回查就会丢标签。
+      function requery() {
+        return callGQL(
+          "query($f:FindFilterType!){findTags(filter:$f){tags{id name aliases}}}",
+          { f: { q: name, per_page: 5 } }
+        ).then(function (d) {
+          var tags = ((d || {}).findTags || {}).tags || [];
+          for (var i = 0; i < tags.length; i++) {
+            var t = tags[i] || {};
+            var hit = String(t.name || "").toLowerCase() === key ||
+              (t.aliases || []).some(function (a) { return a && String(a).toLowerCase() === key; });
+            if (hit) {
+              if (idx) idx[key] = t.id;
+              return t.id;
+            }
+          }
+          return null;
+        }).catch(function () { return null; });
+      }
       return callGQL(
         "mutation($input:TagCreateInput!){tagCreate(input:$input){id}}",
         { input: { name: name } }
       ).then(function (d) {
         var id = d.tagCreate ? d.tagCreate.id : null;
         if (id && idx) idx[key] = id;
-        return id;
-      }).catch(function () { return null; });
+        return id || requery();
+      }).catch(requery);
     }).catch(function () { return null; });
   }
 

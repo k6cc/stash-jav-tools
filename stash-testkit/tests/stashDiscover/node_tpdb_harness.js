@@ -111,7 +111,7 @@ function loadAdapter() {
   sandbox.__out = {};
 
   const wrapped = chunk +
-    "\n;Object.assign(__out, {callBoxSceneList, TPDB_MAX_PAGES_BATCH, tpdbResolveIds, tpdbResolvePerformer});";
+    "\n;Object.assign(__out, {callBoxSceneList, TPDB_MAX_PAGES_BATCH, tpdbResolveIds, tpdbResolvePerformer, tpdbScene});";
   vm.createContext(sandbox);
   vm.runInContext(wrapped, sandbox, { filename: "stashDiscover-tpdb.js" });
   return { api: sandbox.__out, store };
@@ -174,6 +174,17 @@ const CASES = {
   },
   async batchFive(seed) {
     return brief(await callBoxSceneList(box, pick(seed.uuids.slice(0, 5), { date: { value: since(), modifier: "GREATER_THAN" } })));
+  },
+  // 封面候选顺序：TPDB 自家 CDN（cdn/thumb.theporndb.net）必须排在抓来的
+  // 外站直链前面 —— 外站防盗链实测一半失败，Stash 下载失败就只剩无封面的片。
+  async coverOrder() {
+    const r = await callBoxSceneList(box, { per_page: 3, page: 1, direction: "DESC" });
+    const samples = (r.scenes || []).map((sc) => ({
+      title: String(sc.title || "").slice(0, 26),
+      hosts: (sc.images || []).map((im) => String(im.url || "").split("/")[2]),
+    }));
+    const selfHosted = samples.every((s) => s.hosts.length && /theporndb\.net$/.test(s.hosts[0]));
+    return { count: samples.length, selfHostedFirst: selfHosted, samples };
   },
   // 幽灵 uuid 必须进 skipped，不能整块抛错（论坛三块总览一起红的根因）
   async ghost() {

@@ -20,7 +20,7 @@ stash-testkit/
 │   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
 │   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
 │   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
-│   ├── stashDiscover/       # 发现页/弹窗/Jackett 链路业务语义（NOTES.md）
+│   ├── stashDiscover/       # 发现页/弹窗/Jackett 链路业务语义 + TPDB REST 探针（NOTES.md）
 │   └── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
@@ -84,9 +84,11 @@ stash-testkit/
 - **box tag 网页 URL**：`endpoint 去 /graphql 尾 + "/tags/" + remote_site_id`，三 box 同构。
 - **stash-box `findPerformer` 有 `birth_date` + `country`**：country 是 ISO 3166-1 alpha-2 两字码（如 JP），直接可查（javstash 实测）。
 - **国籍国旗别用 emoji**：Windows 的 Segoe UI Emoji 不渲染国旗字形（显示成两字母），用 `flagcdn.com/w40/<小写码>.png` + `onerror` 回退国家码文本。
+- **TPDB 场景列表只能走 REST，批量过滤是 deepObject**：`/scenes?performers[整数_id]=x&performers[...]=x`，**值被忽略、只认键**，多键 OR 相加；uuid 当键返回 0 条，`per_page` 顶 100。它的 stash-box GraphQL `queryScenes` 恒返回 `{count, scenes:null}`。语义与探针见 `tests/stashDiscover/NOTES.md`。
 
 ### 工具链
 
+- **Node 的 fetch 默认不读 `HTTPS_PROXY`**：脚本要过代理得自己起 CONNECT 隧道（`tests/stashDiscover/node_tpdb_harness.js` 已内置这套做法）。
 - **GraphQL 查询写 `.py` 脚本文件**，别在 PowerShell 命令行内联（`$id`/`!` 被插值导致 422）。
 - **破坏性测试前备份**：实例数据目录或 `stash-go.sqlite`。
 - **测流媒体/播放别用 `--virtual-time-budget`**：headless Chrome 加该参数时媒体时钟不推进、`currentTime` 恒为 0，验证播放与 seek 恢复必须跑真实时间。
@@ -108,7 +110,7 @@ stash-testkit/
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
-| `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、标记协议、显示映射、测试环境），见 `tests/stashDiscover/NOTES.md` |
+| `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、结果通道、显示映射、TPDB REST 语义、测试环境），见 `tests/stashDiscover/NOTES.md`；**探针**：`probe_tpdb_api.py`（TPDB REST 语义：批量 deepObject / uuid→整数 id / 分页上限 / 稳定性）、`node_tpdb_harness.js`（Node 里加载插件 TPDB 适配层跑真实源，不起 UI 也能验证，改适配层后先过一遍） |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 | `tests/ImageMetaSync/` | 图库图片元数据回填端到端验证（`verify_image_meta_sync.py`：快照/清空/任务/钩子/差异对比） |
 

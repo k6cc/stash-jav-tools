@@ -19,9 +19,25 @@
 
 ## Jackett 搜索链路
 
-- 前端 `runPluginTask(stashDiscover, Search Resources)` → 后端查 Jackett Torznab → 结果 JSON 以 `[SSD_RESULT]` marker 写 stderr → 前端轮询 Stash `logs` 匹配 marker（logs 新→旧，**正序第一个即最新**）。
+- 前端 `runPluginOp("search", {query})` → `mutation runPluginOperation(plugin_id, args)` → 插件 stdout 输出**唯一一条** `{"output": ...}`（错误走 `{"error": "..."}`）。同步调用，请求返回即结果：无任务 ID、无轮询、无日志中转。
+- **别再改回用 `query{logs}` 取结果**：logs 只留 30 条、单行超 64KB 截断、失败无声；Jackett 多索引器一次就有 80KB。
+- **别用插件目录当结果通道**：`ui.assets: /: .` 挂出来的目录匿名可读、可列目录（`.py` 源码可下）。
+- 插件 stdout 只能一条 JSON，多打一行就退化成 raw string；排查用的日志走 stderr。
 - `jackettUrl` 支持只填根地址（`http://host:9117`），后端自动补全 `/api/v2.0/indexers/all/results/torznab`；`apikey` 参数必带。
-- 结果排序：带磁力优先，再按 seeders 降序；搜索词自动推断（jav 用番号、欧美用标题），结果区顶部搜索框可改词重搜。
+- 结果排序：带磁力优先，再按 seeders 降序；上限 200 条（`SEARCH_RESULT_LIMIT`），超出时抬头显示源侧真实总数。
+- 搜索词推断：`looksLikeCode()` 白名单判定（长度 > 24 / 含空格或点 / uuid → 不是番号），像番号才用 `code`，否则用 `title`。TPDB 的 code 形如 `japanhdv.com-6097`，带点 → 判成非番号 → 走标题。
+
+## TPDB 适配层（REST，不走 stash-box GraphQL）
+
+TPDB 的 GraphQL 只有 11 个 query，`queryScenes` 恒返回 `{count, scenes:null}`，所以场景列表走公开 REST `https://api.theporndb.net`（key 取该 box 配置里的 `apikey`）。动这块之前先跑 `probe_tpdb_api.py`。
+
+- **批量过滤是 deepObject**：`/scenes?performers[88334]=x&performers[94042]=x`，**值被忽略、只认键**；多键按 OR 合并，`meta.total` 直接相加。写 `performers[]=uuid` 或用 uuid 当键 → 0 条。
+- **键必须是整数 id**：演员用 `_id`（`/performers/{uuid}`），站点用 `id`（`/sites/{uuid}`）。
+- **演员 id 分两层**：`is_parent:false` 是站点级记录，打 `/performers/{uuid}/scenes` 直接 404。旧实现用 `Promise.all` 零容错，一个这种 id 就让总览三块一起红（论坛反馈的实际根因）；现在解析失败只进 `skipped[]`。
+- **没有批量解析 uuid 的接口**：`ids[]=` / `ids=a,b` / `uuid[]=` / `performer_ids[]=` 全被忽略（返回默认列表，不报错）。首次进页面必然有 N 次解析请求，结果落 `localStorage` 的 `ssd.tpdb.intIds`（`{id,p}`，`p=0` 为站点级；失败记 `{bad:1,t}`，7 天内不重试）。
+- `per_page` 硬顶 100；`total` 封顶 10000，`page > 100` 数据错乱；`date` 与 `orderBy` 可同时给。`/changes` 只回溯 14 天，不能当全量增量源。
+- 翻页上限 `TPDB_MAX_PAGES_BATCH = 5` 页 + 时间预算 `TPDB_BATCH_BUDGET_MS = 8000`：每页实测 2–5 秒，翻满 5 页要 10–20 秒，首屏等不了；超预算按截断处理并在 UI 提示。
+- 站点维度比演员慢（同一批数据翻页更多）：实测 500 条 19.3s，加预算后 9.8s / 300 条。
 
 ## 显示口径
 
@@ -33,6 +49,8 @@
 - 实例 `http://localhost:9999`（登录凭据见 `screenshots/creds.json`，不入库）；演员 **43 = AIKA**（javstash + stashdb 双源）；非本地映射演员用篠田ゆう（javstash）。
 - 关联/覆盖实测用临时演员 **97 = ZZ SSD Test（本上花梨）**、**98 = ZZ SSD Test2**，测完已 `performerDestroy` 删除；`preferredBox` 临时改 `stashdb` 后已还原 `javstash.org`（连同 `jackettUrl/jackettApiKey/recentDays:180/previewDays:"7"`）。
 - Jackett 实例：`http://192.168.3.190:9117`（API key 在实例插件设置）。
+- TPDB key：`E:/stashAPP/config.yml` 里该 stash-box 块的 `apikey`；`probe_tpdb_api.py` 与 `node_tpdb_harness.js` 都从那里读，不打印。
+- **本机库没有 TPDB 演员**（`stash_id_endpoint` 过滤为 `https://theporndb.net/graphql` 的场景数为 0），发现页三块的实际渲染只能在有 TPDB 数据的真实库上验；本机能验的只有适配层的逻辑与失败路径。
 - 浏览器实测用 Chrome DevTools MCP：点击后**轮询等元素出现再断言**（异步渲染/预载/回填，立即 evaluate 会读到中间态）。
 
 ## 无数据兜底面板（v2.0.0）

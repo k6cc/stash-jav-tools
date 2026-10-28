@@ -629,8 +629,9 @@
   }
 
   // ── 2.3 SWR 缓存（localStorage，按源 host + 窗口参数分键）────────────────
+  // .v3（2026-10-29）：工作室查询场景的 studio 归位到被查工作室，旧缓存里是子站点 id
   // .v2（2026-10-25）：场景数据 performers 增 images 字段，旧缓存无共同出演头像
-  function cacheKey(host, family) { return LS_PREFIX + host + ":" + family + ".v2"; }
+  function cacheKey(host, family) { return LS_PREFIX + host + ":" + family + ".v3"; }
 
   function cacheRead(host, family, wantSince) {
     try {

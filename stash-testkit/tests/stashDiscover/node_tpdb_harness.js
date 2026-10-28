@@ -131,6 +131,9 @@ const box = { endpoint: "https://theporndb.net/graphql", apiKey: loadKey(), name
 // 站点级演员记录（Emma Reed 在某厂牌下的个人页，is_parent:false）。
 // 打 /performers/{uuid} 和 /performers/{uuid}/scenes 都是 404，用来验名字回退。
 const SITE_LEVEL_UUID = "bf020063-768f-4cab-8bff-e3d8d14d3980";
+// 父/子站点（ManyVids 5502 / Manyvids: Lizzy Maestro 75219），用来验场景归位
+const PARENT_STUDIO_UUID = "1edfe032-9128-4340-a5ac-bf91619583e5";
+const CHILD_STUDIO_UUID = "830325e3-b9f4-493d-b601-2a94bd51c4c5";
 
 const pick = (list, extra) => Object.assign({
   performers: { value: list, modifier: "INCLUDES" },
@@ -233,6 +236,35 @@ const CASES = {
   async nameFallbackNoHint() {
     const id = await api.tpdbResolvePerformer(box, SITE_LEVEL_UUID, "", 28000);
     return { intId: id };
+  },
+  // 父站点聚合返回的场景，site 字段指向子站点。适配层必须把它们归回被查的工作室，
+  // 否则总览按 scene.studio.id 分组会拆成几百个「工作室」。
+  // 期望：单工作室 distinct=1；两个工作室 distinct<=2。
+  async studioAttribution() {
+    const one = await callBoxSceneList(box, {
+      studios: { value: [PARENT_STUDIO_UUID], modifier: "INCLUDES" },
+      per_page: 100, page: 1, direction: "DESC",
+    });
+    const cnt = {};
+    (one.scenes || []).forEach((s) => {
+      const k = (s.studio && s.studio.id) || "none";
+      cnt[k] = (cnt[k] || 0) + 1;
+    });
+    const two = await callBoxSceneList(box, {
+      studios: { value: [PARENT_STUDIO_UUID, CHILD_STUDIO_UUID], modifier: "INCLUDES" },
+      per_page: 100, page: 1, direction: "DESC",
+    });
+    const cnt2 = {};
+    (two.scenes || []).forEach((s) => {
+      const k = (s.studio && s.studio.id) || "none";
+      cnt2[k] = (cnt2[k] || 0) + 1;
+    });
+    return {
+      singleDistinct: Object.keys(cnt).length,
+      singleKeys: Object.keys(cnt),
+      twoDistinct: Object.keys(cnt2).length,
+      twoKeys: Object.keys(cnt2),
+    };
   },
 };
 

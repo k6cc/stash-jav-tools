@@ -366,18 +366,20 @@
     });
   }
 
-  // 一批 uuid → { ids: [整数], skipped: [uuid] }，并发 4。
+  // 一批 uuid → { ids: [整数], skipped: [uuid], byId: {整数: uuid} }，并发 4。
+  // byId 用于「按工作室查询」时把召回的场景归回被查的那个工作室（见 tpdbSinceScenes）。
   function tpdbResolveIds(box, kind, uuids, timeoutMs) {
-    var ids = [], skipped = [], idx = 0;
+    var ids = [], skipped = [], byId = {}, idx = 0;
     function wave() {
-      if (idx >= uuids.length) return { ids: ids, skipped: skipped };
+      if (idx >= uuids.length) return { ids: ids, skipped: skipped, byId: byId };
       var chunk = uuids.slice(idx, idx + 4);
       idx += 4;
       return Promise.all(chunk.map(function (u) {
         return tpdbResolveId(box, kind, u, timeoutMs);
       })).then(function (res) {
         res.forEach(function (id, i) {
-          if (id != null) ids.push(id); else skipped.push(chunk[i]);
+          if (id != null) { ids.push(id); byId[id] = chunk[i]; }
+          else skipped.push(chunk[i]);
         });
         return wave();
       });
@@ -496,6 +498,13 @@
     };
   }
 
+  // 按工作室查询时把场景归回被查的工作室（见 tpdbSinceScenes 的同一处理由）。
+  function tpdbStampStudio(res, uuid) {
+    if (!res || !res.scenes || !uuid) return res;
+    res.scenes.forEach(function (s) { if (s.studio) s.studio.id = uuid; });
+    return res;
+  }
+
   // 单个演员/站点的分页。
   // 演员 DESC：先用 uuid 打 `/performers/{uuid}/scenes` 子资源 —— parent uuid 实测可用，
   //   吃 per_page/page/orderBy、字段与 /scenes 一致，省掉一次 uuid→整数的解析请求。
@@ -538,11 +547,12 @@
         // 单站点走 site_id + site_operation，单演员走 performers[] 单键
         return tpdbGet(box, tpdbPagePaths(kind, [intId], perPage, p, "")[0], timeoutMs);
       }
+      var ownerStudio = kind === "studio" ? id : "";
       if (!asc) {
         // 接口固定按日期倒序
         return get(pageNum).then(function (j) {
           _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
-          return tpdbResult(j, false);
+          return tpdbStampStudio(tpdbResult(j, false), ownerStudio);
         });
       }
       // ASC：REST 排序参数被忽略 → 页号镜像 + 页内倒序
@@ -553,7 +563,7 @@
       });
       return ready.then(function (last) {
         var target = Math.max(1, last - pageNum + 1);
-        return get(target).then(function (j) { return tpdbResult(j, true); });
+        return get(target).then(function (j) { return tpdbStampStudio(tpdbResult(j, true), ownerStudio); });
       });
     });
   }
@@ -583,8 +593,12 @@
           }, function () { return null; });
         })).then(function (pages) {
           var reachedOld = false, got = 0, maxLast = 1;
-          pages.forEach(function (j) {
+          pages.forEach(function (j, idx) {
             if (!j) return;
+            // 工作室查询的第一层返回的是子站点（site_operation=Site/Parent 会带出
+            // 全部子站点的片），场景的 site 字段指向子站点。总览按场景的 studio 分组，
+            // 不归位就会把 500 条片拆成几百个「工作室」——顺手把每工作室上限也一起冲垮。
+            var owner = (kind === "studio" && r.byId) ? r.byId[r.ids[idx]] : "";
             var rows = asArr(j.data);
             got += rows.length;
             rows.forEach(function (raw) {
@@ -593,6 +607,7 @@
               if (since && !(s.release_date && s.release_date > since)) { reachedOld = true; return; }
               if (seen[s.id]) return;
               seen[s.id] = true;
+              if (owner && s.studio) s.studio = { id: owner, name: s.studio.name };
               out.push(s);
             });
             var last = (j.meta && j.meta.last_page) || 1;
@@ -4700,22 +4715,29 @@
 
     var endpoint = item.endpoint;
 
-    // Map all performers from box to local IDs by stash_id
+    // Map all performers from box to local IDs by stash_id; 本地没有编号的按源记录补建，
+    // 否则加入的片只会关联到已有演员，新面孔全丢（显示「无演员」）
     var perfMapPromise = buildLocalPerformerStashIdMap(endpoint).then(function (map) {
       var ids = [];
+      var pend = [];
       (sc.performers || []).forEach(function (p) {
-        if (p.performer && p.performer.id) {
-          var localP = map[String(p.performer.id).toLowerCase()];
-          if (localP) ids.push(localP.id);
-        }
+        var pf = p && p.performer;
+        if (!pf || !pf.id) return;
+        var localP = map[String(pf.id).toLowerCase()];
+        if (localP) { ids.push(localP.id); return; }
+        pend.push(findOrCreatePerformer(endpoint, pf.id, pf.name,
+          (pf.images && pf.images[0] || {}).url));
       });
-      // Ensure current performer is included even if stash_id mapping misses.
-      // Discover-page items (item._dp) have no "current performer" — the
-      // scene's own cast mapping is the only attribution source there.
-      if (!item._dp && _state.performerId && ids.indexOf(_state.performerId) === -1) {
-        ids.push(_state.performerId);
-      }
-      return ids;
+      return Promise.all(pend).then(function (created) {
+        created.forEach(function (id) { if (id) ids.push(id); });
+        // Ensure current performer is included even if stash_id mapping misses.
+        // Discover-page items (item._dp) have no "current performer" — the
+        // scene's own cast mapping is the only attribution source there.
+        if (!item._dp && _state.performerId && ids.indexOf(_state.performerId) === -1) {
+          ids.push(_state.performerId);
+        }
+        return ids;
+      });
     });
 
     // Map studio by stash_id
@@ -4723,8 +4745,8 @@
     if (sc.studio && sc.studio.id) {
       studioPromise = findLocalStudioByStashId(endpoint, sc.studio.id).then(function (id) {
         if (id) return id;
-        // Fallback: find or create by name
-        return findOrCreateStudio(sc.studio.name);
+        // Fallback: find or create by name（新建时带上源编号）
+        return findOrCreateStudio(sc.studio.name, sc.studio.id, endpoint);
       });
     } else if (sc.studio && sc.studio.name) {
       studioPromise = findOrCreateStudio(sc.studio.name);
@@ -4763,8 +4785,10 @@
       if (studioId) input.studio_id = studioId;
       if (sc.director) input.director = sc.director;
 
+      // 封面不塞进 sceneCreate：Stash 会同步下载外链图，TPDB 的 CDN 连不上时
+      // 整条入库直接失败（实测 "processing cover image: ... EOF"）。场景先落地，
+      // 封面单独补，失败只丢封面。
       var coverUrl = (item.images[0] || {}).url || "";
-      if (coverUrl) input.cover_image = coverUrl;
 
       return callGQL(
         "mutation($input:SceneCreateInput!){sceneCreate(input:$input){id title code}}",
@@ -4772,7 +4796,15 @@
       ).then(function (data) {
         var created = data && data.sceneCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "Create returned empty result"));
-        return created;
+        if (!coverUrl) return created;
+        return callGQL(
+          "mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}",
+          { input: { id: created.id, cover_image: coverUrl } }
+        ).then(function () { return created; })
+          .catch(function (e) {
+            console.warn("[SSD] cover image not set:", (e && e.message) || e);
+            return created;
+          });
       });
     }).then(function (created) {
       if (created && created.id) {
@@ -4800,7 +4832,25 @@
     });
   }
 
-  function findOrCreateStudio(name) {
+  // 本地没有这个编号的演员时补建，带上源编号。
+  // 头像同样是外链下载，失败会让整个 performerCreate 报错 → 去掉图再建一次。
+  function findOrCreatePerformer(endpoint, stashId, name, imageUrl) {
+    var nm = name || tc("未知演员", "Unknown");
+    var stashIds = [{ endpoint: endpoint, stash_id: String(stashId) }];
+    function create(withImage) {
+      var input = { name: nm, stash_ids: stashIds };
+      if (withImage && imageUrl) input.image = imageUrl;
+      return callGQL(
+        "mutation($input:PerformerCreateInput!){performerCreate(input:$input){id}}",
+        { input: input }
+      ).then(function (d) { return (d.performerCreate || {}).id || null; });
+    }
+    return create(true).catch(function () {
+      return create(false).catch(function () { return null; });
+    });
+  }
+
+  function findOrCreateStudio(name, stashId, endpoint) {
     return callGQL(
       "query($f:FindFilterType!){findStudios(filter:$f){studios{id name}}}",
       { f: { q: name, per_page: 5 } }
@@ -4809,26 +4859,53 @@
       for (var i = 0; i < studios.length; i++) {
         if (studios[i].name.toLowerCase() === name.toLowerCase()) return studios[i].id;
       }
+      var input = { name: name };
+      // 新建时带上源编号，否则这条工作室在库里永远认不出源（下次只能靠名字撞）
+      if (stashId && endpoint) input.stash_ids = [{ endpoint: endpoint, stash_id: String(stashId) }];
       return callGQL(
         "mutation($input:StudioCreateInput!){studioCreate(input:$input){id}}",
-        { input: { name: name } }
+        { input: input }
       ).then(function (d) { return d.studioCreate ? d.studioCreate.id : null; });
     }).catch(function () { return null; });
   }
 
+  // 本地标签的 name / alias → id 索引。
+  // 不能每个标签单独 findTags + tagCreate：本地库把英文名挂成中文标签的别名
+  // （「金发」的别名含 Blonde Hair (Female)），逐个建会被
+  // `name 'X' is used as alias for 'Y'` 拒掉，实测 10 个标签丢 8 个。
+  // 一次拉全量，按 name 与别名双向匹配。
+  var _tagIndex = null;
+
+  function loadTagIndex() {
+    if (_tagIndex) return Promise.resolve(_tagIndex);
+    return callGQL("query{findTags(filter:{per_page:-1}){tags{id name aliases}}}")
+      .then(function (d) {
+        var idx = {};
+        (((d || {}).findTags || {}).tags || []).forEach(function (t) {
+          if (t && t.name) idx[String(t.name).toLowerCase()] = t.id;
+          (t && t.aliases || []).forEach(function (a) {
+            if (a) idx[String(a).toLowerCase()] = t.id;
+          });
+        });
+        _tagIndex = idx;
+        return idx;
+      })
+      .catch(function () { return null; });
+  }
+
   function findOrCreateTag(name) {
-    return callGQL(
-      "query($f:FindFilterType!){findTags(filter:$f){tags{id name}}}",
-      { f: { q: name, per_page: 5 } }
-    ).then(function (data) {
-      var tags = ((data.findTags || {}).tags) || [];
-      for (var i = 0; i < tags.length; i++) {
-        if (tags[i].name.toLowerCase() === name.toLowerCase()) return tags[i].id;
-      }
+    var key = String(name || "").trim().toLowerCase();
+    if (!key) return Promise.resolve(null);
+    return loadTagIndex().then(function (idx) {
+      if (idx && idx[key]) return idx[key];
       return callGQL(
         "mutation($input:TagCreateInput!){tagCreate(input:$input){id}}",
         { input: { name: name } }
-      ).then(function (d) { return d.tagCreate ? d.tagCreate.id : null; });
+      ).then(function (d) {
+        var id = d.tagCreate ? d.tagCreate.id : null;
+        if (id && idx) idx[key] = id;
+        return id;
+      }).catch(function () { return null; });
     }).catch(function () { return null; });
   }
 

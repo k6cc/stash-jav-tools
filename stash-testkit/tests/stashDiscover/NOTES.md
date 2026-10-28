@@ -56,6 +56,7 @@ TPDB 的站点是两层结构，网页导航也分两个入口：**`Sites`**（�
 - **`Site/Parent` 不要换成 `Site/Parent/Network`**：后者在测过的 6 个厂牌上与 `S/P` 完全一致，但在 Czech Casting 上多出 611 条（`Network` 的边界不明确），有把兄弟品牌混进来的风险。
 - **`site_operation` 只认单值 `site_id`**：和 `sites[]` deepObject 同时给 → 返回 0 条；`site_id` 传两次也不 OR。站点维度只能一个站点一个请求（演员维度仍用 `performers[]` 批量）。
 - 父站点场景量常见过万，`total` 会顶在 10000，靠 `date` 窗口 + 页数上限收窄；命中上限时 UI 要提示截断。
+- **聚合回来的场景挂在子站点上**：`site_operation=Site/Parent` 返回的每条场景，`site` 字段是它真正的子站点（`Manyvids: AriaNicoleXXX` 之类），不是被查的父站点。总览按 `scene.studio.id` 分组，不归位就会把 500 条片拆成几百个「工作室」、并把每工作室上限一起冲垮。适配层把场景的 `studio.id` 覆盖成被查的 uuid（`tpdbSinceScenes` 用 `byId` 对应，`tpdbIdPage` 用 `tpdbStampStudio`），`discover.js` 缓存版本同步升到 `.v3`。
 - **401 先查 key 指的是哪个源**：`config.yml` 的 `stash_boxes` 里 key 必须与 `endpoint` 配对。用「先找 theporndb、再往回抓最近的 apikey」的写法会拿到上一个 box（javstash 的 JWT，185 字符 vs 真实 TPDB key 48 字符），请求发得出去但大面积 401，看上去跟限流一模一样。换对 key 后 15 次连打 0 次 401（6.6s），说明 TPDB 没有这个速率限制。稳定 401 仍有个别站点级特例（Adult Candy Store `5995`），重试无用、只能跳过。
 
 ### 演员没有层级坑，但有同名分裂
@@ -63,6 +64,15 @@ TPDB 的站点是两层结构，网页导航也分两个入口：**`Sites`**（�
 - **parent 记录本身就是全量**：`/performers/{id}` 返回的 `site_performers[]`（站点级记录）逐个打 scenes 全是 0 条，父记录自己 59 条 —— 演员维度不需要像站点那样做子树聚合。
 - **同名分裂是 TPDB 侧的数据问题**：`/performers?q=Emma%20Reed` 返回 6 条同名 parent，片量 59 / 1 / 105 / 2 / 71 / 0；stash_id 解析到的那条（`467421`）只有 1 条，`disambiguation` 是「Brunette, c2018, MVGCash」。插件只认 stash_id，显示 1 条是如实反映，不是 bug。**不要自动合并同名**：同一批结果里 `97320` 已有 105 条但 aliases 是 `Emma FTV / Laveah Smart`，明显是另一个人。
 - 真正 0 条的演员也存在（Emiru Natsumi Saki `261004`，名字搜到的仍是同一条、0 条场景），UI 不该把这种情况当失败。
+
+### 加入库（sceneCreate）三处必须绕开的坑
+
+复现脚本 `verify_add_to_library.py`（dry-run 默认，`--apply` 写库，`--cleanup` 删场景）。
+
+- **封面不能进 `sceneCreate`**：Stash 会同步下载外链图，TPDB 的 CDN 拉不动时整个 mutation 报
+  `processing cover image: Get \"...\": EOF`，场景一条都建不出来。改成先建场景、再 `sceneUpdate{cover_image}`，失败只丢封面。`performerCreate` 的 `image` 同理，失败要退化成不带图再试一次。
+- **标签不能逐个 `tagCreate`**：本地库把英文名挂在中文标签上做别名（「金发」的别名含 `Blonde Hair (Female)`），逐个建会报 `name 'X' is used as alias for 'Y'`，实测 10 个标签丢 8 个。改成一次 `findTags(filter:{per_page:-1}){tags{id name aliases}}` 建 name+alias 索引，命中就不建。
+- **场景内演员的 `id` 是站点级记录**，本地 stash_id 要用 `parent.id`（`tpdbScene` 已按此取）。本地没有这个编号时按 `performerCreate` 补建并带 `stash_ids`，否则加入的片显示「无演员」。新建工作室同样要带 `stash_ids`，只有按名字撞到已有工作室时才不写（不改用户既有数据）。
 
 ## 显示口径
 

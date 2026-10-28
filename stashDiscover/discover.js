@@ -1589,11 +1589,22 @@
     // blur(30px)，filter 作用于整个子树，角标会被一起糊掉（用户 2026-10-28）。
     var badgeHost = card.querySelector(".thumbnail-section") || card.querySelector(".scene-card-preview");
     if (badgeHost) {
+      // 角标归拢进一个竖向堆叠的容器：① 多个角标同时出现时（预告 + 库内演员）
+      // 不再互相压在同一坐标上；② 位置由容器一处控制，「默认角标位置」才能只切
+      // 一个属性（用户 2026-10-28）。发现页的源徽章恒不渲染（cardCtx 传空
+      // queryBoxes），容器里实际是 预告 / 距上映天数 / 库内演员。
+      var badgeBox = badgeHost.querySelector(".ssd-badges");
+      if (!badgeBox) {
+        badgeBox = el("div", "ssd-badges");
+        var moved = badgeHost.querySelectorAll(".ssd-overlay-box, .ssd-overlay-preview");
+        for (var bi = 0; bi < moved.length; bi++) badgeBox.appendChild(moved[bi]);
+        badgeHost.appendChild(badgeBox);
+      }
       if (opts.days) {
-        var old = badgeHost.querySelector(".ssd-overlay-preview");
+        var old = badgeBox.querySelector(".ssd-overlay-preview");
         if (old) old.remove();
         if (sc.release_date && sc.release_date > SSD.localDateStr(new Date())) {
-          badgeHost.appendChild(el("span", "ssd-overlay-days", daysUntilText(sc.release_date)));
+          badgeBox.appendChild(el("span", "ssd-overlay-days", daysUntilText(sc.release_date)));
         }
       }
       // 徽章语义是「这部片里有你库内的演员」，不是「这部片已入库」——
@@ -1605,7 +1616,7 @@
         // 掉半张封面），缩写取 "Known"，完整解释放 title（用户 2026-10-28）
         var libBadge = el("span", "ssd-overlay-inlib", tc("库内演员", "Known"));
         libBadge.title = tc("这部片里有你库内的演员", "Features a performer in your library");
-        badgeHost.appendChild(libBadge);
+        badgeBox.appendChild(libBadge);
       }
     }
     if (opts.unread) {
@@ -2393,6 +2404,8 @@
     // 档位随发现页滑块（用户 2026-10-28）：弹层不在 .ssd-dp-page 内，
     // 必须自己带一份 data-csize，CSS 才能算出 --ssd-card-min
     sc.setAttribute("data-csize", String(_dp.csize));
+    // 角标三件套同理：弹层此时还没挂进 DOM，显式传节点写一次
+    applyBadgePrefs([sc]);
     sc.appendChild(el("h4", "ssd-dp-pfsect", tc("相关场景", "Related scenes")));
     var scBody = el("div");
     sc.appendChild(scBody);
@@ -3078,6 +3091,92 @@
     secG.appendChild(rowI);
     wrap.appendChild(secG);
 
+    // ── 场景卡角标（用户 2026-10-28）─────────────────────────────────────
+    // 三项都只切 CSS 属性，改完立即生效，不必重建卡片（重建会打断弹层与滚动位置）
+    wrap.appendChild(el("h3", "ssd-dp-set-h", tc("场景卡角标", "Scene card badges")));
+    var secB = el("div", "ssd-dp-set-box");
+
+    // 工作室名（原生 .studio-overlay）：隐藏 / 右上（默认）/ 左上
+    // 「左上」与「默认角标位置 = 左上」互斥 —— 左上角只放一组，选了这边另一组
+    // 自动让位（见下方 setStudio / setPos 的联动）
+    var rowB1 = el("div", "ssd-dp-setrow");
+    rowB1.appendChild(el("span", "ssd-dp-setname", tc("显示工作室角标", "Show studio badge")));
+    var selStudio = document.createElement("select");
+    selStudio.className = "ssd-dp-setsel";
+    [["none", tc("隐藏", "Hidden")], ["tr", tc("右上", "Top right")], ["tl", tc("左上", "Top left")]]
+      .forEach(function (o) {
+        var op = document.createElement("option");
+        op.value = o[0];
+        op.textContent = o[1];
+        selStudio.appendChild(op);
+      });
+    selStudio.value = dpStudioBadge();
+    var setStudio = function (v) {
+      dpSetPrefs({ studioBadge: v });
+      // 工作室占住左上 → 自定义角标让到左下
+      if (v === "tl") dpSetPrefs({ badgePos: "bl" });
+      syncBadgeSelects();
+      applyBadgePrefs();
+    };
+    selStudio.addEventListener("change", function () { setStudio(selStudio.value); });
+    rowB1.appendChild(selStudio);
+    secB.appendChild(rowB1);
+
+    // 右下角时长（原生 .scene-specs-overlay）：文字 = 现在的白字 + 阴影
+    var durLabel = tc("显示时长角标", "Show duration badge");
+    var rowB2 = el("div", "ssd-dp-setrow");
+    rowB2.appendChild(el("span", "ssd-dp-setname", durLabel));
+    var selDur = document.createElement("select");
+    selDur.className = "ssd-dp-setsel";
+    [["none", tc("隐藏", "Hidden")], ["text", tc("文字", "Text")], ["badge", tc("徽章", "Pill")]]
+      .forEach(function (o) {
+        var op = document.createElement("option");
+        op.value = o[0];
+        op.textContent = o[1];
+        selDur.appendChild(op);
+      });
+    selDur.value = dpDurBadge();
+    selDur.addEventListener("change", function () {
+      dpSetPrefs({ durBadge: selDur.value });
+      applyBadgePrefs();
+    });
+    rowB2.appendChild(selDur);
+    secB.appendChild(rowB2);
+
+    // 自定义角标（预告 / 距上映天数 / 库内演员）贴哪一侧
+    var posLabel = tc("默认角标位置", "Default badge position");
+    var rowB3 = el("div", "ssd-dp-setrow");
+    rowB3.appendChild(el("span", "ssd-dp-setname", posLabel));
+    var selPos = document.createElement("select");
+    selPos.className = "ssd-dp-setsel";
+    [["tl", tc("左上", "Top left")], ["bl", tc("左下", "Bottom left")]]
+      .forEach(function (o) {
+        var op = document.createElement("option");
+        op.value = o[0];
+        op.textContent = o[1];
+        selPos.appendChild(op);
+      });
+    selPos.value = dpBadgePos();
+    selPos.addEventListener("change", function () {
+      dpSetPrefs({ badgePos: selPos.value });
+      // 自定义角标要占左上 → 工作室角标（若也在左上）让到右上
+      if (selPos.value === "tl" && dpStudioBadge() === "tl") dpSetPrefs({ studioBadge: "tr" });
+      syncBadgeSelects();
+      applyBadgePrefs();
+    });
+    rowB3.appendChild(selPos);
+    secB.appendChild(rowB3);
+    // 联动会改到另一个下拉的值，这里把两个 select 拉回实际偏好（静默，不提示）
+    function syncBadgeSelects() {
+      selStudio.value = dpStudioBadge();
+      selPos.value = dpBadgePos();
+    }
+
+    secB.appendChild(el("div", "ssd-dp-sethint", tc(
+      "只作用于发现页与演员弹层里的场景卡；演员详情「发现」标签保持原样。",
+      "Applies to scene cards on the Discover page and in performer dialogs only; the performer-page Discover tab is unchanged.")));
+    wrap.appendChild(secB);
+
     // ── 显示上限（平铺列表：每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("显示上限", "Display limits")));
     var secC = el("div", "ssd-dp-set-box");
@@ -3468,6 +3567,7 @@
     bindToolbarDismiss();
     syncSourceSelect();
     applyCardSize();
+    applyBadgePrefs();
     syncToolbar();
 
     // ── 内容区 ──
@@ -3598,6 +3698,38 @@
     var modalScenes = document.querySelectorAll(".ssd-dp-modal-scenes");
     for (var i = 0; i < modalScenes.length; i++) {
       modalScenes[i].setAttribute("data-csize", String(_dp.csize));
+    }
+  }
+
+  // ── 场景卡角标（用户 2026-10-28）─────────────────────────────────────────
+  // 三项都是纯 CSS 开关：只切 .ssd-dp-page / 弹层上的 data-* 属性，不重建卡片
+  // （重建会打断弹层、丢滚动位置）。作用范围仅限发现页与演员弹层，演员详情
+  // 「发现」tab 不经过这些选择器，保持原样。
+  // "tr" 右上（默认）/ "tl" 左上 / "none" 隐藏。布尔值是上一版未发版实现的残留，
+  // 顺手归一以免旧 localStorage 让下拉落到空值。
+  function dpStudioBadge() {
+    var v = dpPrefs().studioBadge;
+    if (v === "tl") return "tl";
+    if (v === "none" || v === 0 || v === false) return "none";
+    return "tr";
+  }
+  function dpDurBadge() {
+    var v = dpPrefs().durBadge;
+    return (v === "none" || v === "badge") ? v : "text"; // 文字为默认
+  }
+  function dpBadgePos() { return dpPrefs().badgePos === "bl" ? "bl" : "tl"; }
+  // nodes 省略 = 页面 + 当前所有弹层；传入 = 只写指定的（弹层刚创建、还没入 DOM 时用）
+  function applyBadgePrefs(nodes) {
+    var list = nodes || [];
+    if (!nodes) {
+      if (_dp.refs.page) list.push(_dp.refs.page);
+      var ms = document.querySelectorAll(".ssd-dp-modal-scenes");
+      for (var i = 0; i < ms.length; i++) list.push(ms[i]);
+    }
+    for (var k = 0; k < list.length; k++) {
+      list[k].setAttribute("data-studio-badge", dpStudioBadge());
+      list[k].setAttribute("data-dur-badge", dpDurBadge());
+      list[k].setAttribute("data-badge-pos", dpBadgePos());
     }
   }
 

@@ -583,18 +583,73 @@
   font-size: 10.5px;
 }
 
-/* 左上角的自定义角标（预告 / 距今天数 / 库内）一并收到 6px，与右上工作室名、
-   右下时长四角对齐；字号也从 10/10.5 混用并到 10.5（用户 2026-10-28）。
-   只作用于发现页与弹窗，演员详情「发现」tab 保持原样。 */
+/* 左上角的自定义角标（预告 / 距今天数 / 库内）：字号从 10/10.5 混用并到 10.5
+   （用户 2026-10-28）。位置不再写在这里 —— 角标归拢进 .ssd-badges 容器统一排，
+   见下方「自定义角标容器」。只作用于发现页与弹窗，演员详情「发现」tab 保持原样。 */
 .ssd-dp-page .ssd-overlay-preview,
 .ssd-dp-modal-scenes .ssd-overlay-preview,
 .ssd-dp-page .ssd-overlay-days,
 .ssd-dp-modal-scenes .ssd-overlay-days,
 .ssd-dp-page .ssd-overlay-inlib,
 .ssd-dp-modal-scenes .ssd-overlay-inlib {
+  font-size: 10.5px;
+}
+
+/* ── 自定义角标容器（用户 2026-10-28）───────────────────────────────────────
+   预告 / 距上映天数 / 库内演员 / 数据源徽章竖向堆叠在一处：
+   ① 多个角标同侧时不再压在同一坐标上（此前 days 与 inlib 都是 top/left 6px）；
+   ② 「默认角标位置」只需切容器的 top/bottom 一个属性。
+   容器由 discover.js 的 decorateCard 创建，只在发现页与演员弹层的卡片上出现，
+   演员详情「发现」tab 不经过 decorateCard，角标仍是各自绝对定位。 */
+.ssd-dp-page .ssd-badges,
+.ssd-dp-modal-scenes .ssd-badges {
+  position: absolute;
   top: 6px;
   left: 6px;
-  font-size: 10.5px;
+  z-index: 9; /* 同 .studio-overlay(8) 之上；角标之间靠 DOM 顺序，不靠 z-index */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: calc(100% - 12px);
+  pointer-events: none;
+}
+.ssd-dp-page[data-badge-pos="bl"] .ssd-badges,
+.ssd-dp-modal-scenes[data-badge-pos="bl"] .ssd-badges {
+  top: auto;
+  bottom: 6px;
+}
+/* 进了容器的角标不再各自定位（static 会忽略 top/left/right/bottom） */
+.ssd-dp-page .ssd-badges > *,
+.ssd-dp-modal-scenes .ssd-badges > * {
+  position: static;
+  max-width: 100%;
+}
+
+/* 工作室角标（原生 .studio-overlay）—— 隐藏 / 右上（默认）/ 左上（用户 2026-10-28）。
+   盒子是 shrink-to-fit 绝对定位（max-width 40%），换到左上要把 right 让出来：
+   一旦 left 与 right 同时有值且 width:auto，盒子会被拉成整行宽。其三档内缩
+   （6 / 大档 8 / ≤480 4px）跟随各自的原生贴边规则，见下面各处。 */
+.ssd-dp-page[data-studio-badge="none"] .studio-overlay,
+.ssd-dp-modal-scenes[data-studio-badge="none"] .studio-overlay { display: none; }
+.ssd-dp-page[data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes[data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
+  left: 6px;
+  right: auto;
+  text-align: left;
+}
+
+/* 时长角标（右下角，原生 .scene-specs-overlay）—— 隐藏 / 文字（默认，原生
+   白字 + 文字阴影）/ 徽章（半透明圆角底 + 去掉阴影：有底就不需要描边了） */
+.ssd-dp-page[data-dur-badge="none"] .scene-specs-overlay,
+.ssd-dp-modal-scenes[data-dur-badge="none"] .scene-specs-overlay { display: none; }
+.ssd-dp-page[data-dur-badge="badge"] .scene-specs-overlay,
+.ssd-dp-modal-scenes[data-dur-badge="badge"] .scene-specs-overlay {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.55);
+  text-shadow: none;
+  line-height: 1.35;
 }
 
 /* 大档（--ssd-card-min: 300 → 实测卡宽 369 / duo 内 273）已接近演员详情「发现」
@@ -616,6 +671,12 @@
 .ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid .scene-specs-overlay .overlay-duration {
   font-size: 14px;
 }
+/* 左上 + 大档：贴边跟到 8px（多一个属性选择器，压过上面等特异性的 right: 8px） */
+.ssd-dp-page[data-csize="2"][data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes[data-csize="2"][data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
+  left: 8px;
+  right: auto;
+}
 .ssd-dp-page[data-csize="2"] .ssd-overlay-preview,
 .ssd-dp-modal-scenes[data-csize="2"] .ssd-overlay-preview,
 .ssd-dp-page[data-csize="2"] .ssd-overlay-days,
@@ -626,6 +687,17 @@
   left: 8px;
   font-size: 12px;
   padding: 2px 7px;
+}
+/* 容器在大档下同样回到 8px 内缩（角标自身不再定位，top/left 由容器给） */
+.ssd-dp-page[data-csize="2"] .ssd-badges,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-badges {
+  top: 8px;
+  left: 8px;
+}
+.ssd-dp-page[data-csize="2"][data-badge-pos="bl"] .ssd-badges,
+.ssd-dp-modal-scenes[data-csize="2"][data-badge-pos="bl"] .ssd-badges {
+  top: auto;
+  bottom: 8px;
 }
 
 /* ── Custom overlays on top of native .scene-card-preview ─────────────────── */
@@ -2955,6 +3027,12 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
     line-height: 1.15;
     text-align: right;
   }
+  .ssd-dp-page[data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
+  .ssd-dp-modal-scenes[data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
+    left: 4px;
+    right: auto;
+    text-align: left;
+  }
   .ssd-dp-page .ssd-card-grid .scene-specs-overlay,
   .ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay {
     bottom: 4px;
@@ -2966,20 +3044,19 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay .overlay-duration {
     font-size: 10.5px;
   }
-  .ssd-dp-page .ssd-overlay-preview,
-  .ssd-dp-modal-scenes .ssd-overlay-preview,
-  .ssd-dp-page .ssd-overlay-days,
-  .ssd-dp-modal-scenes .ssd-overlay-days,
-  .ssd-dp-page .ssd-overlay-inlib,
-  .ssd-dp-modal-scenes .ssd-overlay-inlib {
+  /* 角标位置与内缩改由容器给（角标自身在容器里是 static，top/left 无效） */
+  .ssd-dp-page .ssd-badges,
+  .ssd-dp-modal-scenes .ssd-badges {
     top: 4px;
     left: 4px;
-    padding: 1px 5px;
   }
-  .ssd-dp-page .ssd-overlay-box,
-  .ssd-dp-modal-scenes .ssd-overlay-box {
+  .ssd-dp-page[data-badge-pos="bl"] .ssd-badges,
+  .ssd-dp-modal-scenes[data-badge-pos="bl"] .ssd-badges {
+    top: auto;
     bottom: 4px;
-    left: 4px;
+  }
+  .ssd-dp-page .ssd-badges > *,
+  .ssd-dp-modal-scenes .ssd-badges > * {
     padding: 1px 5px;
   }
 }

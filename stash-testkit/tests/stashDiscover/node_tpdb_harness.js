@@ -111,7 +111,7 @@ function loadAdapter() {
   sandbox.__out = {};
 
   const wrapped = chunk +
-    "\n;Object.assign(__out, {callBoxSceneList, TPDB_MAX_PAGES_BATCH, tpdbResolveIds});";
+    "\n;Object.assign(__out, {callBoxSceneList, TPDB_MAX_PAGES_BATCH, tpdbResolveIds, tpdbResolvePerformer});";
   vm.createContext(sandbox);
   vm.runInContext(wrapped, sandbox, { filename: "stashDiscover-tpdb.js" });
   return { api: sandbox.__out, store };
@@ -127,6 +127,10 @@ function loadKey() {
 const { api, store } = loadAdapter();
 const { callBoxSceneList } = api;
 const box = { endpoint: "https://theporndb.net/graphql", apiKey: loadKey(), name: "theporndb" };
+
+// 站点级演员记录（Emma Reed 在某厂牌下的个人页，is_parent:false）。
+// 打 /performers/{uuid} 和 /performers/{uuid}/scenes 都是 404，用来验名字回退。
+const SITE_LEVEL_UUID = "bf020063-768f-4cab-8bff-e3d8d14d3980";
 
 const pick = (list, extra) => Object.assign({
   performers: { value: list, modifier: "INCLUDES" },
@@ -188,6 +192,47 @@ const CASES = {
       per_page: 100, page: 1, direction: "DESC",
       date: { value: since(), modifier: "GREATER_THAN" },
     }));
+  },
+  // 父站点（ManyVids id=5502）：自身 0 条，场景全挂在 2.6 万个子站点上。
+  // 用 sites[<id>] 精确匹配只能得到 0 条，必须走 site_operation。
+  async studioParent() {
+    return brief(await callBoxSceneList(box, {
+      studios: { value: ["1edfe032-9128-4340-a5ac-bf91619583e5"], modifier: "INCLUDES" },
+      per_page: 100, page: 1, direction: "DESC",
+    }));
+  },
+  async studioParentWindow() {
+    return brief(await callBoxSceneList(box, {
+      studios: { value: ["1edfe032-9128-4340-a5ac-bf91619583e5"], modifier: "INCLUDES" },
+      per_page: 100, page: 1, direction: "DESC",
+      date: { value: since(), modifier: "GREATER_THAN" },
+    }));
+  },
+  // 子站点（Manyvids: Lizzy Maestro id=75219）：自身 563 条。
+  // 修父站点时不能把它的结果膨胀成整个 network。
+  async studioChild() {
+    return brief(await callBoxSceneList(box, {
+      studios: { value: ["830325e3-b9f4-493d-b601-2a94bd51c4c5"], modifier: "INCLUDES" },
+      per_page: 100, page: 1, direction: "DESC",
+    }));
+  },
+  // 单演员 DESC 现在直接打 /performers/{uuid}/scenes，不该再写整数缓存
+  //（resolveCalls 必须为 0，否则说明又退回了「先解析再查」）
+  async subresourceNoResolve(seed) {
+    const before = Object.keys(JSON.parse(store["ssd.tpdb.intIds"] || "{}")).length;
+    const r = brief(await callBoxSceneList(box, pick([seed.uuids[0]])));
+    const after = Object.keys(JSON.parse(store["ssd.tpdb.intIds"] || "{}")).length;
+    return Object.assign(r, { resolveCalls: after - before });
+  },
+  // 站点级编号（is_parent:false）：/performers/{uuid} 与 /performers/{uuid}/scenes 都是 404。
+  // 有名字时回退到同名 parent，没有名字才进 skipped。
+  async nameFallbackSiteLevel() {
+    const id = await api.tpdbResolvePerformer(box, SITE_LEVEL_UUID, "Emma Reed", 28000);
+    return { intId: id, fallback: id != null };
+  },
+  async nameFallbackNoHint() {
+    const id = await api.tpdbResolvePerformer(box, SITE_LEVEL_UUID, "", 28000);
+    return { intId: id };
   },
 };
 

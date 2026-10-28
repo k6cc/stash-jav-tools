@@ -23,6 +23,7 @@ import re
 import statistics
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -31,16 +32,24 @@ DEFAULT_CONFIG = r"E:/stashAPP/config.yml"
 
 
 def load_key(path, explicit=None):
+    """取 endpoint 指向 theporndb 那一条 stash-box 的 apikey。
+
+    不能"先找 theporndb 再往回抓最近的 apikey"：stash_boxes 里 theporndb 通常排在
+    最后，往回抓会抓到上一个 box（javstash）的 JWT，请求照样发得出去但大面积 401，
+    看上去像限流（2026-10-29 踩过）。必须在同一块里配对。
+    """
     if explicit:
         return explicit
-    txt = Path(path).read_text(encoding="utf-8")
-    i = txt.lower().find("theporndb")
-    if i < 0:
-        raise SystemExit("config.yml 里找不到 theporndb 的 stash-box 配置，用 --key 指定")
-    m = re.search(r"api_?key:\s*(\S+)", txt[max(0, i - 600): i + 600], re.I)
-    if not m:
-        raise SystemExit("找到 theporndb 但没有 api key 字段，用 --key 指定")
-    return m.group(1).strip()
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    last_key = None
+    for ln in lines:
+        m = re.search(r"api_?key:\s*(\S+)", ln, re.I)
+        if m:
+            last_key = m.group(1).strip()
+            continue
+        if last_key and re.search(r"endpoint:\s*\S*theporndb", ln, re.I):
+            return last_key
+    raise SystemExit("config.yml 里找不到 endpoint 指向 theporndb 的 stash-box，用 --key 指定")
 
 
 class Client:
@@ -67,6 +76,16 @@ def total(body):
 
 def rows(body):
     return body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), list) else []
+
+
+def one(body):
+    """单实体接口返回 {data:{...}}，列表接口返回 {data:[...]}。"""
+    if not isinstance(body, dict):
+        return {}
+    d = body.get("data")
+    if isinstance(d, list):
+        return d[0] if d else {}
+    return d or {}
 
 
 def seed(cli, n=8):
@@ -212,12 +231,82 @@ def cmd_stab(cli, args):
         print("全部失败：先排除代理/网络，再怀疑代码")
 
 
+def cmd_sites(cli, args):
+    """站点层级：父站点自身 0 条，场景在子站点上。
+
+    `sites[<id>]=x` 只匹配站点自身这一层，父站点必然 0 条；
+    要连子站点一起拿，只能用 site_id + site_operation=Site/Parent（单值）。
+    """
+    print("站点层级与 site_operation 语义\n")
+
+    pid = args.site_id
+    if not pid:
+        # 找一个有子站点的父站点：先取一批站点，挑 parent_id 为空的
+        st, body, _ = cli.get("/sites?per_page=60&page=3")
+        parents = [r for r in rows(body) if not r.get("parent_id") and r.get("id")]
+        pid = parents[0]["id"] if parents else None
+    if not pid:
+        print("  没找到可用站点，跳过")
+        return
+
+    st, body, _ = cli.get("/sites/%s" % pid)
+    d = one(body)
+    print("  采样站点: id=%s name=%r parent_id=%s network_id=%s"
+          % (d.get("id"), d.get("name"), d.get("parent_id"), d.get("network_id")))
+
+    st, body, _ = cli.get("/sites?parent_id=%s&per_page=1" % pid)
+    print("  子站点数 total=%s" % total(body))
+
+    print("\n  各取值（total 顶在 10000 说明源端封顶，不是真值）:")
+    for op in ("Site", "Parent", "Site/Parent", "Site/Parent/Network"):
+        st, body, dt = cli.get("/scenes?site_id=%s&site_operation=%s&per_page=1"
+                               % (pid, urllib.parse.quote(op)))
+        print("    site_operation=%-19s total=%-8s %.2fs" % (op, total(body), dt))
+
+    print("\n  旧写法（精确匹配站点自身这一层）:")
+    st, body, dt = cli.get("/scenes?sites[%s]=x&per_page=1" % pid)
+    print("    sites[%s]=x              total=%-8s %.2fs" % (pid, total(body), dt))
+
+    print("\n  批量键与 operation 不能组合（同时给 = 0 条）:")
+    st, body, _ = cli.get("/scenes?sites[%s]=x&site_operation=Parent&per_page=1" % pid)
+    print("    sites[%s]=x + Parent     total=%s" % (pid, total(body)))
+
+    print("\n  子站点自查（应只等于自身，不膨胀成整个 network）:")
+    # 部分站点自身查询会返回 401（如 Adult Candy Store 5995、Manyvids: 0d0nt0s），
+    # 与 key 无关，是站点级访问限制。可用 --kid 指定一个已知可访问的子站点。
+    if args.kid:
+        kids = [{"id": args.kid, "name": "(命令行指定)"}]
+    else:
+        st, body, _ = cli.get("/sites?parent_id=%s&per_page=24" % pid)
+        kids = rows(body)
+    done = False
+    for k in kids[:12]:
+        kid = k.get("id")
+        time.sleep(0.8)
+        st, b2, _ = cli.get("/scenes?site_id=%s&site_operation=Site&per_page=1" % kid)
+        if st != 200:
+            print("    子站点 %-8s 跳过（http=%s%s）"
+                  % (kid, st, "，站点级访问限制" if st == 401 else ""))
+            continue
+        time.sleep(2.0)
+        st, b3, _ = cli.get("/scenes?site_id=%s&site_operation=Site%%2FParent&per_page=1" % kid)
+        print("    子站点 %-8s %-20s Site=%-6s Site/Parent=%-6s (http=%s) %s"
+              % (kid, str(k.get("name"))[:20], total(b2), total(b3), st,
+                 "一致 ✓" if total(b2) == total(b3) else "看 http 是否 401"))
+        done = True
+        break
+    if not done:
+        print("    没试到可访问的子站点；用 --kid <id> 指定一个再跑（如 75219）")
+
+
 def main():
     ap = argparse.ArgumentParser(description="TPDB REST API 语义探针")
-    ap.add_argument("cmd", choices=["batch", "ids", "stab", "all"])
+    ap.add_argument("cmd", choices=["batch", "ids", "sites", "stab", "all"])
     ap.add_argument("-n", type=int, default=10, help="stab 请求次数")
     ap.add_argument("--days", type=int, default=180, help="stab 的时间窗口天数")
     ap.add_argument("--seed", type=int, default=8, help="seed 拉取场景数")
+    ap.add_argument("--site-id", type=int, default=None, help="sites 用哪个站点，默认自动挑")
+    ap.add_argument("--kid", type=int, default=None, help="sites 自查用的子站点 id（部分站点 401）")
     ap.add_argument("--timeout", type=int, default=40)
     ap.add_argument("--config", default=DEFAULT_CONFIG)
     ap.add_argument("--key", default=None, help="直接给 api key（默认读 config.yml）")
@@ -231,6 +320,10 @@ def main():
     if args.cmd in ("ids", "all"):
         print("### ids\n")
         cmd_ids(cli, args)
+        print()
+    if args.cmd in ("sites", "all"):
+        print("### sites\n")
+        cmd_sites(cli, args)
         print()
     if args.cmd in ("stab", "all"):
         print("### stab\n")

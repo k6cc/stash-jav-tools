@@ -31,13 +31,38 @@
 
 TPDB 的 GraphQL 只有 11 个 query，`queryScenes` 恒返回 `{count, scenes:null}`，所以场景列表走公开 REST `https://api.theporndb.net`（key 取该 box 配置里的 `apikey`）。动这块之前先跑 `probe_tpdb_api.py`。
 
-- **批量过滤是 deepObject**：`/scenes?performers[88334]=x&performers[94042]=x`，**值被忽略、只认键**；多键按 OR 合并，`meta.total` 直接相加。写 `performers[]=uuid` 或用 uuid 当键 → 0 条。
+- **批量过滤是 deepObject**：`/scenes?performers[88334]=x&performers[94042]=x`，**值被忽略、只认键**；多键按 OR 合并，`meta.total` 直接相加。写 `performers[]=uuid` 或用 uuid 当键 → 200 但 `total:0`，**静默空集、不报错**，最容易误判成「这演员没片」。
 - **键必须是整数 id**：演员用 `_id`（`/performers/{uuid}`），站点用 `id`（`/sites/{uuid}`）。
-- **演员 id 分两层**：`is_parent:false` 是站点级记录，打 `/performers/{uuid}/scenes` 直接 404。旧实现用 `Promise.all` 零容错，一个这种 id 就让总览三块一起红（论坛反馈的实际根因）；现在解析失败只进 `skipped[]`。
+- **演员 id 分两层**：`is_parent:false` 是站点级记录，打 `/performers/{uuid}/scenes` 直接 404。旧实现用 `Promise.all` 零容错，一个这种 id 就让总览三块一起红（论坛反馈的实际根因）；现在解析失败只进 `skipped[]`。反过来 **parent uuid 打 `/performers/{uuid}/scenes` 是 200**，吃 `per_page`/`page`/`date`/`orderBy`、字段与 `/scenes` 一致 —— 单演员分页可以完全不解析整数 id，省一次请求。
 - **没有批量解析 uuid 的接口**：`ids[]=` / `ids=a,b` / `uuid[]=` / `performer_ids[]=` 全被忽略（返回默认列表，不报错）。首次进页面必然有 N 次解析请求，结果落 `localStorage` 的 `ssd.tpdb.intIds`（`{id,p}`，`p=0` 为站点级；失败记 `{bad:1,t}`，7 天内不重试）。
+- **当前实现口径**：单演员 DESC 直接打 `/performers/{uuid}/scenes`，不写整数缓存；该路径 404（站点级/已删）才回退——先解析 parent 整数 id，再不行按名字找**完全同名**的 parent，命中时 UI 显示「编号在源上查不到，已按名字匹配」。坏缓存只记 404，网络/超时/401 不记（本地网络抖一下不该让这个演员 7 天查不出东西）。
 - `per_page` 硬顶 100；`total` 封顶 10000，`page > 100` 数据错乱；`date` 与 `orderBy` 可同时给。`/changes` 只回溯 14 天，不能当全量增量源。
 - 翻页上限 `TPDB_MAX_PAGES_BATCH = 5` 页 + 时间预算 `TPDB_BATCH_BUDGET_MS = 8000`：每页实测 2–5 秒，翻满 5 页要 10–20 秒，首屏等不了；超预算按截断处理并在 UI 提示。
 - 站点维度比演员慢（同一批数据翻页更多）：实测 500 条 19.3s，加预算后 9.8s / 300 条。
+
+### 站点有层级，`sites[]` 查父站点必然是 0 条
+
+TPDB 的站点是两层结构，网页导航也分两个入口：**`Sites`**（厂牌，如 ManyVids `5502`）和 **`Performer-Sites`**（演员在该厂牌下的个人页，如 `Manyvids: Lizzy Maestro` `75219`，`parent_id=5502`）。子站点的 `parent_id` 指向上级，上级的 `parent_id` 为 `null`。
+
+- **父站点自身没有场景**：ManyVids 网页上直接写着 `Scenes 0/0`，主体是 `Sub Sites`（`Showing 1 to 18 of 26,476 results`）；I Want Clips 有 19,921 个子站点，父站点 `/sites/{id}/scenes` 也是 0。场景全部挂在子站点上。
+- 所以 `sites[<id>]=x`（精确匹配 `Site` 这一层）对父站点**永远返回 0 条**——这就是"工作室场景拉不出来"的根因，与网络、key、分页都无关。
+- **正确路径**：`/scenes?site_id=<整数id>&site_operation=Site%2FParent`。语义实测：
+  | 站点 | Site | Parent | Site/Parent |
+  |---|---|---|---|
+  | ManyVids 5502（父） | 0 | 10000（顶格） | 10000 |
+  | Manyvids: Lizzy Maestro 75219（子） | 563 | 0 | 563 |
+  | Czech Casting 449 | 2086 | 3007 | 5093（= 相加，验证通过） |
+  | Tushy 3417（子） | 689 | 689 | 689（**不膨胀**） |
+- **`Site/Parent` 不要换成 `Site/Parent/Network`**：后者在测过的 6 个厂牌上与 `S/P` 完全一致，但在 Czech Casting 上多出 611 条（`Network` 的边界不明确），有把兄弟品牌混进来的风险。
+- **`site_operation` 只认单值 `site_id`**：和 `sites[]` deepObject 同时给 → 返回 0 条；`site_id` 传两次也不 OR。站点维度只能一个站点一个请求（演员维度仍用 `performers[]` 批量）。
+- 父站点场景量常见过万，`total` 会顶在 10000，靠 `date` 窗口 + 页数上限收窄；命中上限时 UI 要提示截断。
+- **401 先查 key 指的是哪个源**：`config.yml` 的 `stash_boxes` 里 key 必须与 `endpoint` 配对。用「先找 theporndb、再往回抓最近的 apikey」的写法会拿到上一个 box（javstash 的 JWT，185 字符 vs 真实 TPDB key 48 字符），请求发得出去但大面积 401，看上去跟限流一模一样。换对 key 后 15 次连打 0 次 401（6.6s），说明 TPDB 没有这个速率限制。稳定 401 仍有个别站点级特例（Adult Candy Store `5995`），重试无用、只能跳过。
+
+### 演员没有层级坑，但有同名分裂
+
+- **parent 记录本身就是全量**：`/performers/{id}` 返回的 `site_performers[]`（站点级记录）逐个打 scenes 全是 0 条，父记录自己 59 条 —— 演员维度不需要像站点那样做子树聚合。
+- **同名分裂是 TPDB 侧的数据问题**：`/performers?q=Emma%20Reed` 返回 6 条同名 parent，片量 59 / 1 / 105 / 2 / 71 / 0；stash_id 解析到的那条（`467421`）只有 1 条，`disambiguation` 是「Brunette, c2018, MVGCash」。插件只认 stash_id，显示 1 条是如实反映，不是 bug。**不要自动合并同名**：同一批结果里 `97320` 已有 105 条但 aliases 是 `Emma FTV / Laveah Smart`，明显是另一个人。
+- 真正 0 条的演员也存在（Emiru Natsumi Saki `261004`，名字搜到的仍是同一条、0 条场景），UI 不该把这种情况当失败。
 
 ## 显示口径
 

@@ -242,7 +242,7 @@
     return box.api_key != null ? box.api_key : (box.apiKey || "");
   }
 
-  function tpdbGet(box, path, timeoutMs) {
+  function tpdbGet(box, path, timeoutMs, isRetry) {
     var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var timedOut = false;
     var timer = setTimeout(function () {
@@ -260,7 +260,18 @@
       throw ssdError("network", (e && e.message) || "network error");
     }).then(function (r) {
       if (!r.ok) {
-        throw ssdError((r.status === 401 || r.status === 403) ? "auth" : "blocked", "HTTP " + r.status);
+        // 401 偶尔是瞬时鉴权失败，重发一次就恢复；连着重试仍 401 基本是 key 配错源
+        // 或没权限（403 直接不重试）。只兜一次，不做退避重试链。
+        if (r.status === 401 && !isRetry) {
+          clearTimeout(timer);
+          return new Promise(function (res) { setTimeout(res, 600); }).then(function () {
+            return tpdbGet(box, path, timeoutMs, true);
+          });
+        }
+        var httpErr = ssdError((r.status === 401 || r.status === 403) ? "auth" : "blocked", "HTTP " + r.status);
+        // 调用方要区分「记录不存在」(404) 和「网络/鉴权失败」，前者才值得记坏缓存
+        httpErr.status = r.status;
+        throw httpErr;
       }
       return r.json().catch(function () { throw ssdError("parse", "non-JSON response"); });
     }).then(function (data) {
@@ -299,7 +310,60 @@
       if (id != null && parent) { tpdbIdRemember(key, id, true); return id; }
       tpdbIdRememberBad(key);
       return null;
-    }).catch(function () { tpdbIdRememberBad(key); return null; });
+    }).catch(function (e) {
+      // 只有「源里确实没有这条记录」(404) 才记坏、7 天不再试。
+      // 网络抖动/超时/401 记坏会让这个演员连着 7 天查不出东西——本地网络波动
+      // 不该被当成数据缺失（远程办公常见）。
+      if (e && e.status === 404) tpdbIdRememberBad(key);
+      return null;
+    });
+  }
+
+  // 名字回退：stash-box 给的是站点级记录（`is_parent:false`，打 /performers/{uuid}
+  // 直接 404 `performer not found`）或编号已被删/合并时，用本地演员名在源里找同名的
+  // parent 记录。旧实现遇到这种只会进 skipped，整个演员 0 条、且看不出原因。
+  // 只取「名字完全一致」的 parent，不做模糊匹配——同名不同人在 TPDB 很常见
+  //（Emma Reed 有 6 条同名记录，片量 59/1/105/2/71/0）。
+  var _tpdbNameCache = {};
+
+  function tpdbNameLookup(box, name, timeoutMs) {
+    var q = String(name || "").trim();
+    if (!q) return Promise.resolve(null);
+    var ck = box.endpoint + "|" + q.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(_tpdbNameCache, ck)) {
+      return Promise.resolve(_tpdbNameCache[ck]);
+    }
+    return tpdbGet(box, "/performers?q=" + encodeURIComponent(q) + "&per_page=10", timeoutMs)
+      .then(function (j) {
+        var rows = asArr(j && j.data);
+        var lower = q.toLowerCase();
+        var hit = null;
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          if (!r || r._id == null || r.is_parent === false) continue;
+          if (String(r.name || "").trim().toLowerCase() !== lower) continue;
+          hit = r._id;
+          break;
+        }
+        _tpdbNameCache[ck] = hit;
+        if (hit != null && typeof _state !== "undefined" && _state && _state.boxByName) {
+          _state.boxByName[box.endpoint] = true;
+        }
+        return hit;
+      })
+      .catch(function (e) {
+        if (e && e.status === 404) _tpdbNameCache[ck] = null;
+        return null;
+      });
+  }
+
+  // 演员 uuid → 整数 id，失败再按名字找一次。
+  function tpdbResolvePerformer(box, uuid, nameHint, timeoutMs) {
+    return tpdbResolveId(box, "performer", uuid, timeoutMs).then(function (id) {
+      if (id != null) return id;
+      if (!nameHint) return null;
+      return tpdbNameLookup(box, nameHint, timeoutMs);
+    });
   }
 
   // 一批 uuid → { ids: [整数], skipped: [uuid] }，并发 4。
@@ -321,9 +385,24 @@
     return Promise.resolve().then(wave);
   }
 
-  // 批量取场景的唯一路径：performers[整数]=x / sites[整数]=x（deepObject）。
+  // 站点维度的唯一正确路径：site_id（整型，单值）+ site_operation。
+  // 为什么不能沿用 sites[<id>]：那个键精确匹配「站点自身」这一层。Stash 里的工作室常常是
+  // 父站点（ManyVids / Vixen Media Group / Reality Kings），它自身 0 条，场景全挂在
+  // 子站点上 → 用 sites[] 永远查到空（论坛反馈"工作室场景拉不出来"）。
+  // Site/Parent = 本站点 + 直接子站点：父站点能拿到子站点全部，子站点（如 Tushy 689 条）
+  // 仍只返回自己，不会串到同 network 的兄弟品牌。
+  // 代价：site_operation 不认批量键（同时给 sites[] 会返回 0 条），只能一个站点一个请求。
+  function tpdbSitePath(intId, perPage, page, since) {
+    var q = "/scenes?site_id=" + intId + "&site_operation=Site%2FParent" +
+      "&per_page=" + perPage + "&page=" + page + "&orderBy=recently_released";
+    if (since) q += "&date=" + encodeURIComponent(since) + "&date_operation=%3E";
+    return q;
+  }
+
+  // 批量取场景的唯一路径：performers[整数]=x（deepObject）。
   // 值只是占位，服务端只认键；多个键按 OR 合并，total 直接相加。
   // date 与 orderBy 可以同时给，实测都生效。
+  // 站点不走这里（见 tpdbSitePath）：站点按层级查只能单值。
   function tpdbBatchPath(kind, intIds, perPage, page, since) {
     var key = kind === "studio" ? "sites" : "performers";
     var q = "/scenes?" + intIds.map(function (id) {
@@ -331,6 +410,14 @@
     }).join("&") + "&per_page=" + perPage + "&page=" + page + "&orderBy=recently_released";
     if (since) q += "&date=" + encodeURIComponent(since) + "&date_operation=%3E";
     return q;
+  }
+
+  // 演员：一条批量 URL 覆盖全部；站点：每个站点一条（site_operation 只认单值）
+  function tpdbPagePaths(kind, intIds, perPage, page, since) {
+    if (kind === "studio") {
+      return intIds.map(function (id) { return tpdbSitePath(id, perPage, page, since); });
+    }
+    return [tpdbBatchPath(kind, intIds, perPage, page, since)];
   }
 
   // TPDB 的 background / background_back 是对象 {full,large,medium,small}，
@@ -409,19 +496,49 @@
     };
   }
 
-  // 单个演员/站点的分页。先把 uuid 解析成整数 id，再走批量接口的单键形式 ——
-  // 站点级 uuid 打 `/performers/{uuid}/scenes` 会 404，解析失败则空列表 + skipped，
-  // 不再把整块总览拖成红色错误。
-  function tpdbIdPage(box, kind, id, pageNum, perPage, dir, timeoutMs) {
+  // 单个演员/站点的分页。
+  // 演员 DESC：先用 uuid 打 `/performers/{uuid}/scenes` 子资源 —— parent uuid 实测可用，
+  //   吃 per_page/page/orderBy、字段与 /scenes 一致，省掉一次 uuid→整数的解析请求。
+  //   站点级记录/已删记录这里 404，再回退解析 parent（编号失败则按名字找）。
+  // 站点与 ASC：仍走「解析成整数 + 干净的单键 /scenes」，site_operation 只认整数 site_id，
+  //   ASC 的页号镜像也要先知道 last_page，预打一次子资源等于白花。
+  function tpdbIdPage(box, kind, id, pageNum, perPage, dir, timeoutMs, nameHint) {
+    var asc = String(dir).toUpperCase() === "ASC";
+    var key = box.endpoint + "|" + kind + "|" + id;
+
+    if (kind === "performer" && !asc) {
+      var directPath = "/performers/" + encodeURIComponent(id) +
+        "/scenes?per_page=" + perPage + "&page=" + pageNum + "&orderBy=recently_released";
+      return tpdbGet(box, directPath, timeoutMs).then(function (j) {
+        _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
+        return tpdbResult(j, false);
+      }, function (e) {
+        if (!e || e.status !== 404) throw e;   // 网络/鉴权错误照旧上抛
+        return null;                           // 站点级或已合并记录 → 回退
+      }).then(function (direct) {
+        if (direct) return direct;
+        return tpdbResolvePerformer(box, id, nameHint, timeoutMs).then(function (intId) {
+          if (intId == null) {
+            return { count: 0, scenes: [], hasMore: false, skipped: [String(id)] };
+          }
+          return tpdbGet(box, tpdbBatchPath("performer", [intId], perPage, pageNum, ""), timeoutMs)
+            .then(function (j) {
+              _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
+              return tpdbResult(j, false);
+            });
+        });
+      });
+    }
+
     return tpdbResolveId(box, kind, id, timeoutMs).then(function (intId) {
       if (intId == null) {
         return { count: 0, scenes: [], hasMore: false, skipped: [String(id)] };
       }
-      var key = box.endpoint + "|" + kind + "|" + intId;
       function get(p) {
-        return tpdbGet(box, tpdbBatchPath(kind, [intId], perPage, p, ""), timeoutMs);
+        // 单站点走 site_id + site_operation，单演员走 performers[] 单键
+        return tpdbGet(box, tpdbPagePaths(kind, [intId], perPage, p, "")[0], timeoutMs);
       }
-      if (String(dir).toUpperCase() !== "ASC") {
+      if (!asc) {
         // 接口固定按日期倒序
         return get(pageNum).then(function (j) {
           _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
@@ -443,18 +560,33 @@
 
   // 一批演员/站点的新片：一次批量请求覆盖所有人（多键 OR），不再逐个发子资源请求。
   // 15 个演员从「几十个请求」降到 1–2 个；被源删掉/合并的 id 只进 skipped。
-  function tpdbSinceScenes(box, kind, ids, since, perPage, timeoutMs) {
-    return tpdbResolveIds(box, kind, ids, timeoutMs).then(function (r) {
+  // 单演员时（发现页只有当前演员）额外允许名字回退，救回站点级编号那种必 404 的情况。
+  function tpdbSinceScenes(box, kind, ids, since, perPage, timeoutMs, nameHint) {
+    var resolving = (kind === "performer" && ids.length === 1 && nameHint)
+      ? tpdbResolvePerformer(box, ids[0], nameHint, timeoutMs).then(function (id) {
+        return id != null
+          ? { ids: [id], skipped: [] }
+          : { ids: [], skipped: [String(ids[0])] };
+      })
+      : tpdbResolveIds(box, kind, ids, timeoutMs);
+    return resolving.then(function (r) {
       if (!r.ids.length) {
         return { count: 0, scenes: [], hasMore: false, truncated: false, skipped: r.skipped };
       }
       var out = [], seen = {}, truncated = false, startedAt = Date.now();
       function step(p) {
-        // 批量结果按日期倒序；碰到早于 since 的场景即可停止翻页
-        return tpdbGet(box, tpdbBatchPath(kind, r.ids, perPage, p, since), timeoutMs)
-          .then(function (j) {
-            var rows = asArr(j && j.data);
-            var reachedOld = false;
+        // 结果按日期倒序；碰到早于 since 的场景即可停止翻页。
+        // 站点维度这里是 N 条 URL 并发（演员维度只有 1 条），单个站点失败不影响其他站点。
+        return Promise.all(tpdbPagePaths(kind, r.ids, perPage, p, since).map(function (u) {
+          return tpdbGet(box, u, timeoutMs).then(function (j) {
+            return j;
+          }, function () { return null; });
+        })).then(function (pages) {
+          var reachedOld = false, got = 0, maxLast = 1;
+          pages.forEach(function (j) {
+            if (!j) return;
+            var rows = asArr(j.data);
+            got += rows.length;
             rows.forEach(function (raw) {
               var s = tpdbScene(raw);
               if (!s) return;
@@ -463,15 +595,17 @@
               seen[s.id] = true;
               out.push(s);
             });
-            var last = (j && j.meta && j.meta.last_page) || 1;
-            if (!reachedOld && rows.length && p < last) {
-              // 到页数上限但源还有更早场景 → 记录截断，UI 只在真截断时提示（用户 2026-10-26）
-              if (p >= TPDB_MAX_PAGES_BATCH) { truncated = true; return; }
-              // 时间预算用完也停：首屏不能为了翻页等二十秒
-              if (Date.now() - startedAt > TPDB_BATCH_BUDGET_MS) { truncated = true; return; }
-              return step(p + 1);
-            }
+            var last = (j.meta && j.meta.last_page) || 1;
+            if (last > maxLast) maxLast = last;
           });
+          if (!reachedOld && got && p < maxLast) {
+            // 到页数上限但源还有更早场景 → 记录截断，UI 只在真截断时提示（用户 2026-10-26）
+            if (p >= TPDB_MAX_PAGES_BATCH) { truncated = true; return; }
+            // 时间预算用完也停：首屏不能为了翻页等二十秒
+            if (Date.now() - startedAt > TPDB_BATCH_BUDGET_MS) { truncated = true; return; }
+            return step(p + 1);
+          }
+        });
       }
       return step(1).then(function () {
         out.sort(function (a, b) {
@@ -512,16 +646,19 @@
     var since = inp.date && inp.date.value ? String(inp.date.value) : "";
     var perf = filterIds(inp.performers);
     var stud = filterIds(inp.studios);
+    // 编号解析不出来时按名字找同名的 parent 记录，名字取当前正在看的演员
+    //（发现页和总览的查询都是围绕它发的）
+    var nameHint = (typeof _state !== "undefined" && _state && _state.performerName) || "";
     if (since && (perf.length || stud.length)) {
       return tpdbSinceScenes(box, perf.length ? "performer" : "studio",
-        perf.length ? perf : stud, since, perPage, timeoutMs);
+        perf.length ? perf : stud, since, perPage, timeoutMs, nameHint);
     }
-    if (perf.length === 1) return tpdbIdPage(box, "performer", perf[0], pageNum, perPage, dir, timeoutMs);
-    if (stud.length === 1) return tpdbIdPage(box, "studio", stud[0], pageNum, perPage, dir, timeoutMs);
+    if (perf.length === 1) return tpdbIdPage(box, "performer", perf[0], pageNum, perPage, dir, timeoutMs, nameHint);
+    if (stud.length === 1) return tpdbIdPage(box, "studio", stud[0], pageNum, perPage, dir, timeoutMs, nameHint);
     if (!since && (perf.length || stud.length)) {
       // 窗口不限（0 天）：按 id 逐个取，避免退化成全站页 + 客户端过滤
       return tpdbSinceScenes(box, perf.length ? "performer" : "studio",
-        perf.length ? perf : stud, "", perPage, timeoutMs);
+        perf.length ? perf : stud, "", perPage, timeoutMs, nameHint);
     }
     return tpdbGlobalPage(box, pageNum, perPage, timeoutMs);
   }
@@ -653,6 +790,7 @@
     boxFetched: {},            // endpoint -> scenes fetched this round (loading panel rows)
     boxTruncated: {},          // endpoint -> true when TPDB hit its page cap
     boxSkipped: {},            // endpoint -> 被源删掉/合并、无法解析整数 id 的条目数
+    boxByName: {},             // endpoint -> true when the ID failed and we matched by name
     droppedByWindow: 0,        // scenes dropped by the recent/preview window this round
     windowRelaxed: false,      // "unlimited time range (this session)"
     preferredFallback: false,  // preferred box had no ID → queried the others instead
@@ -1076,6 +1214,7 @@
     _state.boxFetched = {};
     _state.boxTruncated = {};
     _state.boxSkipped = {};
+    _state.boxByName = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -1284,6 +1423,7 @@
     _state.boxFetched = {};
     _state.boxTruncated = {};
     _state.boxSkipped = {};
+    _state.boxByName = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -3048,6 +3188,16 @@
       skipInfo.textContent = tc("已跳过 " + skipCount + " 项：当前源查不到对应记录。",
         skipCount + " skipped: this source has no matching record.");
       pane.appendChild(skipInfo);
+    }
+
+    // 编号在源里解析不出来（站点级记录/已被删或合并），改用同名 parent 记录查到的东西
+    var nameBox = _state.queryBoxes.filter(function (b) { return _state.boxByName[b.endpoint]; })[0];
+    if (nameBox) {
+      var nameInfo = document.createElement("div");
+      nameInfo.className = "ssd-count-info ssd-count-line text-muted";
+      nameInfo.textContent = tc("编号在源上查不到，已按名字匹配同名演员的记录。",
+        "ID not found on this source; matched a same-name performer instead.");
+      pane.appendChild(nameInfo);
     }
 
     if (_state.displayMode === "list") {

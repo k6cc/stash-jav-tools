@@ -3046,12 +3046,12 @@
     secG.appendChild(el("div", "ssd-dp-sethint", tc(
       "0 = 不限。仅作用于发现页；演员详情「发现」标签的窗口在插件设置的 Recent Window 中调整。",
       "0 = unlimited. Applies to the Discover page only; the performer-page Discover tab uses Recent Window in the plugin settings.")));
-    // TPDB 按演员逐个取片，每人最多 TPDB_MAX_PAGES_PER_ID 页（用户 2026-10-26）
+    // TPDB 走批量查询，整体最多 TPDB_MAX_PAGES_BATCH 页（用户 2026-10-26）
     if (dpRecentDays() === 0 && sourceIsTPDB()) {
-      var tpdbPages = SSD.TPDB_MAX_PAGES_PER_ID || 2;
+      var tpdbPages = SSD.TPDB_MAX_PAGES_BATCH || 5;
       secG.appendChild(el("div", "ssd-dp-sethint", tc(
-        "当前源按演员逐个取片：每人最多回溯 " + tpdbPages * 100 + " 部（" + tpdbPages + " 页），并非全部历史。",
-        "This source fetches per performer: at most " + tpdbPages * 100 + " scenes each (" + tpdbPages + " pages), not full history.")));
+        "当前源一次性批量取片：最多回溯 " + tpdbPages * 100 + " 部（" + tpdbPages + " 页），并非全部历史。",
+        "This source fetches in one batch: at most " + tpdbPages * 100 + " scenes (" + tpdbPages + " pages), not full history.")));
     }
 
     // 通知开关（独立 key SSD:dp:notify，主 JS 轮询与导航角标读取；§6.4）

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.5.4";
+  var PLUGIN_VERSION = "2.5.5";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -193,10 +193,43 @@
   // findScene / findPerformer / findStudio 正常。场景列表因此改走它公开的
   // REST API；返回里的 site.uuid 与 stash-box 的 studio id 一致。
   var TPDB_RE = /theporndb\.net/i;
-  // 按演员/站点逐个取场景时的翻页上限（每页最多 100 条 → 200 部/人）。
+  // 批量取片整体翻页上限（每页最多 100 条 → 500 部）。
+  // 批量后请求数与演员数无关（一次查询覆盖全部），所以上限不是按人算的；
   // 无限回看窗口也不会全量回溯，UI 需要把这个截断说明白（用户 2026-10-26）。
-  var TPDB_MAX_PAGES_PER_ID = 2;
+  var TPDB_MAX_PAGES_BATCH = 5;
+  // 批量翻页的时间预算：翻满上限页数可能要十几秒，发现页首屏等不了那么久。
+  // 超预算即停，按截断处理（有提示）。
+  var TPDB_BATCH_BUDGET_MS = 8000;
+  // 解析失败的 id 也缓存一段时间，否则每次进发现页都重打一轮 404。
+  var TPDB_BAD_TTL_MS = 7 * 24 * 3600 * 1000;
   var _tpdbLastPage = {};
+
+  // stash-box 给的是 parent uuid，而 REST 批量过滤只认整数 id（键必须是数字）。
+  // 整数 id 永久稳定，转换结果落 localStorage，之后 0 次请求。
+  // 值形如 { id: 411467, p: 1 }；p=0 表示这条是站点级记录，不能用于查询。
+  var TPDB_ID_CACHE_KEY = "ssd.tpdb.intIds";
+  var _tpdbIdMap = null;
+
+  function tpdbIdMap() {
+    if (_tpdbIdMap) return _tpdbIdMap;
+    try {
+      _tpdbIdMap = JSON.parse(localStorage.getItem(TPDB_ID_CACHE_KEY) || "{}") || {};
+    } catch (e) { _tpdbIdMap = {}; }
+    return _tpdbIdMap;
+  }
+
+  function tpdbIdRemember(uuid, intId, isParent) {
+    var m = tpdbIdMap();
+    m[uuid] = { id: intId, p: isParent ? 1 : 0 };
+    try { localStorage.setItem(TPDB_ID_CACHE_KEY, JSON.stringify(m)); } catch (e) { /* 配额满不影响查询 */ }
+  }
+
+  // 解析失败（源里已删除/合并、站点级记录）也记一笔，7 天内不再重试。
+  function tpdbIdRememberBad(uuid) {
+    var m = tpdbIdMap();
+    m[uuid] = { bad: 1, t: Date.now() };
+    try { localStorage.setItem(TPDB_ID_CACHE_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ }
+  }
 
   function isTPDBBox(box) {
     return !!box && TPDB_RE.test(String(box.endpoint || ""));
@@ -238,6 +271,66 @@
       if (e && e.ssdKind) throw e;
       throw ssdError("unknown", (e && e.message) || String(e));
     });
+  }
+
+  // 单条解析 uuid → 整数 id。
+  // performer 用 `_id`，且必须是 parent 记录：站点级 uuid 打单条直接
+  // 404 `performer not found`，论坛那位的三块总览一起红就是被这种 id 拖死的。
+  // studio 用 `/sites/{uuid}` 返回的整数 `id`（它没有 `_id`）。
+  // 任何失败都只跳过这一个 id，不向上抛。
+  function tpdbResolveId(box, kind, uuid, timeoutMs) {
+    var key = String(uuid || "").trim();
+    if (!key) return Promise.resolve(null);
+    var hit = tpdbIdMap()[key];
+    if (hit) {
+      if (hit.id) return Promise.resolve(hit.p ? hit.id : null);
+      if (hit.bad && Date.now() - hit.t < TPDB_BAD_TTL_MS) return Promise.resolve(null);
+    }
+    var path = (kind === "studio" ? "/sites/" : "/performers/") + encodeURIComponent(key);
+    return tpdbGet(box, path, timeoutMs).then(function (j) {
+      var d = (j && j.data) || j || {};
+      if (kind === "studio") {
+        var sid = d.id != null ? d.id : null;
+        if (sid != null) tpdbIdRemember(key, sid, true); else tpdbIdRememberBad(key);
+        return sid;
+      }
+      var id = d._id != null ? d._id : null;
+      var parent = d.is_parent !== false;
+      if (id != null && parent) { tpdbIdRemember(key, id, true); return id; }
+      tpdbIdRememberBad(key);
+      return null;
+    }).catch(function () { tpdbIdRememberBad(key); return null; });
+  }
+
+  // 一批 uuid → { ids: [整数], skipped: [uuid] }，并发 4。
+  function tpdbResolveIds(box, kind, uuids, timeoutMs) {
+    var ids = [], skipped = [], idx = 0;
+    function wave() {
+      if (idx >= uuids.length) return { ids: ids, skipped: skipped };
+      var chunk = uuids.slice(idx, idx + 4);
+      idx += 4;
+      return Promise.all(chunk.map(function (u) {
+        return tpdbResolveId(box, kind, u, timeoutMs);
+      })).then(function (res) {
+        res.forEach(function (id, i) {
+          if (id != null) ids.push(id); else skipped.push(chunk[i]);
+        });
+        return wave();
+      });
+    }
+    return Promise.resolve().then(wave);
+  }
+
+  // 批量取场景的唯一路径：performers[整数]=x / sites[整数]=x（deepObject）。
+  // 值只是占位，服务端只认键；多个键按 OR 合并，total 直接相加。
+  // date 与 orderBy 可以同时给，实测都生效。
+  function tpdbBatchPath(kind, intIds, perPage, page, since) {
+    var key = kind === "studio" ? "sites" : "performers";
+    var q = "/scenes?" + intIds.map(function (id) {
+      return key + "[" + id + "]=x";
+    }).join("&") + "&per_page=" + perPage + "&page=" + page + "&orderBy=recently_released";
+    if (since) q += "&date=" + encodeURIComponent(since) + "&date_operation=%3E";
+    return q;
   }
 
   // TPDB 的 background / background_back 是对象 {full,large,medium,small}，
@@ -316,71 +409,76 @@
     };
   }
 
+  // 单个演员/站点的分页。先把 uuid 解析成整数 id，再走批量接口的单键形式 ——
+  // 站点级 uuid 打 `/performers/{uuid}/scenes` 会 404，解析失败则空列表 + skipped，
+  // 不再把整块总览拖成红色错误。
   function tpdbIdPage(box, kind, id, pageNum, perPage, dir, timeoutMs) {
-    var path = (kind === "studio" ? "/sites/" : "/performers/") +
-      encodeURIComponent(id) + "/scenes?per_page=" + perPage;
-    var key = box.endpoint + "|" + kind + "|" + id;
-    function get(p) {
-      return tpdbGet(box, path + "&page=" + p, timeoutMs);
-    }
-    if (String(dir).toUpperCase() !== "ASC") {
-      // 这两个端点固定按日期倒序
-      return get(pageNum).then(function (j) {
+    return tpdbResolveId(box, kind, id, timeoutMs).then(function (intId) {
+      if (intId == null) {
+        return { count: 0, scenes: [], hasMore: false, skipped: [String(id)] };
+      }
+      var key = box.endpoint + "|" + kind + "|" + intId;
+      function get(p) {
+        return tpdbGet(box, tpdbBatchPath(kind, [intId], perPage, p, ""), timeoutMs);
+      }
+      if (String(dir).toUpperCase() !== "ASC") {
+        // 接口固定按日期倒序
+        return get(pageNum).then(function (j) {
+          _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
+          return tpdbResult(j, false);
+        });
+      }
+      // ASC：REST 排序参数被忽略 → 页号镜像 + 页内倒序
+      var cached = _tpdbLastPage[key];
+      var ready = cached ? Promise.resolve(cached) : get(1).then(function (j) {
         _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
-        return tpdbResult(j, false);
+        return _tpdbLastPage[key];
       });
-    }
-    // ASC：REST 排序参数被忽略 → 页号镜像 + 页内倒序
-    var cached = _tpdbLastPage[key];
-    var ready = cached ? Promise.resolve(cached) : get(1).then(function (j) {
-      _tpdbLastPage[key] = (j && j.meta && j.meta.last_page) || 1;
-      return _tpdbLastPage[key];
-    });
-    return ready.then(function (last) {
-      var target = Math.max(1, last - pageNum + 1);
-      return get(target).then(function (j) { return tpdbResult(j, true); });
+      return ready.then(function (last) {
+        var target = Math.max(1, last - pageNum + 1);
+        return get(target).then(function (j) { return tpdbResult(j, true); });
+      });
     });
   }
 
+  // 一批演员/站点的新片：一次批量请求覆盖所有人（多键 OR），不再逐个发子资源请求。
+  // 15 个演员从「几十个请求」降到 1–2 个；被源删掉/合并的 id 只进 skipped。
   function tpdbSinceScenes(box, kind, ids, since, perPage, timeoutMs) {
-    var out = [], seen = {}, idx = 0, truncated = false;
-    function fetchOne(id) {
-      // 这两个端点按日期倒序；碰到早于 since 的场景即可停止翻页
-      var path = (kind === "studio" ? "/sites/" : "/performers/") +
-        encodeURIComponent(id) + "/scenes?per_page=" + perPage;
-      function step(p) {
-        return tpdbGet(box, path + "&page=" + p, timeoutMs).then(function (j) {
-          var rows = asArr(j && j.data);
-          var reachedOld = false;
-          rows.forEach(function (raw) {
-            var s = tpdbScene(raw);
-            if (!s) return;
-            if (since && !(s.release_date && s.release_date > since)) { reachedOld = true; return; }
-            if (seen[s.id]) return;
-            seen[s.id] = true;
-            out.push(s);
-          });
-          var last = (j && j.meta && j.meta.last_page) || 1;
-          if (!reachedOld && rows.length && p < last) {
-            // 到页数上限但源还有更早场景 → 记录截断，UI 只在真截断时提示（用户 2026-10-26）
-            if (p >= TPDB_MAX_PAGES_PER_ID) { truncated = true; return; }
-            return step(p + 1);
-          }
-        });
+    return tpdbResolveIds(box, kind, ids, timeoutMs).then(function (r) {
+      if (!r.ids.length) {
+        return { count: 0, scenes: [], hasMore: false, truncated: false, skipped: r.skipped };
       }
-      return step(1);
-    }
-    function wave() {
-      if (idx >= ids.length) return out;
-      var chunk = ids.slice(idx, idx + 3);
-      idx += 3;
-      return Promise.all(chunk.map(fetchOne)).then(wave);
-    }
-    return Promise.resolve().then(wave).then(function () {
-      out.sort(function (a, b) {
-        return String(b.release_date || "").localeCompare(String(a.release_date || ""));
+      var out = [], seen = {}, truncated = false, startedAt = Date.now();
+      function step(p) {
+        // 批量结果按日期倒序；碰到早于 since 的场景即可停止翻页
+        return tpdbGet(box, tpdbBatchPath(kind, r.ids, perPage, p, since), timeoutMs)
+          .then(function (j) {
+            var rows = asArr(j && j.data);
+            var reachedOld = false;
+            rows.forEach(function (raw) {
+              var s = tpdbScene(raw);
+              if (!s) return;
+              if (since && !(s.release_date && s.release_date > since)) { reachedOld = true; return; }
+              if (seen[s.id]) return;
+              seen[s.id] = true;
+              out.push(s);
+            });
+            var last = (j && j.meta && j.meta.last_page) || 1;
+            if (!reachedOld && rows.length && p < last) {
+              // 到页数上限但源还有更早场景 → 记录截断，UI 只在真截断时提示（用户 2026-10-26）
+              if (p >= TPDB_MAX_PAGES_BATCH) { truncated = true; return; }
+              // 时间预算用完也停：首屏不能为了翻页等二十秒
+              if (Date.now() - startedAt > TPDB_BATCH_BUDGET_MS) { truncated = true; return; }
+              return step(p + 1);
+            }
+          });
+      }
+      return step(1).then(function () {
+        out.sort(function (a, b) {
+          return String(b.release_date || "").localeCompare(String(a.release_date || ""));
+        });
+        return { count: out.length, scenes: out, hasMore: false, truncated: truncated, skipped: r.skipped };
       });
-      return { count: out.length, scenes: out, hasMore: false, truncated: truncated };
     });
   }
 
@@ -553,7 +651,8 @@
     boxFailed: {},             // endpoint -> failed this round (retried on the next load)
     boxStatus: {},             // endpoint -> { ok:bool, kind:string }
     boxFetched: {},            // endpoint -> scenes fetched this round (loading panel rows)
-    boxTruncated: {},          // endpoint -> true when TPDB hit its per-id page cap
+    boxTruncated: {},          // endpoint -> true when TPDB hit its page cap
+    boxSkipped: {},            // endpoint -> 被源删掉/合并、无法解析整数 id 的条目数
     droppedByWindow: 0,        // scenes dropped by the recent/preview window this round
     windowRelaxed: false,      // "unlimited time range (this session)"
     preferredFallback: false,  // preferred box had no ID → queried the others instead
@@ -752,6 +851,7 @@
         count: result.count || 0,
         hasMore: result.hasMore != null ? result.hasMore : result.scenes.length >= boxPerPage,
         truncated: !!result.truncated,
+        skipped: result.skipped || [],
       };
     });
   }
@@ -826,6 +926,14 @@
         _state.boxStatus[b.endpoint] = { ok: true };
         _state.boxFetched[b.endpoint] = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
         if (result.truncated) _state.boxTruncated[b.endpoint] = true;
+        if (result.skipped && result.skipped.length) {
+          // 累加：多页各自的跳过名单不重复
+          var prev = _state.boxSkipped[b.endpoint] || [];
+          result.skipped.forEach(function (u) {
+            if (prev.indexOf(u) < 0) prev.push(u);
+          });
+          _state.boxSkipped[b.endpoint] = prev;
+        }
         if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
         // Window early-stop: the page's boundary date crossed the window,
         // every later page is outside it as well
@@ -967,6 +1075,7 @@
     _state.boxStatus = {};
     _state.boxFetched = {};
     _state.boxTruncated = {};
+    _state.boxSkipped = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -1174,6 +1283,7 @@
     _state.boxStatus = {};
     _state.boxFetched = {};
     _state.boxTruncated = {};
+    _state.boxSkipped = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -2917,19 +3027,27 @@
     }
     pane.appendChild(countInfo);
 
-    // TPDB 按演员/站点逐个取片，每人最多 TPDB_MAX_PAGES_PER_ID 页：
+    // TPDB 走批量查询，整体最多 TPDB_MAX_PAGES_BATCH 页：
     // 只有源确实还有更早场景、被页数上限截断时才提示（用户 2026-10-26）
     var truncatedBox = _state.queryBoxes.filter(function (b) { return _state.boxTruncated[b.endpoint]; })[0];
     if (truncatedBox) {
       var capInfo = document.createElement("div");
       capInfo.className = "ssd-count-info ssd-count-line text-muted";
-      var capCount = TPDB_MAX_PAGES_PER_ID * 100;
-      capInfo.textContent = _state.entityType === "studio"
-        ? tc("当前源每个工作室最多回溯 " + capCount + " 部，已达上限。",
-          "This source is limited to " + capCount + " scenes per studio; this list reached that limit.")
-        : tc("当前源每位演员最多回溯 " + capCount + " 部，已达上限。",
-          "This source is limited to " + capCount + " scenes per performer; this list reached that limit.");
+      var capCount = TPDB_MAX_PAGES_BATCH * 100;
+      capInfo.textContent = tc("当前源最多回溯 " + capCount + " 部，已达上限。",
+        "This source is limited to " + capCount + " scenes; this list reached that limit.");
       pane.appendChild(capInfo);
+    }
+
+    // 源里已不存在（被删/合并）或只给了站点级 id 的条目：跳过而不是整块报错
+    var skippedBox = _state.queryBoxes.filter(function (b) { return _state.boxSkipped[b.endpoint]; })[0];
+    if (skippedBox) {
+      var skipInfo = document.createElement("div");
+      skipInfo.className = "ssd-count-info ssd-count-line text-muted";
+      var skipCount = (_state.boxSkipped[skippedBox.endpoint] || []).length;
+      skipInfo.textContent = tc("已跳过 " + skipCount + " 项：当前源查不到对应记录。",
+        skipCount + " skipped: this source has no matching record.");
+      pane.appendChild(skipInfo);
     }
 
     if (_state.displayMode === "list") {
@@ -5009,7 +5127,7 @@
     callBoxSceneList: callBoxSceneList,
     callBoxPerformerList: callBoxPerformerList,
     isTPDBBox: isTPDBBox,
-    TPDB_MAX_PAGES_PER_ID: TPDB_MAX_PAGES_PER_ID,
+    TPDB_MAX_PAGES_BATCH: TPDB_MAX_PAGES_BATCH,
     boxRateLimiter: _boxRateLimiter,
     // config
     getStashBoxes: getStashBoxes,

@@ -22,11 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.5.3";
-  var TASK_SEARCH = "Search Resources";
-  var TASK_PUSH = "Push to Downloader";
-  var RESULT_MARKER = "[SSD_RESULT]";
-  var ERROR_MARKER = "[SSD_ERROR]";
+  var PLUGIN_VERSION = "2.5.4";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -4687,22 +4683,12 @@
     results.appendChild(loading);
     scrollModalToBottom();
 
-    var rid = newRequestId();
-    runPluginTask(TASK_SEARCH, [
-      { key: "mode", value: { str: "search" } },
-      { key: "query", value: { str: query } },
-      { key: "rid", value: { str: rid } },
-    ]).then(function (jobId) {
-      if (!jobId) throw new Error(tc("任务提交失败", "Task submission failed"));
-      return searchBudgetMs().then(function (budget) { return pollJob(jobId, budget); });
-    }).then(function () {
-      return waitSearchResult(rid);
-    }).then(function (result) {
+    runPluginOp({ mode: "search", query: query }).then(function (result) {
       btn.disabled = false;
       btn.textContent = tc("搜索资源", "Search Resources");
       // No re-scroll: results render in place of the loading line, so the
       // viewport already shows the result header and first entries
-      renderSearchResults(results, result);
+      renderSearchResults(results, result || {});
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
       btn.disabled = false;
@@ -4715,99 +4701,29 @@
     });
   }
 
-  function runPluginTask(taskName, args) {
+  // ─── 结果通道：runPluginOperation ────────────────────────────────────────
+  // 插件 stdout 输出一条 {"output": ...}，Stash 把它原样当作这个 mutation 的
+  // 返回值。通道要会话，没有 query{logs} 的 30 条窗口，也没有 64KB 单行截断，
+  // 同步返回，不需要轮询 job。
+  // （也试过写文件走 assets 静态路由，但那个目录匿名可列可读，搜索结果会公开。）
+  // 代价是请求会挂住整个 Jackett 搜索时长，最长到后端 jackettTimeout。
+  function runPluginOp(args) {
     return callGQL(
-      "mutation($id:ID!,$t:String!,$a:[PluginArgInput!]){runPluginTask(plugin_id:$id,task_name:$t,args:$a)}",
-      { id: PLUGIN_ID, t: taskName, a: args }
-    ).then(function (r) { return (r && r.runPluginTask) || null; });
+      "mutation($id:ID!,$a:Map!){runPluginOperation(plugin_id:$id,args:$a)}",
+      { id: PLUGIN_ID, a: args || {} }
+    ).then(function (r) { return r && r.runPluginOperation; })
+      .catch(function (e) { throw new Error(gqlErrorMessage(e)); });
   }
 
-  // 每次任务一个 requestId：结果/错误都带着它回传，前端只认自己那个。
-  // 只靠「日志里第一条 marker」会把上一次（或并行任务）的结果当成这次的
-  // —— 论坛反馈：搜完演员 A 再搜 B，显示的还是 A 的结果。
-  function newRequestId() {
-    return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  }
-
-  function pollJob(jobId, timeoutMs) {
-    var startTime = Date.now();
-    var timeout = timeoutMs || 60000;
-    return new Promise(function (resolve, reject) {
-      function tick() {
-        callGQL("query($i:FindJobInput!){findJob(input:$i){id status}}", { i: { id: jobId } })
-          .then(function (r) {
-            var job = r && r.findJob;
-            if (!job) { reject(new Error("Job not found")); return; }
-            if (job.status === "FINISHED" || job.status === "FAILED" || job.status === "CANCELLED") {
-              resolve(job.status); return;
-            }
-            if (Date.now() - startTime > timeout) { reject(new Error(tc("搜索超时", "Search timed out"))); return; }
-            setTimeout(tick, 1500);
-          }).catch(function (e) { reject(e); });
-      }
-      tick();
-    });
-  }
-
-  // 前端任务预算 = 后端 Jackett 超时 + 30s 调度余量。以前前端固定 60s 而后端
-  // 默认 120s：前端先报超时，后端的结果随后才落日志，下一次搜索就会读到它。
-  function searchBudgetMs() {
-    return getPluginSettings().then(function (s) {
-      var sec = parseInt((s && s.jackettTimeout) || "", 10);
-      if (!(sec > 0)) sec = 120;
-      return sec * 1000 + 30000;
-    }).catch(function () { return 150000; });
-  }
-
-  // "marker 后面的负载"：新格式是 JSON，老格式（或日志被截断）解析不出 JSON
-  function readMarkerPayload(msg, marker) {
-    var i = msg.indexOf(marker);
-    if (i === -1) return null;
-    var raw = msg.substring(i + marker.length).trim();
-    try { return JSON.parse(raw); } catch (e) { return { __raw: raw }; }
-  }
-
-  // 返回 null = 本次结果还没出现在日志里（交给 waitSearchResult 重试）
-  function fetchSearchResult(rid) {
-    return callGQL("query{logs{level message}}", {}).then(function (r) {
-      var logs = (r && r.logs) || [];
-      for (var i = 0; i < logs.length; i++) {
-        var msg = (logs[i] || {}).message || "";
-        if (msg.indexOf(ERROR_MARKER) !== -1) {
-          var err = readMarkerPayload(msg, ERROR_MARKER);
-          if (!err || err.rid !== rid) continue;
-          throw new Error(err.message || err.__raw || tc("搜索失败", "Search failed"));
-        }
-        if (msg.indexOf(RESULT_MARKER) !== -1) {
-          var res = readMarkerPayload(msg, RESULT_MARKER);
-          if (!res || res.rid !== rid) continue;
-          // 解析失败就是失败，不能顺手拿更旧的一条顶替（那正是串结果的来源）
-          if (res.__raw) throw new Error(tc("结果解析失败（日志可能被截断）",
-            "Could not parse results (log may be truncated)"));
-          return res;
-        }
-      }
-      return null;
-    });
-  }
-
-  // job 结束 ≠ 日志已落库：等一小会儿再判失败（以前读一次就返回，容易读到
-  // 上一次的旧结果）
-  function waitPayload(reader, rid, missingMsg) {
-    var deadline = Date.now() + 5000;
-    function attempt() {
-      return reader(rid).then(function (res) {
-        if (res) return res;
-        if (Date.now() > deadline) throw new Error(missingMsg);
-        return new Promise(function (resolve) { setTimeout(resolve, 300); }).then(attempt);
-      });
-    }
-    return attempt();
-  }
-
-  function waitSearchResult(rid) {
-    return waitPayload(fetchSearchResult, rid, tc("任务已完成但没收到搜索结果，请重试",
-      "Task finished without returning results — please retry"));
+  // callGQL 把 GraphQL errors 数组整个 JSON.stringify 后抛出，直接显示会是一坨
+  // `[{"message":"..."}]`。插件 operation 的错误本来就是一句话，取出来即用。
+  function gqlErrorMessage(e) {
+    var raw = String((e && e.message) || e || "");
+    try {
+      var arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.length && arr[0] && arr[0].message) return arr[0].message;
+    } catch (_) { /* 不是 JSON，原样返回 */ }
+    return raw;
   }
 
   function renderSearchResults(section, result) {
@@ -4965,19 +4881,7 @@
       pushBtn.onclick = function () {
         pushBtn.disabled = true;
         pushBtn.textContent = tc("推送中...", "Pushing...");
-        var prId = newRequestId();
-        runPluginTask(TASK_PUSH, [
-          { key: "mode", value: { str: "push_download" } },
-          { key: "magnet", value: { str: res.magnet } },
-          { key: "rid", value: { str: prId } },
-        ]).then(function (jobId) {
-          if (!jobId) throw new Error("Task submission failed");
-          return pollJob(jobId);
-        }).then(function () {
-          return waitPayload(fetchPushResult, prId, tc("任务已完成但没收到推送结果",
-            "Task finished without a push result"));
-        })
-        .then(function () {
+        runPluginOp({ mode: "push_download", magnet: res.magnet }).then(function () {
           pushBtn.textContent = tc("已推送 ✓", "Pushed ✓");
           pushBtn.classList.add("ssd-btn-success");
           setTimeout(function () {
@@ -5001,27 +4905,6 @@
 
     row.appendChild(actions);
     return row;
-  }
-
-  // 返回 null = 本次推送还没出现在日志里（交给 waitPayload 重试）
-  function fetchPushResult(rid) {
-    return callGQL("query{logs{level message}}", {}).then(function (r) {
-      var logs = (r && r.logs) || [];
-      for (var i = 0; i < logs.length; i++) {
-        var msg = (logs[i] || {}).message || "";
-        if (msg.indexOf(ERROR_MARKER) !== -1) {
-          var err = readMarkerPayload(msg, ERROR_MARKER);
-          if (!err || err.rid !== rid) continue;
-          throw new Error(err.message || err.__raw || tc("推送失败", "Push failed"));
-        }
-        if (msg.indexOf(RESULT_MARKER) !== -1) {
-          var res = readMarkerPayload(msg, RESULT_MARKER);
-          if (!res || res.rid !== rid) continue;
-          return true;
-        }
-      }
-      return null;
-    });
   }
 
   function showModalNotice(text, type) {

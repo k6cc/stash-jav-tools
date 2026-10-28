@@ -2,8 +2,11 @@
 stashDiscover backend
 
 Handles Jackett resource search and downloader push (qBittorrent).
-Results are emitted to the Stash log with a [SSD_RESULT] marker so the
-frontend JS can parse them back.
+
+Results are written to cache/<kind>-<rid>.json inside the plugin directory and
+picked up by the frontend over the plugin's own asset route. They are NOT sent
+through the Stash log: that channel is a 30-entry ring buffer and truncates any
+line over 64KB, so large payloads silently disappeared.
 
 Modes:
   search          — Jackett Torznab search, args: query
@@ -29,11 +32,9 @@ if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
 PLUGIN_ID = "stashDiscover"
-RESULT_MARKER = "[SSD_RESULT]"
-ERROR_MARKER = "[SSD_ERROR]"
-# 单次搜索下发给前端的条数上限：一条结果带标题/磁力/大小/做种数，50 条
-# 已经够翻三页，再多只会把日志行撑大（见 count 与 truncated 的注释）
-SEARCH_RESULT_LIMIT = 50
+# 单次搜索下发给前端的条数上限。operation 通道没有日志的 64KB 行上限；
+# UI 仍然分页渲染，200 只是"能一次拿全"，不是"一屏显示 200 条"。
+SEARCH_RESULT_LIMIT = 200
 
 
 class StashInterface:
@@ -93,10 +94,6 @@ class StashInterface:
         plugins = ((data.get("configuration") or {}).get("plugins")) or {}
         return plugins.get(PLUGIN_ID, {})
 
-    @staticmethod
-    def exit_plugin(output="ok"):
-        print(output)
-
 
 def log_info(msg):
     print(f"\x01i\x02[{PLUGIN_ID}] {msg}", file=sys.stderr, flush=True)
@@ -107,31 +104,25 @@ def log_warn(msg):
 def log_error(msg):
     print(f"\x01e\x02[{PLUGIN_ID}] {msg}", file=sys.stderr, flush=True)
 
-# 结果/错误通过 Stash 的全局日志流回传给前端，而日志里没有请求边界：多个任务
-# 交错、上一次请求迟到落库，都会让「取最新一条 [SSD_RESULT]」读到别人的结果
-# （论坛反馈：搜演员 A 之后再搜 B，显示的还是 A 的结果）。每次任务带一个前端
-# 生成的 requestId，回写进 payload，前端只认自己那个。
-_REQUEST_ID = ""
-
-def set_request_id(rid):
-    global _REQUEST_ID
-    _REQUEST_ID = str(rid or "").strip()
-
+# ─── 结果通道：stdout → runPluginOperation 的返回值 ───────────────────────
+# 旧做法把结果打成一行 [SSD_RESULT] 到 stderr，前端用 query{logs} 捞回来。
+# 那条通道实测三处硬伤：
+#   1. logs 是环形缓冲，只留 30 条 —— Jackett 慢查询期间别的日志一刷就没了
+#   2. 单行超过 64KB 被 Stash 截断 —— 长标题 + 多 tracker 很容易擦线
+#   3. 两者都不报错，前端只能看到"没收到结果"
+# 也试过写文件走插件静态资源路由（ui.assets: /: .），但实测那个目录
+# **匿名可读、可列目录** —— /plugin/stashDiscover/assets/cache/ 匿名 200 并列出
+# 全部结果文件名，搜索结果里的种子标题与下载链接就成了公开资源。该方案作废。
+# 现在走 Stash 官方的 runPluginOperation：stdout 输出一条 {"output": ...}，
+# 由 GraphQL 原样返回前端。通道本身要会话、没有截断、不需要轮询。
 def emit_result(obj):
-    if _REQUEST_ID and isinstance(obj, dict):
-        obj = dict(obj)
-        obj["rid"] = _REQUEST_ID
-    print(f"{RESULT_MARKER} {json.dumps(obj, ensure_ascii=False)}", file=sys.stderr, flush=True)
+    n = len(obj.get("results") or [])
+    log_info(f"result → {n} items" if n else "result → ok")
+    print(json.dumps({"output": obj}, ensure_ascii=False), flush=True)
 
 def emit_error(msg):
-    # 带 rid 时输出 JSON（前端按 rid 过滤），否则保持旧的纯文本格式，
-    # 让未升级的前端仍能读到错误文案
-    if _REQUEST_ID:
-        payload = json.dumps({"rid": _REQUEST_ID, "message": msg}, ensure_ascii=False)
-        print(f"{ERROR_MARKER} {payload}", file=sys.stderr, flush=True)
-    else:
-        print(f"{ERROR_MARKER} {msg}", file=sys.stderr, flush=True)
-
+    log_warn(f"error → {msg[:200]}")
+    print(json.dumps({"error": msg}, ensure_ascii=False), flush=True)
 
 def http_request(url, method="GET", data=None, headers=None, timeout=30):
     req_headers = headers or {}
@@ -391,7 +382,6 @@ def main():
             fragment = json.loads(sys.stdin.read())
 
         stash = StashInterface(fragment)
-        set_request_id(stash.get_arg("rid", ""))
         mode = stash.get_mode()
 
         if mode == "search":
@@ -405,14 +395,14 @@ def main():
             savepath = stash.get_arg("savepath", "")
             do_push_download(stash, magnet, savepath)
         else:
-            log_warn(f"Unknown mode: {mode}")
-
-        stash.exit_plugin("OK")
+            emit_error(f"Unknown mode: {mode or '(empty)'}")
 
     except Exception as e:
         log_error(f"FATAL: {repr(e)}")
         import traceback
         traceback.print_exc(file=sys.stderr)
+        # stdout 是唯一的结果通道，异常也要从那里回，否则前端只看到超时
+        emit_error(f"{type(e).__name__}: {e}")
         sys.exit(1)
 
 

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.4.7";
+  var PLUGIN_VERSION = "2.5.0";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -2782,6 +2782,12 @@
       zoomInput.title = tc("卡片大小", "Card size");
       zoomInput.oninput = function () {
         _state.zoom = parseInt(this.value, 10) || 0;
+        // 每个网格把自己的档位记在 data-zoom 上（供窗口 resize 逐网格重排），
+        // 而 layoutCardGrid 优先读它而不是 _state.zoom —— 拖动时不同步写回，
+        // 重排就永远按渲染时那一档算，滑块看起来毫无反应（用户 2026-10-28 反馈）。
+        pane.querySelectorAll(".ssd-card-grid").forEach(function (g) {
+          g.setAttribute("data-zoom", String(_state.zoom));
+        });
         layoutCardGrid();
       };
       zoomWrap.appendChild(zoomInput);
@@ -3337,12 +3343,15 @@
     }
 
     // Box source pill — bottom-left corner (native has no fixed content there),
-    // only meaningful with multiple stash-boxes
+    // only meaningful with multiple stash-boxes.
+    // 挂在 .thumbnail-section 而不是 .scene-card-preview：图片懒加载期间 preview 上
+    // 挂着 filter: blur(30px) 的模糊占位，filter 会作用于整个子树，角标一起被糊掉
+    // （用户 2026-10-28 反馈「库内徽章很不明显」的成因之一）。
     if (st.queryBoxes.length > 1) {
       var boxBadge = document.createElement("span");
       boxBadge.className = "ssd-overlay-box";
       boxBadge.textContent = item.boxName;
-      preview.appendChild(boxBadge);
+      videoSection.appendChild(boxBadge);
     }
 
     // Preview pill for future-dated scenes — top-left corner
@@ -3350,7 +3359,7 @@
       var prevBadge = document.createElement("span");
       prevBadge.className = "ssd-overlay-preview";
       prevBadge.textContent = tc("预告", "Preview");
-      preview.appendChild(prevBadge);
+      videoSection.appendChild(prevBadge);
     }
 
     videoSection.appendChild(preview);

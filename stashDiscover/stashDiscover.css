@@ -560,17 +560,83 @@
    notch so long studio names take less cover space */
 .ssd-card-grid .studio-overlay { font-size: 12px; }
 
+/* 发现页 / 弹窗的场景卡比演员详情「发现」tab 的窄（实测 217 vs 271 宽），原生
+   12px 工作室名与 14px 时长放在窄卡上显得又大又靠内，按卡片宽度等比压一档并
+   贴边到 6px（演员 tab 保持原生 12/14px 不动，用户 2026-10-28）。
+   ≤480 的媒体查询另有更紧的 10.5px / 3–4px 规则，两边衔接。 */
+.ssd-dp-page .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes .ssd-card-grid .studio-overlay {
+  top: 6px;
+  right: 6px;
+  font-size: 10.5px;
+  line-height: 1.15;
+}
+.ssd-dp-page .ssd-card-grid .scene-specs-overlay,
+.ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay {
+  bottom: 6px;
+  right: 6px;
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+.ssd-dp-page .ssd-card-grid .scene-specs-overlay .overlay-duration,
+.ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay .overlay-duration {
+  font-size: 10.5px;
+}
+
+/* 左上角的自定义角标（预告 / 距今天数 / 库内）一并收到 6px，与右上工作室名、
+   右下时长四角对齐；字号也从 10/10.5 混用并到 10.5（用户 2026-10-28）。
+   只作用于发现页与弹窗，演员详情「发现」tab 保持原样。 */
+.ssd-dp-page .ssd-overlay-preview,
+.ssd-dp-modal-scenes .ssd-overlay-preview,
+.ssd-dp-page .ssd-overlay-days,
+.ssd-dp-modal-scenes .ssd-overlay-days,
+.ssd-dp-page .ssd-overlay-inlib,
+.ssd-dp-modal-scenes .ssd-overlay-inlib {
+  top: 6px;
+  left: 6px;
+  font-size: 10.5px;
+}
+
+/* 大档（--ssd-card-min: 300 → 实测卡宽 369 / duo 内 273）已接近演员详情「发现」
+   tab 的 271px，10.5px 角标在上面偏小，字号与内缩一并回到原生 12/14px + 8px
+   （用户 2026-10-28）。特异性能压过 ≤480 段的 10.5px / 4px 规则。 */
+.ssd-dp-page[data-csize="2"] .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid .studio-overlay {
+  top: 8px;
+  right: 8px;
+  font-size: 12px;
+}
+.ssd-dp-page[data-csize="2"] .ssd-card-grid .scene-specs-overlay,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid .scene-specs-overlay {
+  bottom: 8px;
+  right: 8px;
+  font-size: 14px;
+}
+.ssd-dp-page[data-csize="2"] .ssd-card-grid .scene-specs-overlay .overlay-duration,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid .scene-specs-overlay .overlay-duration {
+  font-size: 14px;
+}
+.ssd-dp-page[data-csize="2"] .ssd-overlay-preview,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-overlay-preview,
+.ssd-dp-page[data-csize="2"] .ssd-overlay-days,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-overlay-days,
+.ssd-dp-page[data-csize="2"] .ssd-overlay-inlib,
+.ssd-dp-modal-scenes[data-csize="2"] .ssd-overlay-inlib {
+  top: 8px;
+  left: 8px;
+  font-size: 12px;
+  padding: 2px 7px;
+}
+
 /* ── Custom overlays on top of native .scene-card-preview ─────────────────── */
 
 /* Box source pill — bottom-left corner (native cards put duration/specs at the
    bottom-right and studio at the top-right; the bottom-left has no fixed
-   native content). The native .scene-specs-overlay is anchored inside the
-   outer .thumbnail-section, which is 5px taller than our mount point
-   (.scene-card-preview carries margin-bottom:5px) — subtract it so the pill
-   sits on the same baseline as the native specs row. */
+   native content). 挂在 .thumbnail-section 上（与原生 specs 同一容器），
+   故 bottom 与原生 1rem 直接同基线。 */
 .ssd-overlay-box {
   position: absolute;
-  bottom: calc(1rem - 5px);
+  bottom: 1rem;
   left: 0.7rem;
   z-index: 9;
   background: rgba(12, 166, 120, 0.92);
@@ -1303,12 +1369,18 @@
 }
 
 /* ─── 筛选行（§3.1.3）────────────────────────────────────────────────────── */
-
+/* 布局策略（用户 2026-10-28 重构）：
+   1) 单行优先 —— flex-wrap: nowrap，搜索框（可缩）先让位，控件组不缩；
+   2) 真放不下时由 JS 打 .is-collapsed：只留「搜索框 + 更多按钮」，其余选项
+      收进下方面板，点按钮展开、点筛选区外任意位置收回（见 discover.js
+      syncToolbar / setToolsOpen）。断点用实际测量的内容宽，不用媒体查询，
+      因为数据源下拉只在多源时才出现，写死断点会让单源用户提前收起。 */
 .ssd-dp-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center; /* 搜索框+筛选控件作为一组横向居中 — 用户 2026-10-25 */
-  flex-wrap: wrap; /* §7.2 */
+  flex-wrap: nowrap; /* §7.2：靠 .is-collapsed 收面板，而不是折行 */
   gap: 0.6rem;
   padding: 6px 10px;
   border-radius: 9px;
@@ -1322,6 +1394,9 @@
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
+  /* 不参与收缩：让它保持自然单行宽，由搜索框独自收缩；否则 768 档两者
+     各让一半，控件组自己被挤成两行（实测：搜索 261 / 控件 404 → 高 58） */
+  flex: 0 0 auto;
 }
 
 .ssd-dp-toolbar input,
@@ -1384,6 +1459,9 @@
 }
 .ssd-dp-sec:last-child { margin-bottom: 0; }
 .ssd-dp-duo { margin-bottom: 2.1rem; }
+/* duo 内的模块段不再自带下边距：grid 行高按 item 的 margin box 计算，残留的
+   2.1rem 会把 duo 撑高一行并在列尾留下空带，间距改由 duo 统管（用户 2026-10-28） */
+.ssd-dp-duo > .ssd-dp-sec { margin-bottom: 0; }
 
 .ssd-dp-sec-head {
   display: flex;
@@ -1446,8 +1524,15 @@
 }
 
 @media (max-width: 900px) {
-  .ssd-dp-duo { grid-template-columns: minmax(0, 1fr); }
+  /* 单列堆叠时行间距 = 标准模块间距；默认 gap 1.1rem 叠加模块 margin 会变成 1.5 倍 */
+  .ssd-dp-duo { grid-template-columns: minmax(0, 1fr); row-gap: 2.1rem; }
 }
+
+/* duo 两列高度由 grid 拉平（align-items: stretch），但短列的内容只有固定高度，
+   余下全是裸空洞 → 让短列的末个子元素（三态框）吃掉列高，空状态垂直居中。
+   必须 :not(.ssd-dp-grid)：卡片网格若被改成 flex 会塌成单列（用户 2026-10-28）。 */
+.ssd-dp-duo > .ssd-dp-sec > div:last-child:not(.ssd-dp-grid) { flex: 1 1 auto; display: flex; }
+.ssd-dp-duo > .ssd-dp-sec > div:last-child:not(.ssd-dp-grid) > .ssd-dp-state { flex: 1 1 auto; justify-content: center; }
 
 /* ─── 三态组件（§9.0：加载/错误/空）──────────────────────────────────────── */
 
@@ -1478,6 +1563,21 @@
 }
 
 .ssd-dp-state .ssd-dp-retry:hover { background: color-mix(in srgb, var(--sx-re) 16%, transparent); }
+
+/* 提示框里的按钮组：并排（重试 = 红，打开设置 = 中性），窄屏自动换行 */
+.ssd-dp-state-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.ssd-dp-state .ssd-dp-retry.ghost {
+  border-color: var(--sx-ui3);
+  color: var(--sx-tx2);
+}
+.ssd-dp-state .ssd-dp-retry.ghost:hover {
+  background: color-mix(in srgb, var(--sx-tx3) 14%, transparent);
+}
 
 /* 加载动画（四点脉冲） */
 .ssd-dp-loading-dots { display: inline-flex; gap: 5px; }
@@ -1519,11 +1619,13 @@
 
 /* ─── P4 视图实现（设计 §3/§7/§8；设计原型移植 + 扩展）── */
 
-/* 工具栏（§3.1.3 贯穿所有视图；搜索框限宽 — 用户 2026-10-23 确认）*/
+/* 工具栏（§3.1.3 贯穿所有视图；搜索框限宽 — 用户 2026-10-23 确认）
+   限宽 300→280：iPad mini（768）单行放下全部控件时搜索框只剩约 195px，
+   基准再小一点能让 800 级宽度少挤掉一些，也让宽屏不再占 300（用户 2026-10-28）*/
 .ssd-dp-toolbar .grow {
-  flex: 0 1 300px;
+  flex: 0 1 280px;
   min-width: 180px;
-  max-width: 320px;
+  max-width: 280px;
   padding: 7px 12px;
   border: 1px solid var(--sx-ui3);
   border-radius: 8px;
@@ -1536,6 +1638,44 @@
 .ssd-dp-toolbar .grow:focus { border-color: var(--sx-acc); }
 .ssd-dp-toolbar .grow::placeholder { color: var(--sx-tx3); }
 
+/* ─── 筛选行收起态（用户 2026-10-28）───────────────────────────────────────
+   宽度不够时只留「搜索框 + 更多按钮」；按钮展开的控件组落到第二行。 */
+.ssd-dp-more {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ssd-dp-more svg { width: 16px; height: 16px; }
+.ssd-dp-more:hover { color: var(--sx-tx); border-color: var(--sx-edge); }
+.ssd-dp-toolbar.is-open .ssd-dp-more {
+  color: var(--sx-acc-tx);
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+
+.ssd-dp-toolbar.is-collapsed { flex-wrap: wrap; }
+.ssd-dp-toolbar.is-collapsed .ssd-dp-more { display: inline-flex; }
+.ssd-dp-toolbar.is-collapsed .grow { flex: 1 1 auto; max-width: none; }
+.ssd-dp-toolbar.is-collapsed .ssd-dp-tools { display: none; }
+.ssd-dp-toolbar.is-collapsed.is-open .ssd-dp-tools {
+  display: flex;
+  flex: 1 1 100%;
+  order: 3; /* 永远排在「搜索框 + 更多按钮」之下 */
+  justify-content: flex-start;
+  padding-top: 8px;
+  border-top: 1px solid var(--sx-line2);
+}
+
 .ssd-dp-tool-label {
   color: var(--sx-tx3);
   font-size: 12px;
@@ -1547,6 +1687,56 @@
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+/* 场景卡档位滑块（筛选行最右，用户 2026-10-28）。轨道与手柄自绘：原生
+   accent-color 只有一条实蓝轨 + 深灰手柄，深色主题下几乎看不出当前位置。 */
+.ssd-dp-csize {
+  display: inline-flex;
+  align-items: center;
+}
+.ssd-dp-toolbar .ssd-dp-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 84px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.ssd-dp-toolbar .ssd-dp-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sx-ui3);
+}
+.ssd-dp-toolbar .ssd-dp-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px; /* (轨道 4 − 手柄 12) / 2 */
+  border-radius: 50%;
+  border: 0;
+  background: var(--sx-acc);
+}
+.ssd-dp-toolbar .ssd-dp-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sx-ui3);
+}
+.ssd-dp-toolbar .ssd-dp-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--sx-acc);
+}
+.ssd-dp-toolbar .ssd-dp-range:focus-visible {
+  outline: 2px solid var(--sx-acc);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .ssd-dp-toolbar select {
@@ -1604,10 +1794,97 @@
    平板竖屏尤其明显（768 档内容宽 695，3 列需 710 差 15px；1024 的 duo 半宽 468，
    2 列需 470 差 2px 直接掉成 1 列）。210 让 695 能排 3 列，卡片仍有 225px
    （用户 2026-10-27 iPad 实测） */
+/* 卡片档位（用户 2026-10-28）：滑块只改 --ssd-card-min，auto-fill + 1fr 保证档位内
+   仍随屏宽连续自适应（与原生 Stash 一致），跨阈值才增减一列。
+   三档在实测的四种容器宽度下都能真正改变列数：四档会出现两档列数相同，
+   拖上去毫无反应（详见 2026-10-28 记忆里的实测表）。 */
+.ssd-dp-page { --ssd-card-min: 210px; }              /* 标准（默认） */
+.ssd-dp-page[data-csize="0"] { --ssd-card-min: 160px; } /* 紧凑 */
+.ssd-dp-page[data-csize="2"] { --ssd-card-min: 300px; } /* 大 */
+
+/* 演员弹层挂在 body 上，不在 .ssd-dp-page 作用域内 → 自己带一份档位
+   （JS 在 openPerfModal / applyCardSize 写入 data-csize，用户 2026-10-28） */
+.ssd-dp-modal-scenes { --ssd-card-min: 210px; }
+.ssd-dp-modal-scenes[data-csize="0"] { --ssd-card-min: 160px; }
+.ssd-dp-modal-scenes[data-csize="2"] { --ssd-card-min: 300px; }
+
 .ssd-dp-page .ssd-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--ssd-card-min, 210px), 1fr));
   gap: 10px;
+}
+/* 弹层「相关场景」也走档位（原先是 flex + layoutCardGrid 的原生 zoom 公式，
+   完全不吃发现页滑块）：桌面 724 内容宽下三档 = 4 / 3 / 2 列。 */
+.ssd-dp-modal-scenes .ssd-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--ssd-card-min, 210px), 1fr));
+  gap: 10px;
+}
+.ssd-dp-modal-scenes .ssd-card-grid .scene-card { margin: 0; }
+
+/* 关注分组里的场景网格：分组卡自带 1px 边框 + body 左右内边距（14 / 窄屏 10），
+   可用宽度比页面其它网格少 30px（窄屏 22px），临界视口会少一列 —— 375 视口其它
+   tab 是 3/2/1 列，关注 tab 只有 2/1/1 列（用户 2026-10-28 反馈）。
+   试过把内缩折进档位阈值（min - 内缩/2），375 修好但桌面反向多列（1024 小档 6 列
+   vs 其它 tab 5 列、1280 大档 4 列 vs 3 列）—— 每列该补的量随列数变化，固定值
+   不可能对所有宽度成立。这里直接把内缩抵消掉，让网格宽度与其它 tab 一致（只剩
+   分组卡那 1px 边框的差），列数判定就与其它 tab 完全等价。
+   --ssd-grid-pad 必须与 .ssd-dp-fgrp-body 的左右 padding 同步。 */
+.ssd-dp-fgrp-body { --ssd-grid-pad: 14px; }
+.ssd-dp-fgrp-body .ssd-card-grid {
+  margin-left: calc(-1 * var(--ssd-grid-pad));
+  margin-right: calc(-1 * var(--ssd-grid-pad));
+}
+
+/* 弹层「相关场景」的列表模式（用户 2026-10-28）：面板内宽 713（窄屏 331），
+   原生 8 列 auto 布局会撑到 1188，只能横向拖。这里改定宽布局 + 收窄封面，
+   并去掉这个弹层里没有意义的列：演员（本来就是这个人的片）、标签（最宽且最不值）。
+   注意：table-layout:fixed 下 thead 里那条 border-row（colspan=100）会把列宽
+   全抢成 3px，必须一起隐藏（实测 src 里它是纯装饰线，弹层无关)。列宽要同时写在
+   th（-head）和 td（-data）上 —— fixed 布局只认首行单元格。 */
+.ssd-dp-modal-scenes .ssd-scene-table { overflow-x: auto; }
+.ssd-dp-modal-scenes .ssd-scene-table table { table-layout: fixed; width: 100%; }
+.ssd-dp-modal-scenes .ssd-scene-table .border-row { display: none; }
+.ssd-dp-modal-scenes .ssd-scene-table tbody td { vertical-align: middle; }
+.ssd-dp-modal-scenes .ssd-scene-table .cover_image-head,
+.ssd-dp-modal-scenes .ssd-scene-table .cover_image-data { width: 108px; }
+.ssd-dp-modal-scenes .ssd-scene-table .image-thumbnail {
+  width: 108px;
+  height: 62px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.ssd-dp-modal-scenes .ssd-scene-table .date-head,
+.ssd-dp-modal-scenes .ssd-scene-table .date-data { width: 88px; }
+.ssd-dp-modal-scenes .ssd-scene-table .scene_code-head,
+.ssd-dp-modal-scenes .ssd-scene-table .scene_code-data { width: 80px; }
+.ssd-dp-modal-scenes .ssd-scene-table .duration-head,
+.ssd-dp-modal-scenes .ssd-scene-table .duration-data { width: 56px; }
+.ssd-dp-modal-scenes .ssd-scene-table .studio-head,
+.ssd-dp-modal-scenes .ssd-scene-table .studio-data { width: 116px; }
+.ssd-dp-modal-scenes .ssd-scene-table th:nth-child(7),
+.ssd-dp-modal-scenes .ssd-scene-table td:nth-child(7),
+.ssd-dp-modal-scenes .ssd-scene-table th:nth-child(8),
+.ssd-dp-modal-scenes .ssd-scene-table td:nth-child(8) { display: none; }
+@media (max-width: 600px) {
+  /* 331px 面板只放得下：封面 / 标题 / 日期 / 时长 */
+  .ssd-dp-modal-scenes .ssd-scene-table th:nth-child(4),
+  .ssd-dp-modal-scenes .ssd-scene-table td:nth-child(4),
+  .ssd-dp-modal-scenes .ssd-scene-table th:nth-child(6),
+  .ssd-dp-modal-scenes .ssd-scene-table td:nth-child(6) { display: none; }
+  .ssd-dp-modal-scenes .ssd-scene-table .cover_image-head,
+  .ssd-dp-modal-scenes .ssd-scene-table .cover_image-data { width: 76px; }
+  .ssd-dp-modal-scenes .ssd-scene-table .image-thumbnail { width: 76px; height: 46px; }
+  .ssd-dp-modal-scenes .ssd-scene-table .date-head,
+  .ssd-dp-modal-scenes .ssd-scene-table .date-data { width: 78px; }
+  .ssd-dp-modal-scenes .ssd-scene-table .duration-head,
+  .ssd-dp-modal-scenes .ssd-scene-table .duration-data { width: 48px; }
+}
+
+/* 「热门 / 即将发布」并列的半宽容器：大档 300px 在 556px 里塞不下两列，会退成
+   一张巨型单卡。封顶 265（≈ 演员详情「发现」tab 的 271）保持两列。 */
+.ssd-dp-duo .ssd-card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--ssd-card-min, 210px), 265px), 1fr));
 }
 .ssd-dp-page .ssd-card-grid .scene-card { margin: 0; }
 .ssd-dp-sec > .ssd-dp-grid { width: 100%; }
@@ -1753,6 +2030,9 @@
   position: absolute;
   top: 0.7rem;
   left: 0.7rem;
+  /* 与 .ssd-overlay-box / -preview 一样显式抬层：封面上不止一个角标，
+     层叠顺序不该依赖 DOM 插入先后（原生 .studio-overlay 是 z-index:8）。 */
+  z-index: 9;
   padding: 2px 7px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--sx-gr) 85%, black 15%);
@@ -1765,17 +2045,60 @@
   position: absolute;
   top: 0.7rem;
   left: 0.7rem;
+  z-index: 9; /* 同 .ssd-overlay-days：与其它角标保持同一层，不依赖 DOM 顺序 */
   padding: 2px 7px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--sx-gr) 20%, transparent);
-  color: var(--sx-gr-tx);
+  /* 原先 20% 绿 + 绿字压在封面上几乎看不见（用户 2026-10-28 反馈）。
+     改成接近 .ssd-overlay-days 的实心底但略淡一档，白字保证对比。 */
+  background: color-mix(in srgb, var(--sx-gr) 72%, black 28%);
+  color: #fff;
   font-size: 10.5px;
   font-weight: 700;
   pointer-events: none;
-  backdrop-filter: blur(3px);
 }
-/* 关注视图未读红框（§3.4）*/
-.ssd-card-new { outline: 2px solid var(--sx-re); outline-offset: -2px; border-radius: 4px; }
+/* 原生 Stash 的图片懒加载占位：`.scene-card-preview` / `.scene-card img` 被一条
+   全局规则统一打上 `filter: blur(30px)blur(30px)`（连写两次，视觉约 60px），
+   靠它自己的加载回调在图片就绪后清掉。我们自建的卡片不走那套回调，封面会永久
+   糊成一片，正文的 blur(2px) 也一直在 —— 未读红框在封面区被这层模糊吃掉，
+   用户只看到文字区那半圈框（2026-10-28 反馈）。这里直接关掉占位模糊。 */
+/* 卡片内每个节点各自带 blur（封面 img 30px、标题/描述/工作室链接 2px），所以要
+   整卡全量关掉 —— 单独挑 .scene-card img 这类选择器会漏（img 的祖先 .scene-card
+   就是 .ssd-scene-card 本身，不是它的后代）。 */
+.ssd-scene-card,
+.ssd-scene-card * { filter: none !important; }
+/* 列表模式的封面（原生 .image-thumbnail）命中同一条占位规则，同样一直模糊 */
+.ssd-scene-table .image-thumbnail { filter: none !important; }
+
+/* 关注视图未读红框（§3.4）。原先用卡片根的 outline：2px 红线压在封面图上时与
+   封面色调混在一起，文字区（浅底）看得到、封面区几乎看不到 —— 用户反馈「红色边框
+   只在文字区有」（2026-10-28）。改成伪元素画在卡片最上层（z-index 高于角标的 9），
+   整卡叠一层 9% 淡红，封面区同样一眼可见。 */
+.ssd-card-new { position: relative; }
+.ssd-card-new::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  border: 2px solid var(--sx-re);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--sx-re) 9%, transparent);
+}
+
+/* 列表模式（一个场景一行）的未读标记（用户 2026-10-28）：
+   <tr> 上画不了 outline，改成「封面描红框 + 整行 14% 淡红」—— 位置和卡片红框
+   的语义对齐（网格里是整卡一圈，这里就是行首那张封面一圈）。
+   只在 `<img>` 上画框有两个坑（用户 2026-10-28 极窄屏实测：环形红像素数为 0）：
+   ① 封面懒加载期带 `filter: blur(30px)`，outline 属于元素渲染的一部分会被一起糊掉；
+   ② 封面左边缘与横向滚动容器齐平，`outline-offset` 为正时左边 2px 被 overflow 裁掉。
+   改画在 `<td>` 上 + 内收 2px：不受 filter 影响，且永远落在可见区内。 */
+.ssd-scene-table tbody tr.ssd-row-new > td {
+  background-color: color-mix(in srgb, var(--sx-re) 14%, transparent);
+}
+.ssd-scene-table tbody tr.ssd-row-new .cover_image-data {
+  outline: 2px solid var(--sx-re);
+  outline-offset: -2px;
+}
 
 /* 钻取视图（§3.3）*/
 
@@ -2240,7 +2563,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 
 /* 窄屏降级（§7.2：自绘 UI 无冲突/无截断/无重叠）*/
 @media (max-width: 720px) {
-  .ssd-dp-toolbar .grow { flex: 1 1 100%; max-width: none; }
+  /* 原先这里把搜索框设成 flex-basis 100% 强制折行；现在折行/收起都由
+     .is-collapsed 面板接管（用户 2026-10-28），搜索框宽度只由 JS 判定 */
   .ssd-dp-toolbar { gap: 8px; }
   .ssd-dp-pfhead { padding: 12px; gap: 12px; }
   .ssd-dp-pfhead.has-back { padding-right: 50px; }
@@ -2265,7 +2589,7 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-fgrp-head img { width: 44px; height: 44px; }
   .ssd-dp-fgrp-acts { gap: 5px; }
   .ssd-dp-fgrp-acts .ssd-dp-btn { padding: 4px 8px; font-size: 12px; }
-  .ssd-dp-fgrp-body { padding: 2px 10px 10px; }
+  .ssd-dp-fgrp-body { padding: 2px 10px 10px; --ssd-grid-pad: 10px; }
   .ssd-dp-modal-overlay { padding: 10px; }
   .ssd-dp-modal-body { padding: 14px; }
 
@@ -2466,6 +2790,49 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-card-grid .card-section-title .TruncatedText { -webkit-line-clamp: 2; }
 .ssd-card-grid .scene-card__description { -webkit-line-clamp: 3; }
 
+/* ─── 桌面「小档」也走窄卡压缩（用户 2026-10-28）────────────────────────────
+   小档 --ssd-card-min: 160 → 实测卡宽 179（duo 内更窄），默认 2 行标题 + 3 行
+   简介在这么窄的卡上会撑出很高的文字块，观感与 ≤480 窄屏（161px 卡）不一致。
+   这里把 ≤480 那段「标题 1 行 / 简介 2 行 / 11px + 6px 内边距」原样套到小档，
+   两个档位在同一屏宽下卡片密度对齐。演员弹层也吃同一档位（用户 2026-10-28），
+   它的卡宽与小档一致，故一并纳入，否则同档位下弹层文字更密。 */
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-section-title,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-section-title {
+  font-size: 12px;
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-section-title .TruncatedText,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-section-title .TruncatedText {
+  -webkit-line-clamp: 1;
+}
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .scene-card__description,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .scene-card__description {
+  -webkit-line-clamp: 2;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .scene-card__date,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .scene-card__date { font-size: 11px; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-section .card-popovers,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-section .card-popovers { font-size: 10px; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-section hr,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-section hr { margin: 4px 0; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-section,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-section { padding: 6px 6px 0; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .scene-card__details,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .scene-card__details { margin-bottom: 4px; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-popovers,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-popovers { gap: 4px; }
+.ssd-dp-page[data-csize="0"] .ssd-card-grid .card-popovers .btn,
+.ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid .card-popovers .btn {
+  padding: 1px 5px;
+  min-height: 0;
+  height: 20px;
+  font-size: 10px;
+}
+
 /* 窄屏刷新反馈：标题图标旋转（刷新按钮在 ≤480 隐藏） */
 .ssd-dp-title svg.spinning { animation: ssd-dp-spin 0.9s linear infinite; }
 
@@ -2473,10 +2840,9 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
    发现页是自有设计，不追求 1:1 还原原生卡片；仅覆盖字号/行数/间距，
    不改类名与颜色，主题映射照常生效（用户 2026-10-27）。 */
 
-@media (min-width: 481px) and (max-width: 576px) {
-  /* 这一段原先 minmax(230px) 会塌成单列，固定两列（用户 2026-10-27） */
-  .ssd-dp-page .ssd-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+/* 481–576 段原先固定两列（minmax(230px) 会塌成单列）。改为档位变量驱动后
+   160/210 自然给 2 列、大档 300 才是 1 列，滑块在该区间也能生效，固定规则已删
+   （用户 2026-10-28）。 */
 
 @media (min-width: 481px) and (max-width: 720px) {
   .ssd-dp-page { padding-left: 10px; padding-right: 10px; }
@@ -2488,15 +2854,30 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
     padding-right: max(8px, env(safe-area-inset-right));
   }
 
-  /* 发现页 + 演员弹窗内的场景网格：两列、列间距收紧 */
+  /* 三档在窄屏重新映射为 3 列 / 2 列 / 1 列（100 / 155 / 265），语义与桌面三档
+     一一对应；155 在 390 视口（内容宽 329）仍是实测的 2 列 @161，默认观感不变。
+     原先把 grid-template-columns 写死 repeat(2, …) 会无条件盖掉档位，已删
+     （用户 2026-10-28）。 */
+  .ssd-dp-page { --ssd-card-min: 155px; }
+  .ssd-dp-page[data-csize="0"] { --ssd-card-min: 100px; }
+  .ssd-dp-page[data-csize="2"] { --ssd-card-min: 265px; }
+  /* 演员弹窗同样跟档位（用户 2026-10-28）：窄屏与发现页用同一套 3 / 2 / 1 列映射，
+     变量要写在容器上而不是 .ssd-card-grid 上，否则子级声明会盖掉档位 */
+  .ssd-dp-modal-scenes { --ssd-card-min: 155px; }
+  .ssd-dp-modal-scenes[data-csize="0"] { --ssd-card-min: 100px; }
+  .ssd-dp-modal-scenes[data-csize="2"] { --ssd-card-min: 265px; }
+
+  /* 发现页 + 演员弹窗内的场景网格：列间距收紧 */
   .ssd-dp-page .ssd-card-grid,
   .ssd-dp-modal-scenes .ssd-card-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: 6px;
     row-gap: 10px;
   }
   .ssd-dp-modal-scenes .ssd-card-grid .scene-card { margin: 0; }
+
+  /* 滑块收窄：390 下工具栏已有 3 行，84px 会再挤出一行 */
+  .ssd-dp-toolbar .ssd-dp-range { width: 64px; }
 
   /* 卡片压缩：标题 1 行 / 简介 2 行 · 11px / 日期 11px */
   .ssd-dp-page .ssd-card-grid .card-section-title,
@@ -2567,13 +2948,13 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-chips { order: 2; flex-basis: 100%; }
   .ssd-dp-chips:empty { display: none; }
 
-  /* 封面角标贴边 + 缩小：原生 0.7rem/1rem 的四角留白收到 3–4px，
-     字号统一 10.5px；工作室行距压到 1.15（用户 2026-10-27）。
-     .ssd-overlay-box 挂在 .scene-card-preview（比 .thumbnail-section 矮 5px），
-     故 bottom:0 才与原生 specs 行同一视觉基线。 */
+  /* 封面角标贴边 + 缩小：原生 0.7rem/1rem 的四角留白收到 4px（四边同值，
+     原先 top:3 与 left/right:4 差 1px），字号与桌面同为 10.5px；工作室行距压到
+     1.15（用户 2026-10-27 / 2026-10-28 统一）。
+     .ssd-overlay-box 与原生 specs 同在 .thumbnail-section 上，4px 底距直接对齐。 */
   .ssd-dp-page .ssd-card-grid .studio-overlay,
   .ssd-dp-modal-scenes .ssd-card-grid .studio-overlay {
-    top: 3px;
+    top: 4px;
     right: 4px;
     font-size: 10.5px;
     line-height: 1.15;
@@ -2596,13 +2977,13 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-modal-scenes .ssd-overlay-days,
   .ssd-dp-page .ssd-overlay-inlib,
   .ssd-dp-modal-scenes .ssd-overlay-inlib {
-    top: 3px;
+    top: 4px;
     left: 4px;
     padding: 1px 5px;
   }
   .ssd-dp-page .ssd-overlay-box,
   .ssd-dp-modal-scenes .ssd-overlay-box {
-    bottom: 0;
+    bottom: 4px;
     left: 4px;
     padding: 1px 5px;
   }

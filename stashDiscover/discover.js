@@ -1585,8 +1585,8 @@
     opts = opts || {};
     var sc = item.scene || {};
     // 角标挂在 .thumbnail-section（与原生 .studio-overlay 同级）而不是
-    // .scene-card-preview：后者在图片懒加载期间带 filter: blur(30px)，filter 会
-    // 作用于整个子树，角标会被一起糊掉（用户 2026-10-28 反馈）。
+    // .scene-card-preview：sfwswitch（社区「NSFW 模糊」插件）给 preview 整体上
+    // blur(30px)，filter 作用于整个子树，角标会被一起糊掉（用户 2026-10-28）。
     var badgeHost = card.querySelector(".thumbnail-section") || card.querySelector(".scene-card-preview");
     if (badgeHost) {
       if (opts.days) {

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.5.0";
+  var PLUGIN_VERSION = "2.5.1";
   var TASK_SEARCH = "Search Resources";
   var TASK_PUSH = "Push to Downloader";
   var RESULT_MARKER = "[SSD_RESULT]";
@@ -3344,9 +3344,10 @@
 
     // Box source pill — bottom-left corner (native has no fixed content there),
     // only meaningful with multiple stash-boxes.
-    // 挂在 .thumbnail-section 而不是 .scene-card-preview：图片懒加载期间 preview 上
-    // 挂着 filter: blur(30px) 的模糊占位，filter 会作用于整个子树，角标一起被糊掉
-    // （用户 2026-10-28 反馈「库内徽章很不明显」的成因之一）。
+    // 挂在 .thumbnail-section 而不是 .scene-card-preview：sfwswitch（社区「NSFW 模糊」
+    // 插件）给 preview 整体上 blur(30px)，角标在这种子树里会跟着糊掉、字看不清
+    // （用户 2026-10-28「库内徽章很不明显」的成因之一）。角标是文字信息，
+    // 留在模糊层外更合理。
     if (st.queryBoxes.length > 1) {
       var boxBadge = document.createElement("span");
       boxBadge.className = "ssd-overlay-box";

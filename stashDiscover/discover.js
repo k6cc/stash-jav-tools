@@ -356,9 +356,13 @@
 
   // ── 2.6 会话级本地查询 memo（refresh / SCENE_SAVED_EVENT 时失效）─────────
   var _memo = { linked: {}, owned: null, studios: null };
+  // 入库后 ownedKeys 变了：光清内存不够，local.v1 里那份旧快照（无 TTL）会被
+  // loadLinkedOwned 直接读回来 —— 表现就是「已经入库的片还在最新里挂着」。
+  var _localDirty = false;
 
   function invalidateLocalMemos() {
     _memo = { linked: {}, owned: null, studios: null };
+    _localDirty = true;
   }
 
   // 库内演员（当前源有 stash_id 关联）→ [{localId, stashId, name, image, favorite}]
@@ -633,12 +637,33 @@
   // .v2（2026-10-25）：场景数据 performers 增 images 字段，旧缓存无共同出演头像
   function cacheKey(host, family) { return LS_PREFIX + host + ":" + family + ".v3"; }
 
+  // 读时 shape 校验（§14.1 学 binge）：坏数据当缓存未命中，比抛异常炸整页好。
+  // 逐条筛掉形状不对的场景（id 必须是能当键用的字符串），整份都坏才当 miss ——
+  // 一条坏条目不该赔掉整份 1844 条的缓存。id 缺失尤其危险：后面 readIs /
+  // filterPipeline 按 "endpoint:sceneId" 拼键，undefined 会拼成永久"已读"。
+  function saneCacheEntry(e) {
+    if (!e || typeof e !== "object" || !Array.isArray(e.scenes)) return null;
+    var bad = 0, list = [];
+    for (var i = 0; i < e.scenes.length; i++) {
+      var sc = e.scenes[i];
+      if (!sc || typeof sc !== "object") { bad++; continue; }
+      var id = typeof sc.id === "number" ? String(sc.id) : sc.id;
+      if (typeof id !== "string" || !id) { bad++; continue; }
+      sc.id = id;
+      list.push(sc);
+    }
+    if (bad) console.warn("[SSD] cache: dropped " + bad + " malformed scene entr" + (bad === 1 ? "y" : "ies"));
+    if (e.scenes.length && !list.length) return null;
+    e.scenes = list;
+    return e;
+  }
+
   function cacheRead(host, family, wantSince) {
     try {
       var raw = localStorage.getItem(cacheKey(host, family));
       if (!raw) return null;
-      var e = JSON.parse(raw);
-      if (!e || typeof e !== "object" || !Array.isArray(e.scenes)) return null;
+      var e = saneCacheEntry(JSON.parse(raw));
+      if (!e) return null;
       if (wantSince && e.sinceIsoDate !== wantSince) return null;
       var age = Date.now() - (e.fetchedAt || 0);
       if (age < 0 || age > CACHE_TTL_MS) return null;
@@ -651,8 +676,8 @@
     try {
       var raw = localStorage.getItem(cacheKey(host, family));
       if (!raw) return null;
-      var e = JSON.parse(raw);
-      if (!e || typeof e !== "object" || !Array.isArray(e.scenes)) return null;
+      var e = saneCacheEntry(JSON.parse(raw));
+      if (!e) return null;
       var age = Date.now() - (e.fetchedAt || 0);
       if (age < 0 || age > CACHE_STALE_MAX_MS) return null;
       return hydrateCacheEntry(e);
@@ -774,6 +799,38 @@
     invalidateLocalMemos();
   }
 
+  // ── 版本孤儿清扫（§3.3）─────────────────────────────────────────────────
+  // cacheWrite 只清「同 host + 同 family」的旧版本键；某个源升级后再没被访问过，
+  // 它的旧版本条目就永远留着且不会自己消失 —— 实测 javstash 的 .v2 一项 410 KB，
+  // 全部孤儿 580,525 字符 = 插件存储的 83%。
+  // 只认 cacheKey() 产出的 <host>:<family>.v<N>：local.v1 / follow.v1 / unread.v1 /
+  // poll.v1 / trendingPerf.v1 的版本号是各存储自己的，按「以 .v1 结尾」删会丢用户
+  // 数据（已读、关注都在里面）。host 可能带端口（URL.host 含 ":9999"），所以不能
+  // 假设 host 里没有冒号，用贪婪前缀 + 固定家族名兜住。
+  var CACHE_KEY_TAIL_RE = /^(.*):(newScenes|trending|studios)\.v(\d+)$/;
+  function sweepOrphanCaches() {
+    var removed = 0, chars = 0;
+    try {
+      var stale = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k || k.indexOf(LS_PREFIX) !== 0) continue;
+        var m = CACHE_KEY_TAIL_RE.exec(k.slice(LS_PREFIX.length));
+        if (!m || Number(m[3]) === CACHE_FMT) continue;
+        stale.push(k);
+      }
+      stale.forEach(function (k) {
+        var n = k.length;
+        try { n += (localStorage.getItem(k) || "").length; } catch (_) {}
+        try { localStorage.removeItem(k); removed++; chars += n; } catch (_) {}
+      });
+    } catch (_) {}
+    if (removed) {
+      console.info("[SSD] swept " + removed + " orphan cache key(s), freed ~" + chars + " chars");
+    }
+    return { removed: removed, chars: chars };
+  }
+
   // ── 2.2 筛选管线（§4.3 双键排除 + code 跨源去重 + 每人上限）─────────────
   function filterPipeline(rawScenes, box, ownedKeys, linked) {
     var linkedByStashId = {};
@@ -782,9 +839,19 @@
     var seenCode = {}, latest = [], preview = [];
     var byActor = {}; // localId → {performer, items, newest}
 
+    // 忽略记录（§5.1 第 1 处）：在管线入口剪一次，最新 / 关注 / 工作室 /
+    // 总览计数 / 未读角标全部一次生效。读的是 SSD.dpIgnore 的内存副本，
+    // 不做每场景一次 getItem（原 T2）
+    var igScenes = {}, igPerfs = {};
+    try {
+      if (SSD.dpIgnore) { igScenes = SSD.dpIgnore.scenes(); igPerfs = SSD.dpIgnore.performers(); }
+    } catch (_) {}
+    var epPrefix = String(box.endpoint).toLowerCase() + ":";
+
     rawScenes.forEach(function (sc) {
       if (!sc) return;
-      var epKey = box.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase();
+      var epKey = epPrefix + String(sc.id).toLowerCase();
+      if (igScenes[epKey]) return;                         // 场景被忽略
       if (ownedKeys[epKey]) return;                       // 已拥有：stash_id 键
       if (sc.code) {
         var ck = "code:" + String(sc.code).trim().toLowerCase();
@@ -792,13 +859,26 @@
         if (seenCode[ck]) return;                         // code 跨源去重
         seenCode[ck] = true;
       }
+      // 演员被忽略（§6.2 缓存穿透双保险）：「库内演员全部被忽略」才跳过。
+      // 与「摘查询」口径等价 —— A 被忽略、B 正常共同出演时 B 的查询仍能返回，
+      // 场景保留（其他演员兜底）。
+      var libN = 0, ignN = 0;
+      var perfs = (sc.performers || []);
+      for (var i = 0; i < perfs.length; i++) {
+        var pf0 = perfs[i] && perfs[i].performer;
+        if (!pf0) continue;
+        if (!linkedByStashId[String(pf0.id)]) continue;
+        libN++;
+        if (igPerfs[epPrefix + String(pf0.id).toLowerCase()]) ignN++;
+      }
+      if (libN && ignN === libN) return;
+
       var item = shapeBoxItem(box, sc);
       var isFuture = sc.release_date && sc.release_date > today;
       if (isFuture) preview.push(item); else latest.push(item);
       // 演员分组统计（cap 前的真实计数，§3.2 模块 1 的 "N 部新作品"）
-      var perfs = (sc.performers || []);
-      for (var i = 0; i < perfs.length; i++) {
-        var pf = perfs[i] && perfs[i].performer;
+      for (var j = 0; j < perfs.length; j++) {
+        var pf = perfs[j] && perfs[j].performer;
         if (!pf) continue;
         var lp = linkedByStashId[String(pf.id)];
         if (!lp) continue;
@@ -879,17 +959,24 @@
   }
 
   function loadLinkedOwned(host, endpoint) {
-    try {
-      var raw = localStorage.getItem(LS_PREFIX + host + ":local.v1");
-      if (raw) {
-        var e = JSON.parse(raw);
-        if (e && Array.isArray(e.linked) && e.ownedKeys && typeof e.ownedKeys === "object") {
-          return Promise.resolve({ linked: e.linked, ownedKeys: e.ownedKeys });
+    if (!_localDirty) {
+      try {
+        var raw = localStorage.getItem(LS_PREFIX + host + ":local.v1");
+        if (raw) {
+          var e = JSON.parse(raw);
+          // 10 分钟 TTL：这份快照原先「无 TTL」，入库只改数据库不改它，于是
+          // 关掉页面再回来，已入库的片还挂在最新里（得等缓存整体过期）。
+          // 本地查询本身很便宜，过期重算的成本可以忽略。
+          var fresh = e && (Date.now() - (e.fetchedAt || 0)) < 10 * 60 * 1000;
+          if (fresh && Array.isArray(e.linked) && e.ownedKeys && typeof e.ownedKeys === "object") {
+            return Promise.resolve({ linked: e.linked, ownedKeys: e.ownedKeys });
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     return Promise.all([loadLinkedPerformers(endpoint), loadOwnedKeys()]).then(function (r) {
       cacheWriteLinkedOwned(host, r[0], r[1]);
+      _localDirty = false;
       return { linked: r[0], ownedKeys: r[1] };
     });
   }
@@ -943,6 +1030,15 @@
     // 先取库内演员（分批查询的输入依赖它），再并行取 owned keys + box 场景
     return loadLinkedPerformers(base.source.endpoint).then(function (linked) {
       var ids = linked.map(function (p) { return p.stashId; });
+      // 忽略演员（§6.1 主生效点）：直接从查询输入里摘掉 —— 真不查、省流量。
+      // 缓存路径由 filterPipeline 的「库内演员全部被忽略才跳过」兜底（§6.2）
+      try {
+        if (SSD.dpIgnore) {
+          var ig = SSD.dpIgnore.performers();
+          var ep = String(base.source.endpoint).toLowerCase() + ":";
+          ids = ids.filter(function (id) { return !ig[ep + String(id).toLowerCase()]; });
+        }
+      } catch (_) {}
       return Promise.all([loadOwnedKeys(), fetchNewScenesForPerformers(box, ids, base.since, opts && opts.onProgress)]).then(function (r) {
         var ownedKeys = r[0], scenes = r[1];
         if (scenes == null) throw { ssdKind: "box", message: "partial fetch failure" };
@@ -1122,12 +1218,32 @@
     getTrendingPerformers: getTrendingPerformers,
     refreshAll: refreshAll,
     invalidateLocalMemos: invalidateLocalMemos,
+    sweepOrphanCaches: sweepOrphanCaches,
     prefs: dpPrefs,
   };
 
   // 加入库事件 → 本地 memo 失效（缓存里场景仍含已拥有项，但 filterPipeline
   // 用的是新鲜 ownedKeys，下次 buildResult 会正确排除；场景缓存 12h 自然轮转）
   window.addEventListener(SSD.SCENE_SAVED_EVENT, invalidateLocalMemos);
+
+  // 忽略记录变化（本页弹窗忽略 / 撤销 / 管理页恢复）→ 用缓存重跑 filterPipeline。
+  // 不重新请求 box：被忽略的场景本来就还在缓存里，剪枝发生在管线里。
+  window.addEventListener("ssd:ignore-changed", function () {
+    try { if (SSD.dpIgnore) SSD.dpIgnore.reload(); } catch (_) {}
+    _dp.d = {};
+    _dp.err = {};
+    ensureData(viewDataKeys(_dp.view));
+    render();
+  });
+
+  // 演员快照补全完成（主 JS backfill）→ 只有正看着「已忽略管理」才重绘。
+  // 不能借用 ssd:ignore-changed：那条会连带重跑整条 filterPipeline。
+  var _ignEnrichT = 0;
+  window.addEventListener("ssd:ign-enriched", function () {
+    if (_dp.view !== "ignored") return;
+    clearTimeout(_ignEnrichT);
+    _ignEnrichT = setTimeout(function () { try { render(); } catch (_) {} }, 60);
+  });
 
 
   // ═══ 页面状态 + 关注/已读 store + 视图机（设计文档 §3/§6/§8）════════════
@@ -1146,6 +1262,9 @@
     perfFrom: null,   // 进入演员过滤视图前的来源视图（返回按钮回到这里）
     studioGroup: null, // 工作室过滤视图：studio 分组引用
     csize: 1,         // 场景卡档位 0 紧凑 / 1 标准 / 2 大（只作用于场景网格）
+    // 多选（§8）：items 保存选中条目（保持点选顺序），keys 是 "endpoint:id" 映射。
+    // 只放当前页 —— 翻页控件在多选态是隐藏的，跨页选择无从发生。
+    sel: { on: false, keys: {}, items: [], busy: false },
     refs: {},         // chrome 元素引用（head/tabs/toolbar/content）
   };
 
@@ -1354,6 +1473,14 @@
     // 筛选行收起后的「更多筛选」：两条滑杆，比漏斗更贴合「多个可调选项」的语义
     filter: sv('<circle cx="9" cy="7" r="2.5"/><path d="M3 7h3.5M11.5 7H21"/><circle cx="15" cy="17" r="2.5"/><path d="M3 17h9.5M17.5 17H21"/>'),
     check: sv('<path d="M20 6L9 17l-5-5"/>'),
+    // 多选：入口固定用「已勾选的复选框」（多选这个能力的标识，用户 2026-10-30），
+    // 全选按钮仍用 空盒 / 盒+勾 表示开关状态。和演员页「发现」tab 同一套图案。
+    select: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/>'),
+    selectOn: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 12.3l3.2 3.2 5.8-6.4"/>'),
+    selToggle: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 12.3l3.2 3.2 5.8-6.4"/>'),
+    // ← / × 这类纯图标按钮用 svg 而不是文字 &times;：文字字号撑不满 15px，
+    // 和旁边的 svg 图标并排时明显小一圈（用户 2026-10-30）
+    close: sv('<path d="M4.5 4.5l15 15M19.5 4.5l-15 15"/>'),
   };
 
   // ── 通用小件 ─────────────────────────────────────────────────────────────
@@ -1628,7 +1755,11 @@
       }
       card.addEventListener("click", function () {
         readMark(item.endpoint, sc.id);
+        card.classList.remove("ssd-card-new");
         emitUnread();
+        // 关注页整组重渲染：分组头那行「N 部未读」不在卡片里，只能重建；
+        // 钻取页分页显示，整页 render() 会跳滚动位置、几百条时还卡 —— 就地摘
+        // 红框即可（§13.6），计数交给 emitUnread()
         if (_dp.view === "follow") render();
       });
     }
@@ -1664,6 +1795,10 @@
     opts = opts || {};
     if (_dp.mode === "list" && opts.allowList) {
       var tbl = SSD.buildSceneTable(items);
+      // 多选态靠 host.__ssdItem 找回条目：卡片与表格行都挂一份，选择逻辑
+      // 就不用再猜「这一行对应哪个 item」（表格行没有 dataset 可依赖）
+      var rows = tbl.querySelectorAll("tbody tr");
+      for (var ri = 0; ri < rows.length && ri < items.length; ri++) rows[ri].__ssdItem = items[ri];
       if (opts.unread) decorateUnreadRows(tbl, items);
       return tbl;
     }
@@ -1671,12 +1806,348 @@
     grid.setAttribute("data-zoom", "0");
     var ctx = cardCtx();
     items.forEach(function (it, i) {
-      grid.appendChild(decorateCard(SSD.buildSceneCard(it, i, ctx), it, opts));
+      var card = decorateCard(SSD.buildSceneCard(it, i, ctx), it, opts);
+      card.__ssdItem = it;
+      grid.appendChild(card);
     });
     return grid;
   }
 
-  // ── 迷你演员卡（§3.2 模块 1/6）───────────────────────────────────────────
+  // ── 多选（§8 / §13.3）────────────────────────────────────────────────────
+  // 形态照用户实测的 Stash 原生：原筛选栏原地变身，不新增浮层；进入后只能选
+  // 当前页（搜索/排序/数据源/每页/翻页全部隐藏 —— 它们都会改「当前页装的是哪些
+  // 片」，留着会让已选卡片错位甚至整批跑到别的页去）。
+  //
+  // 选择集只有一份（用户 2026-10-29：总览同时有场景和演员，不能两套逻辑）：
+  // 场景 item 保持 stash-box 原样（.scene.id），演员包成
+  // {__kind:"performer", endpoint, performer:{stashId,name,image}}。
+  // key 前缀 s: / p: 把两类隔开，同一位演员在多个模块出现也只算一次。
+  var _selProg = "";
+  function selKey(it) {
+    var ep = String((it && it.endpoint) || "").toLowerCase();
+    if (it && it.__kind === "performer") {
+      return "p:" + ep + ":" + String((it.performer && it.performer.stashId) || "").toLowerCase();
+    }
+    return "s:" + ep + ":" + String((it && it.scene && it.scene.id) || "").toLowerCase();
+  }
+  function selKind(it) { return (it && it.__kind === "performer") ? "performer" : "scene"; }
+  function selHas(it) { return !!_dp.sel.keys[selKey(it)]; }
+  function selToggle(it) {
+    if (!it) return;
+    var k = selKey(it);
+    if (_dp.sel.keys[k]) {
+      delete _dp.sel.keys[k];
+      _dp.sel.items = _dp.sel.items.filter(function (x) { return selKey(x) !== k; });
+    } else {
+      _dp.sel.keys[k] = 1;
+      _dp.sel.items.push(it);
+    }
+    syncSelBar();
+    applySelMarks();
+  }
+  // 当前页可选项：直接从 DOM 取（卡片与表格行都挂了 __ssdItem），这样「本页」
+  // 的口径永远等于用户眼前看到的那些，不用另存一份列表跟着各视图同步
+  function pageSelItems() {
+    var c = _dp.refs.content, out = [];
+    if (!c) return out;
+    c.querySelectorAll(".scene-card, .ssd-scene-table tbody tr, .ssd-dp-mini").forEach(function (n) {
+      if (n.__ssdItem) out.push(n.__ssdItem);
+    });
+    return out;
+  }
+  function syncSelBar() {
+    var refs = _dp.refs;
+    if (!refs.selCount) return;
+    var n = _dp.sel.items.length;
+    var pageN = pageSelItems().length;
+    var scN = 0, pfN = 0;
+    _dp.sel.items.forEach(function (it) { if (selKind(it) === "performer") pfN++; else scN++; });
+    if (_dp.sel.busy) {
+      refs.selCount.innerHTML = '<b class="ssd-dp-selprog">' + (_selProg || "…") + "</b>";
+    } else {
+      // 「本页 N」是弱化说明：不进多选的人不会误解成跨页全选。
+      // 总览里场景/演员混在一页，再拆一句「场景 2 · 演员 1」，否则「已选 3」
+      // 对不上眼前任何一类卡（用户 2026-10-29）。
+      // 「已选」两个字单独包一层（2026-10-30）：窄屏多选栏放不下整句，CSS
+      // 直接隐藏这个 span 与后面的说明，只留数字，和演员页 tab 同款。
+      var lab = '<span class="ssd-dp-selcount-lb">' + tc("已选", "Selected") + "</span>";
+      var mix = scN && pfN
+        ? "<i>· " + tc("场景 " + scN + " · 演员 " + pfN, scN + " scenes · " + pfN + " performers") + "</i>"
+        : "<i>· " + tc("本页 " + pageN + " 项", pageN + " on page") + "</i>";
+      refs.selCount.innerHTML = SSD.isZh()
+        ? lab + "<b>" + n + "</b>" + mix
+        : "<b>" + n + "</b>" + lab + mix;
+    }
+    if (refs.selIgnore) refs.selIgnore.disabled = !n || _dp.sel.busy;
+    if (refs.selImport) refs.selImport.disabled = !n || _dp.sel.busy;
+    // 关注只对演员成立：全是场景时置灰（不是隐藏——隐藏会让按钮组左右抽动）
+    if (refs.selFollow) refs.selFollow.disabled = !pfN || _dp.sel.busy;
+    if (refs.selAll) {
+      // 复选框图案自己就是状态显示：本页全选后填成「已勾选」，否则空盒
+      var allOn = pageN > 0 && n >= pageN;
+      refs.selAll.classList.toggle("on", allOn);
+      refs.selAll.innerHTML = allOn ? I.selectOn : I.select;
+      refs.selAll.title = allOn ? tc("取消全选", "Deselect this page") : tc("全选本页", "Select this page");
+    }
+  }
+  function setSelProgress(t) { _selProg = t; syncSelBar(); }
+  function applySelMarks() {
+    var c = _dp.refs.content, page = _dp.refs.page;
+    if (!c) return;
+    if (page) page.classList.toggle("is-selecting", _dp.sel.on);
+    if (!_dp.sel.on) return;
+    c.querySelectorAll(".scene-card").forEach(function (card) {
+      var it = card.__ssdItem;
+      if (!it) return;
+      var on = selHas(it);
+      card.classList.toggle("is-sel", on);
+      var box = card.querySelector(".ssd-dp-selbox");
+      if (!box) { box = el("span", "ssd-dp-selbox"); card.appendChild(box); }
+      box.innerHTML = on ? I.check : "";
+    });
+    // 列表模式画不了卡片那圈勾选，改成封面格上的勾选圈 + 整行淡底
+    c.querySelectorAll(".ssd-scene-table tbody tr").forEach(function (row) {
+      var it = row.__ssdItem;
+      if (!it) return;
+      var on = selHas(it);
+      row.classList.toggle("is-sel", on);
+      var cell = row.querySelector("td");
+      if (!cell) return;
+      var box = cell.querySelector(".ssd-dp-selbox");
+      if (!box) { box = el("span", "ssd-dp-selbox"); cell.appendChild(box); }
+      box.innerHTML = on ? I.check : "";
+    });
+    // 演员小卡（总览「有新发布的演员」/ 本地有更新 / 共同出演）：勾选圈贴卡片
+    // 左上角，正好压在头像边缘上；卡片本身是行式，不需要动布局
+    c.querySelectorAll(".ssd-dp-mini").forEach(function (card) {
+      var it = card.__ssdItem;
+      if (!it) return;
+      var on = selHas(it);
+      card.classList.toggle("is-sel", on);
+      var box = card.querySelector(".ssd-dp-selbox");
+      if (!box) { box = el("span", "ssd-dp-selbox"); card.appendChild(box); }
+      box.innerHTML = on ? I.check : "";
+    });
+  }
+  function enterSel() {
+    if (_dp.sel.on || _dp.sel.busy) return;
+    _dp.sel.on = true;
+    _dp.sel.keys = {};
+    _dp.sel.items = [];
+    syncChrome();
+    applySelMarks();
+  }
+  // 退出不重渲染：多选前后是同一批数据，重建 DOM 只会丢滚动位置
+  function exitSel() {
+    if (!_dp.sel.on) return;
+    _dp.sel.on = false;
+    _dp.sel.keys = {};
+    _dp.sel.items = [];
+    _selProg = "";
+    var page = _dp.refs.page;
+    if (page) page.classList.remove("is-selecting");
+    var c = _dp.refs.content;
+    if (c) {
+      c.querySelectorAll(".ssd-dp-selbox").forEach(function (n) { n.remove(); });
+      c.querySelectorAll(".is-sel").forEach(function (n) { n.classList.remove("is-sel"); });
+    }
+    syncChrome();
+    // 计数栏文本只有 syncSelBar 会写。批量入库时它被换成「演员 1/3…」这类进度，
+    // 退出多选若不回写，下次进多选会在勾选任何东西之前先显示上一次的进度文案
+    syncSelBar();
+  }
+  function selAllPage() {
+    var page = pageSelItems();
+    if (!page.length) return;
+    var allOn = page.every(selHas);
+    // 别的页/别的视图残留的选中项原样保留（正常路径下不存在，防御）
+    var keep = _dp.sel.items.filter(function (it) { return page.indexOf(it) === -1; });
+    _dp.sel.items = keep.slice();
+    _dp.sel.keys = {};
+    keep.forEach(function (it) { _dp.sel.keys[selKey(it)] = 1; });
+    if (!allOn) {
+      page.forEach(function (it) {
+        _dp.sel.keys[selKey(it)] = 1;
+        _dp.sel.items.push(it);
+      });
+    }
+    syncSelBar();
+    applySelMarks();
+  }
+
+  // ── 批量忽略（§8）：场景与演员混选时分流，两类各有自己的存储结构 ─────────
+  function batchIgnoreSelected() {
+    var items = _dp.sel.items.slice();
+    if (!items.length || !SSD.dpIgnore) return;
+    var sceneKeys = [], perfKeys = [], dropped = 0, failed = 0;
+    items.forEach(function (it) {
+      if (selKind(it) === "performer") {
+        var p = it.performer || {};
+        var rp = SSD.dpIgnore.ignorePerformer({
+          endpoint: it.endpoint, stashId: p.stashId, name: p.name, image: p.image,
+          aliases: p.aliases, country: p.country, birthdate: p.birthdate, gender: p.gender,
+        });
+        if (rp && rp.ok) perfKeys.push(rp.key); else failed++;
+        return;
+      }
+      var r = SSD.dpIgnore.ignoreScene(it);
+      if (r && r.ok) { sceneKeys.push(r.key); dropped += r.dropped || 0; }
+      else failed++;
+    });
+    exitSel();
+    try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+    if (!sceneKeys.length && !perfKeys.length) {
+      SSD.toast(tc("忽略失败：浏览器存储写不进去（可能已满）",
+        "Ignore failed: browser storage rejected the write"), { duration: 6000 });
+      return;
+    }
+    var parts = [];
+    if (sceneKeys.length) parts.push(tc(sceneKeys.length + " 部场景", sceneKeys.length + " scenes"));
+    if (perfKeys.length) parts.push(tc(perfKeys.length + " 位演员", perfKeys.length + " performers"));
+    var msg = tc("已忽略 ", "Ignored ") + parts.join(tc("、", " / ")) +
+      (failed ? tc(" · " + failed + " 项失败", " · " + failed + " failed") : "");
+    if (dropped) msg += tc(" · 超出上限，淘汰最旧 " + dropped + " 条",
+                           " · cap reached, dropped " + dropped + " oldest");
+    SSD.toast(msg, {
+      actionText: tc("撤销", "Undo"),
+      duration: 6000,
+      onAction: function () {
+        sceneKeys.forEach(function (k) { SSD.dpIgnore.remove("scenes", k); });
+        perfKeys.forEach(function (k) { SSD.dpIgnore.remove("performers", k); });
+        try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+      },
+    });
+  }
+
+  // ── 批量关注（用户 2026-10-29）：只对选中的演员生效 ─────────────────────
+  function batchFollowSelected() {
+    var items = _dp.sel.items.filter(function (it) { return selKind(it) === "performer"; });
+    if (!items.length) return;
+    var n = 0;
+    items.forEach(function (it) {
+      var p = it.performer || {};
+      if (!p.stashId || followHas(p.stashId)) return;
+      followToggle({
+        stashId: p.stashId, endpoint: it.endpoint || "", name: p.name || "",
+        image: p.image || null, localId: p.localId || null,
+      });
+      n++;
+    });
+    exitSel();
+    emitUnread();
+    SSD.toast(n ? tc("已关注 " + n + " 位演员", "Following " + n + " performer(s)")
+                : tc("这些演员都已关注", "Already following"));
+  }
+
+  // ── 批量入库（§9）───────────────────────────────────────────────────────
+  // 串行 + 150ms 间隔：演员建档与 sceneCreate 都是本地 GQL，_boxRateLimiter 管
+  // 不到；并发几条就会把 Stash 的 SQLite 锁到写超时。个别演员建档失败由
+  // executePerformerPlan 内部跳过，不中止整条。
+  function batchImportSelected() {
+    if (_dp.sel.busy) return;
+    var all = _dp.sel.items.slice();
+    if (!all.length) return;
+    if (!SSD.planSceneImport || !SSD.submitSceneImport) {
+      SSD.toast(tc("入库组件未就绪，刷新页面再试", "Import is not ready — reload the page"));
+      return;
+    }
+    var perfItems = [], sceneItems = [];
+    all.forEach(function (it) { (selKind(it) === "performer" ? perfItems : sceneItems).push(it); });
+    _dp.sel.busy = true;
+    _selProg = tc("准备中…", "Preparing…");
+    syncSelBar();
+    var total = sceneItems.length, at = 0, ok = 0, skip = 0, lastErr = "";
+    var failed = [];
+    var codeSet = {};
+
+    // ① 演员：一次本地索引 + 串行建档（已有同源 id 的算「跳过」，不重复建）
+    var perfStep = Promise.resolve();
+    if (perfItems.length) {
+      if (!SSD.batchAddPerformers) {
+        failed = failed.concat(perfItems);
+      } else {
+        perfStep = SSD.batchAddPerformers(
+          perfItems.map(function (it) {
+            var p = it.performer || {};
+            return { endpoint: it.endpoint, stashId: p.stashId, name: p.name, image: p.image };
+          }),
+          function (done, tot) {
+            setSelProgress(tc("演员 " + done + "/" + tot + "…", "performers " + done + "/" + tot + "…"));
+          }
+        ).then(function (r) {
+          ok += (r && r.ok) || 0;
+          skip += (r && r.exist) || 0;
+          if (r && r.failedIdx && r.failedIdx.length) {
+            r.failedIdx.forEach(function (i) { if (perfItems[i]) failed.push(perfItems[i]); });
+            lastErr = r.lastErr || lastErr;
+          }
+        }).catch(function (e) {
+          lastErr = (e && e.message) || String(e);
+          failed = failed.concat(perfItems);
+        });
+      }
+    }
+
+    perfStep.then(function () {
+      if (!total) return finish();
+      // ② 场景：重复 code 跳过（§9）。一次拉全量 code 建集合 —— 逐条 q= 查会变成
+      // N 次往返，且大库里 q= 是模糊匹配，"ABC-123" 会撞上 "ABC-1234"
+      SSD.callGQL("query{findScenes(filter:{per_page:-1}){scenes{code}}}").then(function (d) {
+        (((d || {}).findScenes || {}).scenes || []).forEach(function (s) {
+          if (s.code) codeSet[String(s.code).trim().toLowerCase()] = 1;
+        });
+      }).catch(function () { /* 拉不到就只按 stash_id 判重，不挡入库 */ }).then(next);
+    });
+
+    function next() {
+      if (at >= total) return finish();
+      var it = sceneItems[at++];
+      var sc = it.scene || {};
+      setSelProgress(tc(at + "/" + total + " 入库中…", at + "/" + total + " importing…"));
+      var ck = sc.code ? String(sc.code).trim().toLowerCase() : "";
+      if (ck && codeSet[ck]) { skip++; return tick(); }
+      SSD.planSceneImport(it, sc).then(function (draft) {
+        return SSD.submitSceneImport(draft, SSD.pickFromPrefs(draft));
+      }).then(function () {
+        ok++;
+        try { readMark(it.endpoint, sc.id); } catch (_) {}
+        var k = selKey(it);
+        delete _dp.sel.keys[k];
+        _dp.sel.items = _dp.sel.items.filter(function (x) { return selKey(x) !== k; });
+        // 交给页面：已入库的卡片从「最新」里消失（监听侧 debounce 400ms，
+        // 批量期间连续派发只会一路推迟到结束，正合适）
+        document.dispatchEvent(new CustomEvent(SSD.SCENE_SAVED_EVENT, { detail: { item: it }, bubbles: true }));
+        tick();
+      }).catch(function (e) {
+        lastErr = (e && e.message) || String(e);
+        console.warn("[SSD] batch import failed:", sc.id, e);
+        failed.push(it);
+        tick();
+      });
+    }
+    function tick() { setTimeout(next, 150); }
+    function finish() {
+      _dp.sel.busy = false;
+      _selProg = "";
+      // 失败项留在选择集里：原地重试比让用户重新翻页找片现实
+      _dp.sel.items = failed.slice();
+      _dp.sel.keys = {};
+      failed.forEach(function (it) { _dp.sel.keys[selKey(it)] = 1; });
+      if (!failed.length) exitSel(); else { syncSelBar(); applySelMarks(); }
+      // 汇总只给三个符号：✓ 成功 / ! 跳过 / ✕ 失败。失败原因塞进 title，
+      // 不再拼进正文（一句话四个数字会把提示条拉得很长）
+      SSD.toast("", {
+        html: SSD.importSummary(ok, skip, failed.length),
+        title: failed.length && lastErr ? lastErr : "",
+        duration: 6000,
+      });
+      _dp.d.latest = null;
+      _dp.d.studios = null;
+      ensureData(viewDataKeys(_dp.view));
+    }
+  }
+
+
   // 迷你卡副标题「最新 <日期>」：日期整体不可断行，窄卡上只会折在「最新 」之后，
   // 不会出现「2026-10-」/「08」这种把日期劈成两半的断法（用户 2026-10-27 极窄屏）
   function subLatest(day) {
@@ -1710,6 +2181,19 @@
       c.appendChild(b);
     }
     if (o.onClick) c.addEventListener("click", function (e) { o.onClick(e, c); });
+    // 多选（用户 2026-10-29）：演员卡也是可选项。包成统一的 performer 条目，
+    // 与场景 item 共用一份选择集（__kind 区分），总览里混选不会打架。
+    if (o.stashId) {
+      var dsrc = _dp.d.latest;
+      c.__ssdItem = {
+        __kind: "performer",
+        endpoint: o.endpoint || (dsrc && dsrc.source && dsrc.source.endpoint) || "",
+        performer: {
+          stashId: o.stashId, name: o.name || "", image: o.image || "",
+          aliases: o.aliases || [], localId: o.localId || null,
+        },
+      };
+    }
     return c;
   }
 
@@ -1904,6 +2388,7 @@
           g1.appendChild(miniPerfCard({
             name: grp.performer.name,
             image: grp.performer.image,
+            stashId: grp.performer.stashId,
             sub: subLatest(notifyNewest(grp)),
             // 角标用「新作 3」：与英文 "3 new" 等宽，完整说法进 title
             badge: tc("新作 " + cnt, cnt + " new"),
@@ -2005,6 +2490,7 @@
           g6.appendChild(miniPerfCard({
             name: cs.meta.name,
             image: cs.meta.image,
+            stashId: cs.meta.stashId,
             sub: coSub(cs),
             badge: tc("共同出演", "Co-star"), badgeKind: "co",
             onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items, coWith: cs.coWith }); },
@@ -2100,6 +2586,7 @@
       out.push(miniPerfCard({
         name: pf.name,
         image: pf.image,
+        stashId: pf.stashId,
         // 只留作品数：「· 最近有新作」在窄卡里必然被省略号吃掉
         // （实测 1280 下文字需 125px、可用只有 113px — 用户 2026-10-27）
         sub: tc((pf.sceneCount || 0) + " 部作品", (pf.sceneCount || 0) + " scenes"),
@@ -2136,6 +2623,19 @@
       c.appendChild(stateBox("loading", loadingText()));
       return;
     }
+    // 子 tab + 顶部翻页并成一行（§13.5）：原先「子 tab / 顶部翻页 / 网格 /
+    // 底部翻页」各占一行，iPad 上白扔约 58px。窄了就由 flex-wrap 把右侧翻页
+    // 掉到第二行 —— 正是「不够才换行」。
+    var prefs = dpPrefs();
+    var sort = _dp.sort || cfg.sort;
+    var perPage = toNum(prefs.perPage, 24);
+    var all = sortItems(filterItems(cfg.items(ds)), sort);
+    var totalPages = Math.max(1, Math.ceil(all.length / perPage));
+    if (_dp.page > totalPages) _dp.page = 1;
+    var start = (_dp.page - 1) * perPage;
+    var pageItems = all.slice(start, start + perPage);
+
+    var headrow = el("div", "ssd-dp-headrow");
     // 子 tab：已发布 | 预告（预告分页并入最新 — 用户 2026-10-25）
     // 「返回总览」已移除（用户 2026-10-25 第七轮）
     if (view === "latest") {
@@ -2151,10 +2651,14 @@
         });
         subRow.appendChild(b);
       });
-      c.appendChild(subRow);
+      headrow.appendChild(subRow);
     }
+    var topPager = pagerBar(view, all.length, totalPages, perPage, { top: true });
+    if (topPager) headrow.appendChild(topPager);
+    if (headrow.firstChild) c.appendChild(headrow);
 
     // 工作室钻取：按工作室分组入口条（§8.2 studioFilter 视图的进入点）
+    // 多 chip 会占满整行，不进 headrow
     if (view === "studios" && ds.groups && ds.groups.length) {
       var strip = el("div", "ssd-dp-grpstrip");
       ds.groups.forEach(function (gg) {
@@ -2167,16 +2671,6 @@
       c.appendChild(strip);
     }
 
-    var prefs = dpPrefs();
-    var sort = _dp.sort || cfg.sort;
-    var perPage = toNum(prefs.perPage, 24);
-    var all = sortItems(filterItems(cfg.items(ds)), sort);
-    var totalPages = Math.max(1, Math.ceil(all.length / perPage));
-    if (_dp.page > totalPages) _dp.page = 1;
-    var start = (_dp.page - 1) * perPage;
-    var pageItems = all.slice(start, start + perPage);
-
-    c.appendChild(pagerBar(view, all.length, totalPages, perPage, true));
     if (!all.length) {
       // 工作室钻取无任何收藏工作室 → 提示 + 跳转 Stash 原生工作室列表
       // （用户 2026-10-25 第四轮；有关注但无新发布仍走通用空态）
@@ -2195,40 +2689,59 @@
     } else {
       c.appendChild(sceneGrid(pageItems, { days: cfg.days, allowList: true }));
     }
-    c.appendChild(pagerBar(view, all.length, totalPages, perPage, false));
+    var bottomPager = pagerBar(view, all.length, totalPages, perPage, { plain: true });
+    if (bottomPager) c.appendChild(bottomPager);
     SSD.layoutCardGrid();
   }
-  function pagerBar(view, total, totalPages, perPage, top) {
-    var bar = el("div", "ssd-dp-pagerow");
-    var info = el("span", "ssd-dp-pcount",
-      tc("第 " + _dp.page + " / " + totalPages + " 页 · 共 " + total + " 部 · 每页 " + perPage,
-         "Page " + _dp.page + " / " + totalPages + " · " + total + " items"));
-    if (!top) bar.appendChild(info);
-    if (totalPages > 1) {
-      var pg = el("div", "ssd-dp-pager");
-      var prev = el("button", "ssd-dp-pg", "‹");
-      prev.type = "button";
-      prev.disabled = _dp.page <= 1;
-      prev.addEventListener("click", function () { _dp.page--; render(); });
-      pg.appendChild(prev);
-      var s = Math.max(1, _dp.page - 2), e = Math.min(totalPages, s + 4);
-      if (e - s < 4) s = Math.max(1, e - 4);
-      for (var p = s; p <= e; p++) {
-        (function (pn) {
-          var b = el("button", "ssd-dp-pg" + (pn === _dp.page ? " on" : ""), String(pn));
-          b.type = "button";
-          b.addEventListener("click", function () { _dp.page = pn; render(); });
-          pg.appendChild(b);
-        })(p);
-      }
-      var next = el("button", "ssd-dp-pg", "›");
-      next.type = "button";
-      next.disabled = _dp.page >= totalPages;
-      next.addEventListener("click", function () { _dp.page++; render(); });
-      pg.appendChild(next);
-      bar.appendChild(pg);
+  // 纯按钮组（≥2 页才返回节点）
+  function pagerNav(totalPages) {
+    if (totalPages <= 1) return null;
+    var pg = el("div", "ssd-dp-pager");
+    var prev = el("button", "ssd-dp-pg", "‹");
+    prev.type = "button";
+    prev.disabled = _dp.page <= 1;
+    prev.addEventListener("click", function () { _dp.page--; render(); });
+    pg.appendChild(prev);
+    var s = Math.max(1, _dp.page - 2), e = Math.min(totalPages, s + 4);
+    if (e - s < 4) s = Math.max(1, e - 4);
+    for (var p = s; p <= e; p++) {
+      (function (pn) {
+        var b = el("button", "ssd-dp-pg" + (pn === _dp.page ? " on" : ""), String(pn));
+        b.type = "button";
+        b.addEventListener("click", function () { _dp.page = pn; render(); });
+        pg.appendChild(b);
+      })(p);
     }
-    if (top) bar.appendChild(info);
+    var next = el("button", "ssd-dp-pg", "›");
+    next.type = "button";
+    next.disabled = _dp.page >= totalPages;
+    next.addEventListener("click", function () { _dp.page++; render(); });
+    pg.appendChild(next);
+    return pg;
+  }
+  // 分页条（§13.5 三档）
+  //   {top:true}   嵌进 .ssd-dp-headrow 的紧凑版：左侧「共 N 部」+ 右侧按钮；
+  //                只有 1 页时整块返回 null（调用方跳过，保持一行干净）
+  //   {plain:true} 底部行：只有按钮，不再重复计数；1 页返回 null
+  //   默认         独立一行：页号 / 总数 / 每页 + 按钮（perfFilter、studioFilter 用）
+  function pagerBar(view, total, totalPages, perPage, opts) {
+    opts = opts || {};
+    var pg = pagerNav(totalPages);
+    if (opts.plain) {
+      if (!pg) return null;
+      // 底部只留按钮、不再重复计数；靠右收尾，视觉上不贴着首张卡片
+      var end = el("div", "ssd-dp-pagerow is-end");
+      end.appendChild(pg);
+      return end;
+    }
+    if (opts.top && !pg) return null;
+    var bar = el("div", opts.top ? "ssd-dp-headrow-pager" : "ssd-dp-pagerow");
+    // 页号由按钮高亮表达、每页数筛选栏已有 → 紧凑版只留总数
+    bar.appendChild(el("span", "ssd-dp-pcount", opts.top
+      ? tc("共 " + total + " 部", total + " scenes")
+      : tc("第 " + _dp.page + " / " + totalPages + " 页 · 共 " + total + " 部 · 每页 " + perPage,
+           "Page " + _dp.page + " / " + totalPages + " · " + total + " items")));
+    if (pg) bar.appendChild(pg);
     return bar;
   }
 
@@ -2274,6 +2787,7 @@
         grid.appendChild(miniPerfCard({
           name: nm,
           image: grp.performer.image,
+          stashId: grp.performer.stashId,
           sub: subLatest(grp.newest),
           badge: tc("新作 " + grp.items.length, grp.items.length + " new"),
           badgeTitle: tc(grp.items.length + " 部新作品", grp.items.length + " new"),
@@ -2287,6 +2801,7 @@
         grid.appendChild(miniPerfCard({
           name: cs.meta.name,
           image: cs.meta.image,
+          stashId: cs.meta.stashId,
           sub: coSub(cs),
           badge: tc("共同出演", "Co-star"), badgeKind: "co",
           onClick: function () { openPerfModal({ src: "co", stashId: cs.meta.stashId, name: cs.meta.name, image: cs.meta.image, scenes: cs.scenes, items: cs.items, coWith: cs.coWith }); },
@@ -2304,9 +2819,67 @@
 
   // ── 演员详情弹层（§3.5 详情 + 入库 + 在源打开 + 相关场景）───────────────
   var _dpModal = null;
+  var _dpModalBackId = 0;
   function closePerfModal() {
     if (_dpModal) { _dpModal.remove(); _dpModal = null; }
+    if (_dpModalBackId) { SSD.modalBack.release(_dpModalBackId); _dpModalBackId = 0; }
   }
+  // 忽略演员（§C3 / §6.1）：二次点击确认。忽略 = 从 stash-box 查询输入里摘掉
+  // 这位演员（真不查，省流量）；记录进全局 ignore.v1，管理页可恢复。
+  var BAN_SVG = '<svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true">' +
+    '<path d="M367.2 412.5L99.5 144.8C77.1 176.1 64 214.5 64 256c0 106 86 192 192 192c41.5 0 79.9-13.1 111.2-35.5zm45.3-45.3C434.9 335.9 448 297.5 448 256c0-106-86-192-192-192c-41.5 0-79.9 13.1-111.2 35.5L412.5 367.2zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/>' +
+    "</svg>";
+  function perfIgnoreButton(endpoint, p, after) {
+    // 实心（用户 2026-10-29）：详情页里「忽略」和「加入库」并排，之前一个实心
+    // 一个描边，看着像次要比主操作低一档；忽略是不可逆动作，不该显弱。
+    var btn = el("button", "ssd-dp-btn solid ssd-dp-banbtn",
+      '<span class="ssd-dp-banico">' + BAN_SVG + "</span><span>" + tc("忽略", "Ignore") + "</span>");
+    btn.type = "button";
+    btn.title = tc("忽略这位演员（设置 → 已忽略管理 可恢复）",
+                   "Ignore this performer (restore under Settings → Ignored)");
+    btn.setAttribute("aria-label", tc("忽略这位演员", "Ignore this performer"));
+    var isArmed = function () { return btn.getAttribute("data-armed") === "1"; };
+    var disarm = function () {
+      clearTimeout(btn._armT);
+      btn.removeAttribute("data-armed");
+      btn.classList.remove("danger");
+      var lab = btn.querySelector("span:last-child");
+      if (lab) lab.textContent = tc("忽略", "Ignore");
+    };
+    btn.addEventListener("click", function () {
+      if (!isArmed()) {
+        btn.setAttribute("data-armed", "1");
+        btn.classList.add("danger");
+        var lab = btn.querySelector("span:last-child");
+        if (lab) lab.textContent = tc("确认忽略？", "Confirm?");
+        clearTimeout(btn._armT);
+        btn._armT = setTimeout(function () { if (btn.isConnected) disarm(); }, 4000);
+        return;
+      }
+      disarm();
+      if (!SSD.dpIgnore) return;
+      var r = SSD.dpIgnore.ignorePerformer({
+        endpoint: endpoint, stashId: p.stashId, name: p.name, image: p.image, aliases: p.aliases,
+        country: p.country, birthdate: p.birthdate, gender: p.gender,
+      });
+      if (!r.ok) {
+        SSD.toast(tc("忽略失败：浏览器存储写不进去", "Ignore failed: storage rejected the write"),
+          { duration: 6000 });
+        return;
+      }
+      try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+      SSD.toast(tc("已忽略「" + (p.name || "") + "」", "Ignored: " + (p.name || "")), {
+        actionText: tc("撤销", "Undo"),
+        onAction: function () {
+          SSD.dpIgnore.remove("performers", r.key);
+          try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+        },
+      });
+      if (typeof after === "function") after();
+    });
+    return btn;
+  }
+
   function openPerfModal(p) {
     closePerfModal();
     var d = _dp.d.latest;
@@ -2334,7 +2907,7 @@
     var h = buildPerfHead({ name: p.name, image: p.image, stashId: p.stashId, endpoint: endpoint, modal: true, stat: statText });
     body.appendChild(h.head);
 
-    // 按钮区：加入库（performerCreate + stash_ids 回链）
+    // 按钮区：加入库（弹窗预览 → performerCreate/performerUpdate）
     var acts = el("div", "ssd-dp-pfactions");
     var addBtn = el("button", "ssd-dp-btn primary", tc("＋ 加入库", "＋ Add to library"));
     addBtn.type = "button";
@@ -2344,54 +2917,23 @@
       addBtn.classList.remove("err");
       addBtn.classList.add("ok");
     }
-    function markFailed() {
-      addBtn.disabled = false;
-      addBtn.textContent = tc("加入失败，重试", "Failed — retry");
-      addBtn.classList.remove("ok");
-      addBtn.classList.add("err");
-    }
     // 头像翻页状态（详情加载后填充）：加入库用当前查看的这张头像
     var avatarPager = { urls: [], idx: 0 };
     addBtn.addEventListener("click", function () {
-      if (addBtn.disabled) return;
-      addBtn.disabled = true;
-      addBtn.textContent = tc("加入中…", "Adding…");
-      var baseInput = { name: p.name, stash_ids: [{ endpoint: endpoint, stash_id: String(p.stashId) }] };
+      if (addBtn.disabled || !SSD.openImportPerformer) return;
+      // 字段预览、同源/同名判定、建档与补全都在弹窗里做（§4.1 第二条路径，
+      // 实现在 stashDiscover.js）；这里只负责把结果反映到按钮上
       var avatarUrl = avatarPager.urls[avatarPager.idx] || p.image || "";
-      function create(input) {
-        return SSD.callGQL(
-          "mutation($input:PerformerCreateInput!){performerCreate(input:$input){id}}",
-          { input: input }
-        );
-      }
-      // 头像先直接把 URL 交给 Stash 服务端下载：浏览器侧 fetch 受 CORS 限制，
-      // stashdb / javstash 的图没有 CORS 头，转 data URL 会静默失败、头像丢失。
-      // 只有源站图连 Stash 也拉不动时，才退回浏览器转 data URL，最后才是无图。
-      var first = avatarUrl
-        ? create(Object.assign({ image: avatarUrl }, baseInput))
-        : create(baseInput);
-      first.catch(function (e) {
-        if (!avatarUrl || !/image|avatar|download|HTTP/i.test(String((e && e.message) || e))) throw e;
-        return fetchImageDataUrl(avatarUrl).then(function (dataUrl) {
-          return create(dataUrl ? Object.assign({ image: dataUrl }, baseInput) : baseInput);
-        });
-      }).then(function (r) {
-        var created = r && r.performerCreate;
-        if (!created || !created.id) throw new Error(tc("创建返回空结果", "empty result"));
-        markAdded();
-        invalidateLocalMemos();
-        _dp.d.latest = null; _dp.d.studios = null;
-        setTimeout(function () { ensureData(["latest", "studios"]); }, 400);
-      }).catch(function (e) {
-        console.error("[SSD] performerCreate failed:", e);
-        // 失败先复查本地库：stash_id 已存在（此前加入过）→ 显示已加入而非报错
-        // （用户 2026-10-25 第五轮：重复加入报"加入失败"）
-        invalidateLocalMemos();
-        loadLinkedPerformers(endpoint).then(function (linked) {
-          var already = linked.some(function (lp) { return String(lp.stashId) === String(p.stashId); });
-          if (already) { markAdded(); invalidateLocalMemos(); _dp.d.latest = null; _dp.d.studios = null; return; }
-          markFailed();
-        }).catch(function () { markFailed(); });
+      SSD.openImportPerformer({
+        endpoint: endpoint, apiKey: apiKey, stashId: p.stashId,
+        name: p.name, image: avatarUrl,
+        onDone: function (id, mode) {
+          markAdded();
+          invalidateLocalMemos();
+          _dp.d.latest = null; _dp.d.studios = null;
+          setTimeout(function () { ensureData(["latest", "studios"]); }, 400);
+          if (mode === "link") SSD.toast(tc("已关联到本地已有档案", "Linked to the existing record"));
+        },
       });
     });
     // 预检：该 stash_id 已在本地库 → 直接显示已加入，避免重复创建报错
@@ -2409,6 +2951,10 @@
     boxBtn.target = "_blank";
     boxBtn.rel = "noopener noreferrer";
     acts.appendChild(boxBtn);
+    // 忽略（§C3 / §6）：摘掉该演员的 stash-box 查询；两次点击确认，记录可撤销/可恢复。
+    // 排在按钮区最后（用户 2026-10-29）：它是这排里唯一的破坏性动作，夹在
+    // 「加入库」和「在源打开」中间容易被误点。
+    acts.appendChild(perfIgnoreButton(endpoint, p, function () { closePerfModal(); }));
     body.appendChild(acts);
 
     // 相关场景
@@ -2426,6 +2972,7 @@
     overlay.appendChild(m);
     document.body.appendChild(overlay);
     _dpModal = overlay;
+    _dpModalBackId = SSD.modalBack.hold(closePerfModal);   // 返回键＝关闭（移动端）
     document.addEventListener("keydown", function onEsc(e) {
       if (e.key === "Escape") { closePerfModal(); document.removeEventListener("keydown", onEsc); }
     });
@@ -2568,41 +3115,35 @@
     return state;
   }
 
-  // 头像 → base64 data URL（performerCreate 的 image 只收 base64；
-  // 跨域取不到时返回 null，加入库流程继续、只是不带图）
-  function fetchImageDataUrl(url) {
-    if (!url) return Promise.resolve(null);
-    return fetch(url, { mode: "cors", credentials: "omit" })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.blob();
-      })
-      .then(function (blob) {
-        return new Promise(function (resolve, reject) {
-          var fr = new FileReader();
-          fr.onload = function () { resolve(String(fr.result || "")); };
-          fr.onerror = function () { reject(new Error("read failed")); };
-          fr.readAsDataURL(blob);
-        });
-      })
-      .catch(function (e) {
-        console.warn("[SSD] avatar download skipped:", (e && e.message) || e);
-        return null;
-      });
-  }
-
   // 详情补全：性别/年龄 → genderLine，别名 → 名称下方，国籍 → 头像国旗徽标，
   // box 头像 URL → 头像。pf 兼容本地（birthdate/alias_list）与 box（birth_date/aliases）。
   function fillPerfDetail(h, pf) {
     if (!pf) return;
-    var bits = [];
-    if (pf.gender) bits.push(genderLabel(pf.gender));
-    var bd = pf.birth_date || pf.birthdate;
-    if (bd) {
-      var age = ageFromBirth(bd);
-      if (age) bits.push(tc(age + " 岁", age + " y/o"));
+    // 性别符号 + 年龄 + 生日（用户 2026-10-30 第八轮）：符号要上色，所以这一行
+    // 不能再 join 成字符串 —— 按节点拼，分隔符仍是「 · 」保持原来的一行外观。
+    // 生日缺字段（老 Box 记录常见）时整段不出，不留空尾巴。
+    var line = h.genderLine;
+    line.textContent = "";
+    var parts = [];
+    if (pf.gender) {
+      var sex = document.createElement("span");
+      sex.className = "ssd-dp-pfsex";
+      var gmNode = genderNode(pf.gender);
+      if (gmNode) sex.appendChild(gmNode);
+      sex.appendChild(document.createTextNode(genderLabel(pf.gender)));
+      parts.push(sex);
     }
-    if (bits.length) h.genderLine.textContent = bits.join(" · ");
+    var bd = pf.birth_date || pf.birthdate;
+    var age = bd ? ageFromBirth(bd) : null;
+    if (age) parts.push(document.createTextNode(tc(age + " 岁", age + " y/o")));
+    if (bd) {
+      var born = String(bd).slice(0, 10);
+      parts.push(document.createTextNode(tc("生日 " + born, "Born " + born)));
+    }
+    parts.forEach(function (node, i) {
+      if (i) line.appendChild(document.createTextNode(" · "));
+      line.appendChild(node);
+    });
     var al = pf.alias_list || pf.aliases;
     if (al && al.length) {
       // 与演员详情「搜索关联演员」的别名结构一致：只列 3 个，其余用 +N 徽标
@@ -2684,13 +3225,18 @@
 
     // 按钮区（§8.1：关注 ♥ / 发现 tab / 主页 / stash-box）
     var acts = el("div", "ssd-dp-pfactions");
+    // 爱心单独包一层（用户 2026-10-29）：要比正文放大一号，并做成「白里透粉」
+    function heartHTML(on) {
+      return '<span class="ssd-dp-heart">' + (on ? "♥" : "♡") + "</span>" +
+             "<span>" + (on ? tc("已关注", "Following") : tc("关注", "Follow")) + "</span>";
+    }
     var heartBtn = el("button", "ssd-dp-btn" + (followHas(pf.stashId) ? " loved" : ""),
-      (followHas(pf.stashId) ? "♥ " + tc("已关注", "Following") : "♡ " + tc("关注", "Follow")));
+      heartHTML(followHas(pf.stashId)));
     heartBtn.type = "button";
     heartBtn.addEventListener("click", function () {
       var on = followToggle({ stashId: pf.stashId, endpoint: endpoint, name: pf.name, image: pf.image, localId: pf.localId });
       heartBtn.className = "ssd-dp-btn" + (on ? " loved" : "");
-      heartBtn.textContent = on ? "♥ " + tc("已关注", "Following") : "♡ " + tc("关注", "Follow");
+      heartBtn.innerHTML = heartHTML(on);
       emitUnread();
     });
     acts.appendChild(heartBtn);
@@ -2710,16 +3256,46 @@
     boxBtn.rel = "noopener noreferrer";
     boxBtn.title = tc("在 stash-box 打开", "Open on stash-box");
     acts.appendChild(boxBtn);
+    // 忽略演员（§6.3）
+    acts.appendChild(perfIgnoreButton(endpoint, pf, function () { render(); }));
     c.appendChild(acts);
+
+    // 已被忽略的演员：从关注页「详情」跳进来时会是空列表，改成占位 + 恢复
+    if (SSD.dpIgnore && SSD.dpIgnore.isPerformerIgnored(endpoint, pf.stashId)) {
+      var igbox = stateBox("empty", tc("这位演员已在发现页被忽略", "This performer is ignored on Discover"));
+      var igRestore = el("button", "ssd-dp-btn primary", tc("恢复显示", "Restore"));
+      igRestore.type = "button";
+      igRestore.addEventListener("click", function () {
+        var rr = SSD.dpIgnore.remove("performers", SSD.dpIgnore.key(endpoint, pf.stashId));
+        if (!rr.ok) {
+          SSD.toast(tc("恢复失败：浏览器存储写不进去", "Restore failed: storage rejected the write"),
+            { duration: 6000 });
+          return;
+        }
+        try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+      });
+      igbox.appendChild(igRestore);
+      c.appendChild(igbox);
+      SSD.layoutCardGrid();
+      return;
+    }
 
     // 本地演员详情补全（性别/年龄/别名/国籍国旗）
     SSD.callGQL("query($id:ID!){findPerformer(id:$id){id gender birthdate country alias_list}}", { id: pf.localId }).then(function (r) {
       fillPerfDetail(h, r && r.findPerformer);
     }).catch(function () {});
 
-    // 下半：场景卡（分组内不受 cap 限制）
+    // 下半：场景卡（分组内不受 cap 限制）+ 分页（§13.2：高产演员可达数百条）
     // allowList：列表模式下同样落成表格（用户 2026-10-28：原先这里固定网格）
-    c.appendChild(sceneGrid(filterItems(g.items), { allowList: true }));
+    // unread/§13.6：从关注页点「详情」进钻取后仍要能记已读、仍要画红框，
+    // 否则「点详情一部部看完、回关注页还是全红」
+    var all = sortItems(filterItems(g.items), _dp.sort || "date-desc");
+    var perPage = toNum(dpPrefs().perPage, 24);
+    var totalPages = Math.max(1, Math.ceil(all.length / perPage));
+    if (_dp.page > totalPages) _dp.page = 1;
+    var start = (_dp.page - 1) * perPage;
+    c.appendChild(sceneGrid(all.slice(start, start + perPage), { unread: true, allowList: true }));
+    if (all.length && totalPages > 1) c.appendChild(pagerBar("perfFilter", all.length, totalPages, perPage, {}));
     SSD.layoutCardGrid();
   }
 
@@ -2780,7 +3356,14 @@
     acts.appendChild(boxBtn);
     c.appendChild(acts);
 
-    c.appendChild(sceneGrid(filterItems(g.items), { allowList: true }));
+    // 场景卡 + 分页（父工作室聚合实测可达 500 条 — §13.1）；unread 见 §13.6
+    var all = sortItems(filterItems(g.items), _dp.sort || "date-desc");
+    var perPage = toNum(dpPrefs().perPage, 24);
+    var totalPages = Math.max(1, Math.ceil(all.length / perPage));
+    if (_dp.page > totalPages) _dp.page = 1;
+    var start = (_dp.page - 1) * perPage;
+    c.appendChild(sceneGrid(all.slice(start, start + perPage), { unread: true, allowList: true }));
+    if (all.length && totalPages > 1) c.appendChild(pagerBar("studioFilter", all.length, totalPages, perPage, {}));
     SSD.layoutCardGrid();
   }
 
@@ -2797,13 +3380,41 @@
     // 别源演员不在此页显示「回看期内暂无新作品」，切源后自然出现。
     var srcEp = String(d.source.endpoint).toLowerCase();
     var fl = allFollow.filter(function (f) { return String(f.endpoint || "").toLowerCase() === srcEp; });
+
+    // §6.3：关注了 A 又忽略 A → 该分组会静默消失，用户不知道人去哪了。
+    // 先拆出来单独计数，在顶部给一条灰条 + 管理入口，不做静默。
+    var igPerfs = {};
+    try { if (SSD.dpIgnore) igPerfs = SSD.dpIgnore.performers(); } catch (_) {}
+    var ignoredFollow = [];
+    if (Object.keys(igPerfs).length) {
+      var igPrefix = srcEp + ":";
+      fl = fl.filter(function (f) {
+        if (igPerfs[igPrefix + String(f.stashId).toLowerCase()]) { ignoredFollow.push(f); return false; }
+        return true;
+      });
+    }
+    if (ignoredFollow.length) {
+      var igbar = el("div", "ssd-dp-ignbar");
+      igbar.appendChild(el("span", "ssd-dp-ignbar-text",
+        tc("已忽略 " + ignoredFollow.length + " 位关注中的演员",
+           ignoredFollow.length + " followed performer" + (ignoredFollow.length > 1 ? "s" : "") + " ignored")));
+      var igbtn = el("button", "ssd-dp-btn ghost sm", tc("管理", "Manage"));
+      igbtn.type = "button";
+      igbtn.addEventListener("click", function () { switchView("ignored"); });
+      igbar.appendChild(igbtn);
+      c.appendChild(igbar);
+    }
+
     if (!fl.length) {
       var empty = stateBox("empty",
-        allFollow.length
-          ? tc("当前数据源下还没有关注的演员。切换数据源，或从收藏导入当前源的演员。",
-               "No followed performers on the current source. Switch the source, or import its favorites.")
-          : tc("还没有关注的演员。在演员卡上点 ♥ 即可关注，或从库内收藏一键导入。",
-               "Not following anyone yet. Tap ♥ on a performer card, or import your ❤ favorites in one tap."));
+        ignoredFollow.length
+          ? tc("关注的演员当前都在已忽略列表里。点上面的「管理」可以恢复。",
+               "All followed performers on this source are ignored. Use Manage above to restore them.")
+          : allFollow.length
+            ? tc("当前数据源下还没有关注的演员。切换数据源，或从收藏导入当前源的演员。",
+                 "No followed performers on the current source. Switch the source, or import its favorites.")
+            : tc("还没有关注的演员。在演员卡上点 ♥ 即可关注，或从库内收藏一键导入。",
+                 "Not following anyone yet. Tap ♥ on a performer card, or import your ❤ favorites in one tap."));
       empty.appendChild(makeImportButton());
       c.appendChild(empty);
       return;
@@ -2954,12 +3565,543 @@
       var expanded = isOpen;
       if (g && expanded) {
         var body = el("div", "ssd-dp-fgrp-body");
-        // 搜索时组内也过滤；未搜索时照常显示全部（含预告 — 用户 2026-10-27）
-        body.appendChild(sceneGrid(q ? filterItems(g.items) : g.items, { unread: true, allowList: true }));
+        // 搜索时组内也过滤；截断按过滤后的长度算（先 filter 再 slice）。
+        // 关注页是多组纵向堆叠，组内再嵌一整套翻页会出现多套分页条、且共用
+        // _dp.page 会互相串号 → 只显示前「每页」条，要看全部走分组头「详情」
+        var list = q ? filterItems(g.items) : g.items;
+        var lim = toNum(dpPrefs().perPage, 24);
+        body.appendChild(sceneGrid(list.slice(0, lim), { unread: true, allowList: true }));
         grp.appendChild(body);
       }
       c.appendChild(grp);
     });
+    SSD.layoutCardGrid();
+  }
+
+  // ═══ 已忽略管理（§7 / §7.1）══════════════════════════════════════════════
+  // 无入口 tab（不进 VIEWS），从设置页首行卡片 / 关注页灰条 / toast 进来。
+  // 数据全部来自本地快照：已忽略的片可能早从源站下架，反查必然失败 —— 管理页
+  // 的搜索、列表、详情一律零 box 请求。
+  var _ignTab = "scenes";   // "scenes" | "performers"
+  var _ignQ = "";
+
+  // 归一化搬 tagMerge 的 normalize：NFKC（全角→半角）+ 小写 + 剔分隔符。
+  // 比 focused 的 normalizedName（NFC + 去空白）强，能命中 ＡＩＫＡ / Aika-Honda。
+  function ignNorm(s) {
+    var t = String(s == null ? "" : s);
+    try { t = t.normalize("NFKC"); } catch (_) {}
+    return t.toLowerCase().replace(/[\s·、，,。/\-—_・]+/g, "");
+  }
+
+  // 国旗用图片，不用 emoji（用户 2026-10-30 第 3 条「为什么还是代码」）：Windows
+  // 的 Segoe UI Emoji 根本没有国旗字形，区域指示符会退化成两个字母「JP」。插件里
+  // 演员卡角标早就走 flagcdn w40（stashDiscover.js 的 ssd-find-flag），这里沿用同一
+  // 个源、同一档尺寸；加载失败才退回字母，离线时不至于空白。
+  function flagNode(cc) {
+    var c = String(cc || "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(c)) return null;
+    var img = document.createElement("img");
+    img.className = "ssd-dp-flag";
+    img.src = "https://flagcdn.com/w40/" + c.toLowerCase() + ".png";
+    img.alt = c;
+    img.title = c;
+    img.loading = "lazy";
+    img.onerror = function () {
+      var s = document.createElement("span");
+      s.className = "ssd-dp-flag-cc";
+      s.textContent = c;
+      if (img.parentNode) img.parentNode.replaceChild(s, img);
+    };
+    return img;
+  }
+  // 性别符号上色（用户 2026-10-30）：♀ 粉、♂ 蓝、跨性别/其他 紫。用固定色相而不是
+  // 主题强调色 —— 强调色在部分主题里男女会撞成同一个蓝。
+  function genderNode(g) {
+    var m = genderMark(g);
+    if (!m) return null;
+    var t = String(g || "").toUpperCase();
+    var s = document.createElement("span");
+    s.className = "ssd-dp-gm" +
+      (t.indexOf("TRANS") !== -1 || t === "NON_BINARY" || t === "INTERSEX" ? " gm-x"
+        : (t === "MALE" ? " gm-m" : " gm-f"));
+    s.textContent = m;
+    s.title = t;
+    return s;
+  }
+  function ageFromBirth(s) {
+    var m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(String(s || ""));
+    if (!m) return null;
+    var y = +m[1], mo = +m[2], d = +m[3], now = new Date();
+    var age = now.getFullYear() - y;
+    if (now.getMonth() + 1 < mo || (now.getMonth() + 1 === mo && now.getDate() < d)) age--;
+    return age > 0 && age < 130 ? age : null;
+  }
+  // 忽略记录的键是 "endpoint:stashId"，endpoint 可能是完整 URL 也可能是短名。
+  // 纯字符串判断，零请求 —— 只用来给「什么数据都没有」的卡片兜一行来源。
+  function ignKeyParts(key) {
+    var k = String(key || "");
+    var cut = k.lastIndexOf(":");   // endpoint 里的 "https://" 自带冒号，从右切
+    if (cut <= 0) return { ep: k, id: "" };
+    return { ep: k.slice(0, cut), id: k.slice(cut + 1) };
+  }
+  function ignSourceName(key) {
+    var e = String(ignKeyParts(key).ep || "").toLowerCase();
+    if (e.indexOf("stashdb") !== -1) return "StashDB";
+    if (e.indexOf("javstash") !== -1) return "JAVStash";
+    if (e.indexOf("theporndb") !== -1) return "TPDB";
+    if (e.indexOf("pmvstash") !== -1) return "PMVStash";
+    return e.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+  // 性别：stash-box 给的是枚举名（FEMALE / MALE / TRANSGENDER_FEMALE …）
+  function genderMark(g) {
+    var s = String(g || "").toUpperCase();
+    if (!s) return "";
+    if (s.indexOf("FEMALE") !== -1 && s.indexOf("TRANS") === -1) return "♀";
+    if (s === "MALE") return "♂";
+    if (s.indexOf("TRANSGENDER_FEMALE") !== -1) return "⚧♀";
+    if (s.indexOf("TRANSGENDER_MALE") !== -1) return "⚧♂";
+    if (s === "NON_BINARY") return "⚧";
+    if (s === "INTERSEX") return "⚥";
+    return "";
+  }
+
+  function ignRows(kind) {
+    var bag = kind === "performers" ? SSD.dpIgnore.performers() : SSD.dpIgnore.scenes();
+    var rows = Object.keys(bag).map(function (k) {
+      var r = bag[k] || {};
+      return { key: k, at: r.at || 0, title: r.title, code: r.code, date: r.date, studio: r.studio,
+               cover: r.cover, p: r.p || [], name: r.name, image: r.image, alias_list: r.alias_list || [],
+               country: r.country || "", birthdate: r.birthdate || "", gender: r.gender || "" };
+    });
+    rows.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });   // 忽略时间倒序
+    var q = ignNorm(_ignQ);
+    if (!q) return rows;
+    return rows.filter(function (r) {
+      var hay = kind === "performers"
+        ? [r.name].concat(r.alias_list || []).join(" ")
+        : [r.title, r.code, r.studio].concat(r.p || []).join(" ");
+      return ignNorm(hay).indexOf(q) !== -1;
+    });
+  }
+
+  function restoreIgn(kind, key) {
+    var r = SSD.dpIgnore.remove(kind, key);
+    if (!r.ok) {
+      SSD.toast(tc("恢复失败：浏览器存储写不进去", "Restore failed: storage rejected the write"), { duration: 6000 });
+      return false;
+    }
+    try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+    render();
+    return true;
+  }
+
+  // 卡片点开：快照详情（不请求 box —— 已下架的片反查必然失败）
+  function openIgnDetail(kind, row) {
+    var overlay = el("div", "ssd-dp-modal-overlay");
+    var backId = 0;
+    // 所有关闭路径（× / 点遮罩 / 恢复 / 关闭按钮）都走这里，才能把返回键垫层
+    // 一起退掉；否则用户以后要多按一次返回键才离开页面（移动端）
+    function shutdown() {
+      overlay.remove();
+      if (backId) { SSD.modalBack.release(backId); backId = 0; }
+    }
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) shutdown(); });
+    var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
+    var close = el("button", "ssd-dp-modal-close", "&times;");
+    close.type = "button";
+    close.addEventListener("click", shutdown);
+    m.appendChild(close);
+    var body = el("div", "ssd-dp-modal-body");
+
+    if (kind === "scenes") {
+      if (row.cover) {
+        var im = document.createElement("img");
+        im.className = "ssd-dp-igcover"; im.loading = "lazy"; im.alt = row.title || "";
+        im.src = row.cover;
+        im.onerror = function () { this.remove(); };
+        body.appendChild(im);
+      }
+      body.appendChild(el("div", "ssd-dp-igmodaltitle", row.title || row.code || row.key));
+      var meta = [row.code, row.studio, row.date].filter(Boolean).join(" · ");
+      if (meta) body.appendChild(el("div", "ssd-dp-igmodalmeta", meta));
+      // 演员名逐个加边框（用户 2026-10-29）：一串用「·」连起来的名字读不清边界，
+      // 尤其日文名里空格很多。chip 也让长名单自然换行。
+      if ((row.p || []).length) {
+        var pwrap = el("div", "ssd-dp-igchips");
+        (row.p || []).forEach(function (nm) {
+          pwrap.appendChild(el("span", "ssd-dp-igchip", nm));
+        });
+        body.appendChild(pwrap);
+      }
+      body.appendChild(el("div", "ssd-dp-igmodalmeta", tc("忽略于 " + new Date(row.at || 0).toLocaleString(),
+        "Ignored " + new Date(row.at || 0).toLocaleString())));
+    } else {
+      // 头像改成竖版 132×198（与「发现演员」弹窗的 .ssd-find-photo-frame 同尺寸，
+      // 用户 2026-10-30 第 3 条）。竖版之后若仍上下堆叠，右侧会空出 200 多像素的
+      // 死区 —— 于是照「发现演员」的分栏：头像在左，信息在右。
+      var pbody = el("div", "ssd-dp-igbody");
+      var pmain = el("div", "ssd-dp-igmain");
+      if (row.image) {
+        var av = document.createElement("img");
+        av.className = "ssd-dp-igavatar"; av.alt = row.name || "";
+        av.src = row.image;
+        av.onerror = function () { this.remove(); };
+        pbody.appendChild(av);
+      }
+      pbody.appendChild(pmain);
+      body.appendChild(pbody);
+      pmain.appendChild(el("div", "ssd-dp-igmodaltitle", row.name || row.key));
+      // 快照里已有的都摆出来（零网络开销）：国旗 / 性别 / 年龄 / 生日 / 来源编号。
+      // 混排了 <img>（国旗）和带色符号，所以按节点拼，不再 join 字符串。
+      var ag = ageFromBirth(row.birthdate);
+      var meta = el("div", "ssd-dp-igmodalmeta ssd-dp-igfacts");
+      var fl = flagNode(row.country);
+      if (fl) meta.appendChild(fl);
+      else if (row.country) meta.appendChild(el("span", null, String(row.country).toUpperCase()));
+      var gm = genderNode(row.gender);
+      if (gm) meta.appendChild(gm);
+      if (ag != null) meta.appendChild(el("span", null, ag + tc(" 岁", " yrs")));
+      if (row.birthdate) meta.appendChild(el("span", null, tc("生日 ", "Born ") + row.birthdate));
+      if (meta.childNodes.length) pmain.appendChild(meta);
+      if ((row.alias_list || []).length) {
+        var awrap = el("div", "ssd-dp-igchips");
+        (row.alias_list || []).forEach(function (nm) { awrap.appendChild(el("span", "ssd-dp-igchip", nm)); });
+        pmain.appendChild(awrap);
+      }
+      // 键是 "endpoint:stashId"，endpoint 可能是 URL（自带冒号）→ 从右切，
+      // 显示成「来源 StashDB · #id」而不是「来源 https · //stashdb.org/graphql」
+      var kp = ignKeyParts(row.key);
+      if (kp.id) {
+        pmain.appendChild(el("div", "ssd-dp-igmodalmeta dim",
+          tc("来源 ", "Source ") + ignSourceName(row.key) + " · #" + kp.id));
+      }
+      // 「忽略于」跟着信息栏走（原来贴在弹窗底部，分栏后放在右栏末尾更连贯）
+      pmain.appendChild(el("div", "ssd-dp-igmodalmeta dim", tc("忽略于 " + new Date(row.at || 0).toLocaleString(),
+        "Ignored " + new Date(row.at || 0).toLocaleString())));
+    }
+
+    var acts = el("div", "ssd-dp-pfactions");
+    var ok = el("button", "ssd-dp-btn primary", tc("恢复显示", "Restore"));
+    ok.type = "button";
+    ok.addEventListener("click", function () {
+      if (restoreIgn(kind, row.key)) shutdown();
+    });
+    acts.appendChild(ok);
+    var no = el("button", "ssd-dp-btn ghost", tc("关闭", "Close"));
+    no.type = "button";
+    no.addEventListener("click", shutdown);
+    acts.appendChild(no);
+    body.appendChild(acts);
+
+    m.appendChild(body);
+    overlay.appendChild(m);
+    document.body.appendChild(overlay);
+    backId = SSD.modalBack.hold(shutdown);   // 返回键＝关闭（移动端）
+  }
+
+  // 还原全部：弹窗确认（不可撤销的大批量操作，不用 4 秒两步确认）
+  function confirmRestoreAll(kind) {
+    var n = ignRows(kind).length;
+    if (!n) return;
+    var isScene = kind === "scenes";
+    var overlay = el("div", "ssd-dp-modal-overlay");
+    var backId = 0;
+    function shutdown() {
+      overlay.remove();
+      if (backId) { SSD.modalBack.release(backId); backId = 0; }
+    }
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) shutdown(); });
+    var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
+    var body = el("div", "ssd-dp-modal-body");
+    body.appendChild(el("div", "ssd-dp-igmodaltitle", tc("恢复全部", "Restore all")));
+    body.appendChild(el("div", "ssd-dp-igmodalmeta",
+      isScene ? tc("将恢复 " + n + " 部场景，此操作不可撤销。", n + " scene(s) will be restored. This cannot be undone.")
+              : tc("将恢复 " + n + " 位演员，此操作不可撤销。", n + " performer(s) will be restored. This cannot be undone.")));
+    var acts = el("div", "ssd-dp-pfactions");
+    var yes = el("button", "ssd-dp-btn primary", tc("恢复 " + n + (isScene ? " 部" : " 位"), "Restore " + n));
+    yes.type = "button";
+    yes.addEventListener("click", function () {
+      var r = SSD.dpIgnore.restoreAll(kind);
+      shutdown();
+      if (!r.ok) {
+        SSD.toast(tc("恢复失败：浏览器存储写不进去", "Restore failed: storage rejected the write"), { duration: 6000 });
+        return;
+      }
+      try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+      _dp.page = 1;
+      render();
+    });
+    acts.appendChild(yes);
+    var no = el("button", "ssd-dp-btn ghost", tc("取消", "Cancel"));
+    no.type = "button";
+    no.addEventListener("click", shutdown);
+    acts.appendChild(no);
+    body.appendChild(acts);
+    m.appendChild(body);
+    overlay.appendChild(m);
+    document.body.appendChild(overlay);
+    backId = SSD.modalBack.hold(shutdown);   // 返回键＝取消（移动端）
+  }
+
+  function exportIgnored() {
+    try {
+      var txt = SSD.dpIgnore.exportJSON();
+      var blob = new Blob([txt], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "stashDiscover-ignored-" + SSD.localDateStr(new Date()) + ".json";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      SSD.toast(tc("已导出忽略记录", "Ignored records exported"));
+    } catch (e) {
+      SSD.toast(tc("导出失败：", "Export failed: ") + ((e && e.message) || e), { duration: 6000 });
+    }
+  }
+
+  // 导入：读导出的 JSON，只补本地没有的记录（不覆盖已有决策）。用隐藏的
+  // file input 走系统文件选择，不引第三方依赖。
+  function importIgnored() {
+    var inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "application/json,.json";
+    inp.style.display = "none";
+    inp.addEventListener("change", function () {
+      var f = inp.files && inp.files[0];
+      inp.remove();
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        var res;
+        try { res = SSD.dpIgnore.importJSON(String(rd.result || "")); }
+        catch (e) { res = { ok: false, error: (e && e.message) || String(e), added: 0, skipped: 0 }; }
+        if (!res.ok) {
+          SSD.toast(tc("导入失败：", "Import failed: ") + (res.error || ""), { duration: 6000 });
+          return;
+        }
+        try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
+        _dp.page = 1;
+        render();
+        // 审计定稿（用户 2026-10-30）：无效条目要报出来，不能静默丢；
+        // 文件版本比插件新时提示一句（字段不认识的只会少显示，不会写坏）。
+        var note = "";
+        if (res.invalid) {
+          note += tc(" · " + res.invalid + " 条格式无效已跳过",
+                     " · " + res.invalid + " malformed skipped");
+        }
+        if (res.fileVersion > 1) {
+          note += tc(" · 文件版本 " + res.fileVersion + " 比插件新，未识别字段已忽略",
+                     " · file v" + res.fileVersion + " is newer, unknown fields ignored");
+        }
+        SSD.toast(tc("导入 " + res.added + " 条 · 已有 " + res.skipped + " 条",
+                     res.added + " imported · " + res.skipped + " already present") + note,
+          { duration: note ? 8000 : 5000 });
+      };
+      rd.onerror = function () { SSD.toast(tc("读取文件失败", "Could not read the file")); };
+      rd.readAsText(f);
+    });
+    document.body.appendChild(inp);
+    inp.click();
+  }
+
+  function renderIgnored(c) {
+    var count = SSD.dpIgnore.count();
+    var trimmed = SSD.dpIgnore.trimmed();
+    var prefs = dpPrefs();
+    var perPage = toNum(prefs.perPage, 24);
+
+    // 顶部一行：搜索框 + 场景/演员 切换 + 计数（§7.1 一行放完）
+    var head = el("div", "ssd-dp-ignhead");
+    var wrap = el("label", "ssd-dp-ignsearch");
+    var input = document.createElement("input");
+    input.type = "search";
+    input.value = _ignQ;
+    input.placeholder = tc("搜索标题 / 番号 / 工作室 / 演员…", "Search title / code / studio / performer…");
+    input.setAttribute("aria-label", tc("搜索已忽略记录", "Search ignored records"));
+    var t = 0;
+    input.addEventListener("input", function () {
+      clearTimeout(t);
+      t = setTimeout(function () {
+        _ignQ = input.value;
+        _dp.page = 1;          // 搜索词变化重置到第 1 页
+        render();
+      }, 150);
+    });
+    wrap.appendChild(input);
+    head.appendChild(wrap);
+
+    var rows = ignRows(_ignTab);
+    var isScene = _ignTab === "scenes";
+
+    // 演员卡片要有国旗/年龄/性别，但旧记录（以及从 scene.performers 忽略的
+    // 那些）快照里只有名字 —— 这里按需补一次 box findPerformer，补完靠
+    // ssd:ign-enriched 重绘（主 JS 实现，一次最多 12 条、不重复请求）。
+    if (!isScene && rows.length && SSD.dpIgnore && SSD.dpIgnore.backfillPerformers) {
+      try { SSD.dpIgnore.backfillPerformers(12); } catch (_) {}
+    }
+
+    var tabs = el("div", "ssd-dp-tabs ssd-dp-subtabs ssd-dp-igntabs");
+    [["scenes", tc("场景 · " + count.scenes, "Scenes · " + count.scenes)],
+     ["performers", tc("演员 · " + count.performers, "Performers · " + count.performers)]].forEach(function (pair) {
+      var b = el("button", "ssd-dp-tab" + (_ignTab === pair[0] ? " on" : ""), pair[1]);
+      b.type = "button";
+      // 搜索结果数挂 title：去掉行内「共 N 部」之后，这里仍能查到命中多少
+      if (_ignQ && _ignTab === pair[0]) {
+        b.title = tc("匹配 " + rows.length + " 条", rows.length + " matched");
+        b.textContent = pair[1] + " · " + rows.length;
+      }
+      b.addEventListener("click", function () {
+        if (_ignTab === pair[0]) return;
+        _ignTab = pair[0];
+        _dp.page = 1;          // 切 tab 保留搜索词、重置页码
+        render();
+      });
+      tabs.appendChild(b);
+    });
+    head.appendChild(tabs);
+
+    // 计数不再单列一段文字（用户 2026-10-29）：tab 上已经写着「场景 · 3」，
+    // 「共 3 部」是同一个数的第二遍，还把这一行撑长。
+
+    var tools = el("div", "ssd-dp-igntools");
+    // 每页数量（用户 2026-10-30）：挪到三个动作按钮**前面**。它只影响这一屏
+    // 装多少条，属于「怎么展示」；还原/导出/导入是动作，动作排在最后。
+    var sizes = [24, 48, 96];
+    if (sizes.indexOf(perPage) === -1) sizes.unshift(perPage);
+    var ppSel = document.createElement("select");
+    ppSel.className = "ssd-dp-ignpp";
+    ppSel.title = tc("每页数量", "Per page");
+    ppSel.setAttribute("aria-label", tc("每页数量", "Per page"));
+    sizes.forEach(function (n) {
+      var o = document.createElement("option");
+      o.value = String(n);
+      o.textContent = n + tc(" / 页", " / page");
+      if (perPage === n) o.selected = true;
+      ppSel.appendChild(o);
+    });
+    ppSel.addEventListener("change", function () {
+      dpSetPrefs({ perPage: parseInt(this.value, 10) || 24 });
+      _dp.page = 1;
+      render();
+    });
+    tools.appendChild(ppSel);
+
+    // 三个动作都改实心（用户 2026-10-29），用颜色分主次：
+    //   还原全部 = 主色（唯一会改数据的破坏性操作，最显眼）
+    //   导出 = 中性灰   导入 = 绿色（往库里补数据）
+    var allBtn = el("button", "ssd-dp-btn primary sm", tc("还原全部", "Restore all"));
+    allBtn.type = "button";
+    allBtn.disabled = !rows.length;
+    allBtn.addEventListener("click", function () { confirmRestoreAll(_ignTab); });
+    tools.appendChild(allBtn);
+    var expBtn = el("button", "ssd-dp-btn solid sm", tc("导出", "Export"));
+    expBtn.type = "button";
+    expBtn.addEventListener("click", exportIgnored);
+    tools.appendChild(expBtn);
+    var impBtn = el("button", "ssd-dp-btn solid gr sm", tc("导入", "Import"));
+    impBtn.type = "button";
+    impBtn.title = tc("从导出的 JSON 恢复忽略记录", "Restore ignored records from an exported JSON");
+    impBtn.addEventListener("click", importIgnored);
+    tools.appendChild(impBtn);
+    head.appendChild(tools);
+    c.appendChild(head);
+
+    // 超上限淘汰过 → 显性提示，不做静默（§3.2）
+    if (trimmed > 0) {
+      c.appendChild(el("div", "ssd-dp-igntrim",
+        tc("已自动淘汰 " + trimmed + " 条最旧记录（超过 3000 条 / 1,000,000 字符上限）",
+           trimmed + " oldest record(s) were dropped automatically (over the 3000 / 1,000,000-char cap)")));
+    }
+
+    if (!rows.length) {
+      var box = el("div", "ssd-dp-state");
+      box.textContent = _ignQ
+        ? tc("没有匹配「" + _ignQ + "」的记录", "No records match “" + _ignQ + "”")
+        : (isScene ? tc("还没有忽略任何场景", "No ignored scenes yet")
+                   : tc("还没有忽略任何演员", "No ignored performers yet"));
+      c.appendChild(box);
+      if (_ignQ) {
+        var acts = el("div", "ssd-dp-state-acts");
+        var clr = el("button", "ssd-dp-retry", tc("清空搜索", "Clear search"));
+        clr.type = "button";
+        clr.addEventListener("click", function () { _ignQ = ""; _dp.page = 1; render(); });
+        acts.appendChild(clr);
+        c.appendChild(acts);
+      }
+      return;
+    }
+
+    var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+    if (_dp.page > totalPages) _dp.page = 1;
+    var slice = rows.slice((_dp.page - 1) * perPage, _dp.page * perPage);
+
+    var grid = el("div", isScene ? "ssd-card-grid ssd-dp-iggrid" : "ssd-dp-grid mini ssd-dp-iggrid");
+    slice.forEach(function (row) {
+      if (isScene) {
+        var card = el("div", "ssd-dp-igcard");
+        var thumb = el("div", "ssd-dp-igthumb");
+        if (row.cover) {
+          var im = document.createElement("img");
+          im.loading = "lazy"; im.alt = row.title || ""; im.src = row.cover;
+          im.onerror = function () { this.style.visibility = "hidden"; };
+          thumb.appendChild(im);
+        } else {
+          thumb.appendChild(el("span", "ssd-dp-igph", "?"));
+        }
+        card.appendChild(thumb);
+        card.appendChild(el("div", "ssd-dp-igtitle", row.title || row.code || row.key));
+        // 小卡不再显示番号（用户 2026-10-30 第 2 条）：卡片高度有限，番号在
+        // 「标题已经重复了一次片名」的情况下价值最低；搜索仍然匹配 code
+        // （见 ignRows），弹窗里的 meta 行也照旧保留。
+        var metaTxt = [row.studio, row.date].filter(Boolean).join(" · ");
+        if (metaTxt) card.appendChild(el("div", "ssd-dp-igmeta", metaTxt));
+        if ((row.p || []).length) card.appendChild(el("div", "ssd-dp-igmeta dim", (row.p || []).slice(0, 4).join(" · ")));
+        var btn = el("button", "ssd-dp-btn ghost sm ssd-dp-igrestore", tc("恢复显示", "Restore"));
+        btn.type = "button";
+        btn.addEventListener("click", function (e) { e.stopPropagation(); restoreIgn("scenes", row.key); });
+        card.appendChild(btn);
+        card.addEventListener("click", function () { openIgnDetail("scenes", row); });
+        grid.appendChild(card);
+      } else {
+        var pcard = el("div", "ssd-dp-igperf");
+        var ava = el("div", "ssd-dp-igperfava");
+        var pim = document.createElement("img");
+        pim.loading = "lazy"; pim.alt = row.name || "";
+        pim.src = row.image || letterAvatar(row.name);
+        pim.onerror = function () { this.src = letterAvatar(row.name); };
+        ava.appendChild(pim);
+        pcard.appendChild(ava);
+        var info = el("div", "ssd-dp-igperfinfo");
+        info.appendChild(el("div", "ssd-dp-mini-name", row.name || row.key));
+        // 名字下方标签（用户 2026-10-30）：国旗（图片）、性别（彩色符号）、年龄
+        // （birthdate 本地算），都直接来自忽略时的快照。旧记录没有这些字段 →
+        // 退回显示别名，再不济显示数据源品牌，不留空卡。
+        var pag = ageFromBirth(row.birthdate);
+        var aliasTxt = (row.alias_list || []).slice(0, 2).join(" · ");
+        var sub = el("div", "ssd-dp-mini-sub");
+        var pfl = flagNode(row.country);
+        if (pfl) sub.appendChild(pfl);
+        var pgm = genderNode(row.gender);
+        if (pgm) sub.appendChild(pgm);
+        if (pag != null) sub.appendChild(el("span", "ssd-dp-igage", pag + tc(" 岁", " yrs")));
+        if (!sub.childNodes.length) sub.textContent = aliasTxt || ignSourceName(row.key);
+        if (sub.childNodes.length) info.appendChild(sub);
+        info.title = [row.name, row.country, genderMark(row.gender),
+          (pag != null ? pag + "y" : ""), aliasTxt].filter(Boolean).join(" · ");
+        pcard.appendChild(info);
+        // 窄屏换行用：0 高度的整行占位，把「恢复」压到下一行并靠左（见 CSS）
+        pcard.appendChild(el("div", "ssd-dp-igperf-br"));
+        var pbtn = el("button", "ssd-dp-btn ghost sm", tc("恢复", "Restore"));
+        pbtn.type = "button";
+        pbtn.addEventListener("click", function (e) { e.stopPropagation(); restoreIgn("performers", row.key); });
+        pcard.appendChild(pbtn);
+        pcard.addEventListener("click", function () { openIgnDetail("performers", row); });
+        grid.appendChild(pcard);
+      }
+    });
+    c.appendChild(grid);
+    var pb = pagerBar("ignored", rows.length, totalPages, perPage, { plain: true });
+    if (pb) c.appendChild(pb);
     SSD.layoutCardGrid();
   }
 
@@ -2988,9 +4130,226 @@
     wrap.insertBefore(box, wrap.firstChild);
   }
 
+  // ─── 入库字段开关（§C6）────────────────────────────────────────────────
+  var IMP_SCENE_LABELS = {
+    title: ["标题", "Title"], date: ["日期", "Date"], details: ["简介", "Details"],
+    director: ["导演", "Director"], cover: ["封面", "Cover"],
+    urlsWeb: ["网页链接", "Web link"], urlsSrc: ["源站链接", "Source links"],
+    performers: ["演员（本地没有就新建）", "Performers (create if missing)"],
+  };
+  var IMP_PERF_LABELS = {
+    gender: ["性别", "Gender"], birthdate: ["生日", "Birthdate"],
+    death_date: ["逝世", "Death date"], country: ["国籍", "Country"],
+    ethnicity: ["族裔", "Ethnicity"], hair_color: ["发色", "Hair"],
+    eye_color: ["瞳色", "Eyes"], height_cm: ["身高", "Height"],
+    measurements: ["三围", "Measurements"], career_length: ["从业期", "Career"],
+    tattoos: ["纹身", "Tattoos"], piercings: ["穿孔", "Piercings"],
+    aliases: ["别名", "Aliases"], urls: ["链接", "Links"], image: ["头像", "Image"],
+  };
+
+  function openImportFieldsDialog(kind, reuseBackId) {
+    if (!SSD.dpImport) return;
+    var isScene = kind !== "performer";
+    var store = SSD.dpImport;
+    var bag = isScene ? store.get().scene : store.get().performer;
+    var keys = isScene ? store.sceneKeys : store.perfKeys;
+    var labels = isScene ? IMP_SCENE_LABELS : IMP_PERF_LABELS;
+
+    var overlay = el("div", "ssd-dp-modal-overlay");
+    var backId = reuseBackId || 0;
+    function onKey(e) { if (e.key === "Escape") close(); }
+    function teardown() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+    }
+    function close() {
+      teardown();
+      if (backId) { SSD.modalBack.release(backId); backId = 0; }
+    }
+    // 「全选 / 全不选」要按新的勾选状态整窗重画：复用同一个 history 垫层，
+    // 不 close + 重新 hold —— 那样会一次压两条记录，返回键就得按两下。
+    function rebuild() {
+      var keep = backId;
+      backId = 0;
+      teardown();
+      setTimeout(function () { openImportFieldsDialog(kind, keep); }, 0);
+    }
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+
+    var m = el("div", "ssd-dp-modal ssd-dp-fields-modal");
+    var closeBtn = el("button", "ssd-dp-modal-close", "&times;");
+    closeBtn.type = "button";
+    closeBtn.addEventListener("click", close);
+    m.appendChild(closeBtn);
+    var body = el("div", "ssd-dp-modal-body");
+    m.appendChild(body);
+
+    body.appendChild(el("h3", "ssd-dp-set-h", isScene
+      ? tc("场景入库字段", "Scene import fields")
+      : tc("演员入库字段", "Performer import fields")));
+
+    var warn = el("div", "ssd-dp-setwarn");
+    warn.style.display = "none";
+    body.appendChild(warn);
+
+    function setPatch(patch) {
+      var r = store.set(isScene ? "scene" : "performer", patch);
+      // 写失败不能静默：localStorage 满时改动一刷新就没了
+      if (!r.ok) {
+        warn.textContent = tc("保存失败：浏览器本地存储已满，改完的选择一刷新就会丢。",
+          "Could not save: browser storage is full — changes are lost on refresh.");
+        warn.style.display = "";
+      }
+    }
+
+    // 必要字段：置顶、勾着、不可取消（§C6）
+    var req = el("div", "ssd-dp-fields ssd-dp-fields-req");
+    (isScene
+      ? [tc("番号", "Code"), tc("源编号", "Source ID")]
+      : [tc("名字", "Name"), tc("源编号", "Source ID")]
+    ).forEach(function (name) {
+      var row = el("label", "ssd-dp-field is-req");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true;
+      cb.disabled = true;
+      row.appendChild(cb);
+      row.appendChild(el("span", "ssd-dp-fieldname", name));
+      row.appendChild(el("span", "ssd-dp-fieldtag", tc("必需", "required")));
+      req.appendChild(row);
+    });
+    body.appendChild(req);
+
+    var list = el("div", "ssd-dp-fields");
+    keys.forEach(function (k) {
+      var row = el("label", "ssd-dp-field");
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = bag[k] !== false;
+      cb.addEventListener("change", function () {
+        var p = {};
+        p[k] = cb.checked;
+        setPatch(p);
+      });
+      row.appendChild(cb);
+      row.appendChild(el("span", "ssd-dp-fieldname", tc(labels[k][0], labels[k][1])));
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+
+    // 演员 / 标签 / 工作室三态（C7，默认全写）。演员这一项原来是勾选框，
+    // 「只关联库里已有的、别新建」没法表达 —— 而重名误建恰恰是最常被抱怨的
+    // 那点（用户 2026-10-29）。
+    if (isScene) {
+      body.appendChild(el("h3", "ssd-dp-set-h", tc("演员 / 标签 / 工作室", "Performers / Tags / Studio")));
+      [["performers", tc("演员", "Performers")], ["tags", tc("标签", "Tags")], ["studio", tc("工作室", "Studio")]].forEach(function (p) {
+        var row = el("div", "ssd-dp-setrow");
+        row.appendChild(el("span", "ssd-dp-setname", p[1]));
+        var sel = document.createElement("select");
+        sel.className = "ssd-dp-setsel";
+        [["all", tc("全写（含新建）", "Write all (create new)")],
+         ["existing", tc("只关联已有", "Link existing only")],
+         ["none", tc("不写", "Skip")]].forEach(function (o) {
+          var op = document.createElement("option");
+          op.value = o[0];
+          op.textContent = o[1];
+          sel.appendChild(op);
+        });
+        // 老存储值是布尔（true/false）→ 归一到三态字符串
+        var cur = bag[p[0]];
+        if (cur === true) cur = "all";
+        else if (cur === false) cur = "none";
+        sel.value = cur || "all";
+        sel.addEventListener("change", function () {
+          var patch = {};
+          patch[p[0]] = sel.value;
+          setPatch(patch);
+        });
+        row.appendChild(sel);
+        body.appendChild(row);
+      });
+    }
+
+    var foot = el("div", "ssd-dp-fieldsfoot");
+    [["all", tc("全选", "Select all")], ["none", tc("全不选", "Select none")],
+     ["reset", tc("恢复默认", "Reset")]].forEach(function (b) {
+      var btn = el("button", "ssd-dp-btn ghost sm", b[1]);
+      btn.type = "button";
+      btn.addEventListener("click", function () {
+        if (b[0] === "reset") store.reset(isScene ? "scene" : "performer");
+        else {
+          var patch = {};
+          keys.forEach(function (k) { patch[k] = b[0] === "all"; });
+          if (isScene) {
+            patch.tags = b[0] === "all" ? "all" : "none";
+            patch.studio = patch.tags;
+            patch.performers = patch.tags;   // 演员也是三态了，跟着一起全开/全关
+          }
+          setPatch(patch);
+        }
+        // 重建弹窗内容：勾选状态散在各 checkbox 上，就地改要全走一遍
+        rebuild();
+      });
+      foot.appendChild(btn);
+    });
+    var doneBtn = el("button", "ssd-dp-btn primary sm", tc("完成", "Done"));
+    doneBtn.type = "button";
+    doneBtn.addEventListener("click", close);
+    foot.appendChild(doneBtn);
+    body.appendChild(foot);
+
+    overlay.appendChild(m);
+    document.body.appendChild(overlay);
+    // 返回键＝关闭（移动端）。rebuild 复用旧垫层时要 rebind，否则 layer 里存的还是
+    // 上一个（已 remove）overlay 的 close，返回键会「吃掉记录但关不掉窗」。
+    if (backId) SSD.modalBack.rebind(backId, close);
+    else backId = SSD.modalBack.hold(close);
+  }
+
   function renderSettings(c) {
     var prefs = dpPrefs();
     var wrap = el("div", "ssd-dp-settings");
+
+    // 已忽略首行卡片（§7）：左边计数、右边管理入口。放在最前，是这次最想让
+    // 用户找得到的东西（论坛要的"忽略"必须有反悔的地方）
+    var ignCnt = SSD.dpIgnore.count();
+    var ignBox = el("div", "ssd-dp-set-box ssd-dp-set-ign");
+    var ignRow = el("div", "ssd-dp-setrow");
+    ignRow.appendChild(el("span", "ssd-dp-setname",
+      tc("已忽略：" + ignCnt.scenes + " 部场景 · " + ignCnt.performers + " 位演员",
+         "Ignored: " + ignCnt.scenes + " scenes · " + ignCnt.performers + " performers")));
+    // 三个入口按钮统一实心（用户 2026-10-30）：设置页整屏都是「带边框的卡片里
+    // 放一行控件」，幽灵按钮（透明底 + 细边）看着像没加载完的占位；下拉框是实底
+    // 的，并排时更明显。
+    var ignBtn = el("button", "ssd-dp-btn solid ssd-dp-setbtn", tc("已忽略管理", "Manage ignored"));
+    ignBtn.type = "button";
+    ignBtn.addEventListener("click", function () { switchView("ignored"); });
+    ignRow.appendChild(ignBtn);
+    ignBox.appendChild(ignRow);
+    wrap.appendChild(ignBox);
+
+    // 入库字段卡片（§C6）：左边说明、右边 场景/演员 两个按钮 → 弹窗。
+    // 与已忽略卡片并排在前，因为入库和忽略是同一件事的两面 —— 都是"点一下就
+    // 落进库里"的操作，用户需要知道落进去的到底是什么。
+    if (SSD.dpImport) {
+      var impBox = el("div", "ssd-dp-set-box");
+      var impRow = el("div", "ssd-dp-setrow");
+      // 标题固定为「入库默认字段」（用户 2026-10-29）：原来的「入库字段：场景 8 ·
+      // 演员 15」是第二个统计口径，和下面的说明段落一起把这一格撑得很高。
+      // 演员那项已改成三态，也不再算得准「勾了几项」。
+      impRow.appendChild(el("span", "ssd-dp-setname", tc("入库默认字段", "Default import fields")));
+      var impCtl = el("div", "ssd-dp-setctl");
+      [["scene", tc("场景", "Scenes")], ["performer", tc("演员", "Performers")]].forEach(function (p) {
+        var b = el("button", "ssd-dp-btn solid ssd-dp-setbtn", p[1]);
+        b.type = "button";
+        b.addEventListener("click", function () { openImportFieldsDialog(p[0]); });
+        impCtl.appendChild(b);
+      });
+      impRow.appendChild(impCtl);
+      impBox.appendChild(impRow);
+      wrap.appendChild(impBox);
+    }
 
     // ── 通用 ──
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("通用", "General")));
@@ -3359,6 +4718,9 @@
     { id: "studios", icon: I.studios, zh: "工作室", en: "Studios" },
   ];
 
+  // 无入口 tab 的视图（§7：已忽略管理只能从设置卡片 / 灰条进来，不做导航 tab）
+  var EXTRA_VIEWS = { settings: 1, ignored: 1 };
+
   // ── 角标状态（§10：P5 轮询发 "ssd:unread-changed" 事件驱动）──
   var _unread = 0;
   var _unreadDataRef = null; // 触发过一次未读重算的数据引用（防重复刷事件）
@@ -3381,12 +4743,18 @@
   function mountPage(root) {
     root.innerHTML = "";
     var refs = _dp.refs;
+    // 贴顶 offset 每次挂载重算：--ssd-stick-top 若在插件脚本早期量到 0，
+    // 多选态 sticky 会被 Stash 顶栏整个盖住（用户 2026-10-29 反馈）
+    try { if (SSD.syncStickyEnv) SSD.syncStickyEnv(); } catch (_) {}
+
+    // 缓存维护（§3.3）：先扫掉升级遗留的旧版本缓存键，再决定要不要读缓存
+    sweepOrphanCaches();
 
     // URL ?view=xxx 只认首次（导航角标→关注视图）；后续变化交给 init 的巡检
     try {
       var m0 = /[?&]view=([a-z]+)/i.exec(String(window.location.search || ""));
       var v0 = m0 && String(m0[1]).toLowerCase();
-      if (v0 && (v0 === "settings" || VIEWS.some(function (x) { return x.id === v0; }))) _dp.view = v0;
+      if (v0 && (EXTRA_VIEWS[v0] || VIEWS.some(function (x) { return x.id === v0; }))) _dp.view = v0;
       _locSearchSeen = String(window.location.search || "");
     } catch (_) {}
 
@@ -3484,10 +4852,59 @@
     });
     bar.appendChild(refs.search);
 
+    // ── 多选工具栏（§13.3）：同一个 .ssd-dp-toolbar 原地变身 ──
+    // 不新增固定条：进入多选后搜索框 / 排序 / 数据源 / 每页 / 卡片大小全部收掉
+    // （它们都会换掉当前页的数据集合或顺序），只剩这组按钮 + 视图切换。
+    var selbar = el("div", "ssd-dp-selbar");
+    refs.selbar = selbar;
+    var selExit = el("button", "ssd-dp-selicon", I.close);
+    selExit.type = "button";
+    selExit.title = tc("退出多选（Esc）", "Exit selection (Esc)");
+    selExit.setAttribute("aria-label", selExit.title);
+    selExit.addEventListener("click", function () { exitSel(); });
+    selbar.appendChild(selExit);
+    refs.selCount = el("span", "ssd-dp-selcount");
+    selbar.appendChild(refs.selCount);
+    refs.selAll = el("button", "ssd-dp-selicon", I.select);
+    refs.selAll.type = "button";
+    refs.selAll.title = tc("全选本页", "Select this page");
+    refs.selAll.setAttribute("aria-label", refs.selAll.title);
+    refs.selAll.addEventListener("click", function () { selAllPage(); });
+    selbar.appendChild(refs.selAll);
+    // 关注（用户 2026-10-29）：只对选中的演员生效，全是场景时置灰
+    refs.selFollow = el("button", "ssd-dp-selact", tc("关注", "Follow"));
+    refs.selFollow.type = "button";
+    refs.selFollow.title = tc("关注选中的演员", "Follow the selected performers");
+    refs.selFollow.addEventListener("click", function () { batchFollowSelected(); });
+    selbar.appendChild(refs.selFollow);
+    refs.selIgnore = el("button", "ssd-dp-selact", tc("忽略", "Ignore"));
+    refs.selIgnore.type = "button";
+    refs.selIgnore.addEventListener("click", function () { batchIgnoreSelected(); });
+    selbar.appendChild(refs.selIgnore);
+    refs.selImport = el("button", "ssd-dp-selact primary", tc("入库", "Add"));
+    refs.selImport.type = "button";
+    refs.selImport.addEventListener("click", function () { batchImportSelected(); });
+    selbar.appendChild(refs.selImport);
+    bar.appendChild(selbar);
+
     var tools = el("div", "ssd-dp-tools");
     refs.tools = tools;
-    tools.appendChild(el("span", "ssd-dp-tool-label", tc("排序", "Sort")));
+    // 删掉三个下拉前的文字标签（§13.4）：768 竖屏下「标签 470px + 搜索框 180px」
+    // 再加多选按钮就会掉进收起态，删文字后余量 125px+。配套不能省：下拉的
+    // 当前值本身就是标签（「发布日期 ↓」= 排序，「StashDB」= 数据源），但要补
+    // aria-label/title 给读屏与 hover —— 否则删了就是信息空洞。
+    // 多选入口（§13.4 删掉文字标签后余 145px，这个 34px 图标按钮放得下）。
+    // 进多选后它自己也被隐藏 —— 退出走工具栏里的 ×
+    refs.selBtn = el("button", "ssd-dp-selbtn", I.selToggle);
+    refs.selBtn.type = "button";
+    refs.selBtn.title = tc("多选", "Select");
+    refs.selBtn.setAttribute("aria-label", tc("多选", "Select"));
+    refs.selBtn.addEventListener("click", function () { enterSel(); });
+    tools.appendChild(refs.selBtn);
+
     refs.sort = document.createElement("select");
+    refs.sort.title = tc("排序方式", "Sort by");
+    refs.sort.setAttribute("aria-label", tc("排序方式", "Sort by"));
     [["date-desc", tc("发布日期 ↓", "Date ↓")], ["date-asc", tc("发布日期 ↑", "Date ↑")],
      ["title", tc("标题 A-Z", "Title A-Z")], ["hot", tc("原榜顺序", "List order")]].forEach(function (o) {
       var op = document.createElement("option");
@@ -3504,12 +4921,14 @@
     });
     tools.appendChild(refs.sort);
 
-    tools.appendChild(el("span", "ssd-dp-tool-label", tc("每页", "Per page")));
     refs.perPage = document.createElement("select");
+    refs.perPage.title = tc("每页数量", "Per page");
+    refs.perPage.setAttribute("aria-label", tc("每页数量", "Per page"));
     [24, 48, 96].forEach(function (n) {
       var op = document.createElement("option");
       op.value = String(n);
-      op.textContent = String(n);
+      // 带单位：这个 select 实测只有 31px 宽，孤零零一个「24」看不出是什么
+      op.textContent = n + tc(" / 页", " / page");
       refs.perPage.appendChild(op);
     });
     refs.perPage.value = String(toNum(dpPrefs().perPage, 24));
@@ -3584,6 +5003,7 @@
 
     // ── 内容区 ──
     refs.content = el("div", "ssd-dp-content");
+    bindSelInteractions(refs.content);
     root.appendChild(refs.content);
 
     bindResize();
@@ -3622,7 +5042,7 @@
     var m = /[?&]view=([a-z]+)/i.exec(s);
     var v = m && String(m[1]).toLowerCase();
     if (!v) return;
-    var ok = v === "settings" || VIEWS.some(function (x) { return x.id === v; });
+    var ok = !!EXTRA_VIEWS[v] || VIEWS.some(function (x) { return x.id === v; });
     if (!ok || _dp.view === v) return;
     _dp.view = v;
     _dp.page = 1;
@@ -3630,7 +5050,29 @@
     render();
   }
 
+  // 多选态拦截卡片点击：捕获阶段拦下来，卡片自身「打开弹窗 / 跳详情」的监听
+  // 在冒泡阶段，这里 stopPropagation 后一个都不会触发。链接的默认跳转用
+  // preventDefault 一并掐掉（否则点中 <a> 会开新标签页）。
+  function bindSelInteractions(content) {
+    content.addEventListener("click", function (e) {
+      if (!_dp.sel.on) return;
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var host = t.closest(".scene-card") || t.closest(".ssd-scene-table tbody tr") || t.closest(".ssd-dp-mini");
+      if (!host || !host.__ssdItem) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selToggle(host.__ssdItem);
+    }, true);
+  }
+
   function switchView(view) {
+    if (_dp.sel.busy) {
+      SSD.toast(tc("入库进行中，等它跑完再切换", "Import in progress — wait for it to finish"));
+      return;
+    }
+    // 换视图 = 换数据集，选择集必须清掉（§13.3 控件去留的同一判据）
+    if (_dp.sel.on) exitSel();
     _dp.view = view;
     _dp.page = 1;
     ensureData(viewDataKeys(view));
@@ -3646,8 +5088,10 @@
     var d = _dp.d.latest;
     var cur = d ? d.source.name : "";
     if (!refs.srcWrap.firstChild) {
-      refs.srcWrap.appendChild(el("span", "ssd-dp-tool-label", tc("数据源", "Source")));
       var sel = document.createElement("select");
+      // 同 §13.4：不占文字标签，当前源名自己就是标签，补无障碍文案
+      sel.title = tc("数据源", "Source");
+      sel.setAttribute("aria-label", tc("数据源", "Source"));
       sel.addEventListener("change", function () {
         dpSetPrefs({ source: sel.value });
         _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
@@ -3779,6 +5223,9 @@
   function syncToolbar() {
     var bar = _dp.refs.bar, t = _dp.refs.tools;
     if (!bar || !t || !bar.isConnected) return;
+    // 多选态不算宽度：那是另一套内容（宽度更小），按常态判定会把
+    // is-collapsed 留在行上，退出多选后还挂着「更多」面板
+    if (_dp.sel.on) return;
     // 还没进布局（宽 0）时别判定：会把可用宽算成负数、误收起
     if (bar.clientWidth < 1) return;
     var cs = getComputedStyle(bar);
@@ -3814,6 +5261,17 @@
       if (e.key !== "Escape" || !bar || !bar.isConnected) return;
       if (!bar.classList.contains("is-open")) return;
       setToolsOpen(false);
+    });
+    // Esc 退出多选（§8）；入库进行中不响应，否则用户会以为任务被取消了
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !_dp.sel.on || _dp.sel.busy) return;
+      exitSel();
+    });
+    // 关页面 / 刷新时提示（§9）—— 批量入库是串行长任务，中途走掉会留下半截
+    window.addEventListener("beforeunload", function (e) {
+      if (!_dp.sel.busy) return;
+      e.preventDefault();
+      e.returnValue = "";
     });
   }
 
@@ -3895,6 +5353,19 @@
       var showSize = _dp.mode !== "list" && !!SCENE_GRID_VIEWS[_dp.view];
       refs.csizeWrap.style.display = showSize ? "" : "none";
     }
+    // 管理页有自己的搜索行（§7.1），全局筛选栏在这里只会误导 —— 它过滤的是
+    // 发现页的 _dp.q，对已忽略记录无效。整行收掉，别让用户在里面白搜。
+    if (refs.bar) {
+      refs.bar.style.display = _dp.view === "ignored" ? "none" : "";
+      // 多选态：同一行原地变身（§13.3）。选择模式里没有「收进更多」的概念，
+      // 一律摊平，否则窄屏会连多选按钮组一起收进面板
+      refs.bar.classList.toggle("is-selecting", !!_dp.sel.on);
+      if (_dp.sel.on) {
+        refs.bar.classList.remove("is-collapsed");
+        setToolsOpen(false);
+        syncSelBar();
+      }
+    }
     // 控件组的显隐（滑块/数据源）会改宽度 → 重新判定筛选行要不要收起
     syncToolbar();
   }
@@ -3907,7 +5378,7 @@
     // 没配 stash-box 是全局状态：原先 6 个模块各挂一条「未配置」+ 重试，一屏
     // 重复 6 遍且没有去处提示。这里收敛成一条带「打开设置」的提示（用户 2026-10-28）。
     // 有旧数据时不挡（缓存还能看），仍走各模块内的行内提示。
-    if (_dp.view !== "settings" && !_dp.d.latest &&
+    if (_dp.view !== "settings" && _dp.view !== "ignored" && !_dp.d.latest &&
         _dp.err.latest && _dp.err.latest.ssdKind === "no-box") {
       var nb = el("div", "ssd-dp-state");
       nb.innerHTML = errText(_dp.err.latest);
@@ -3936,10 +5407,14 @@
       case "performers": renderPerformers(c); break;
       case "perfFilter": renderPerfFilter(c); break;
       case "studioFilter": renderStudioFilter(c); break;
+      case "ignored": renderIgnored(c); break;
       case "settings": renderSettings(c); break;
       default: renderOverview(c);
     }
     SSD.layoutCardGrid();
+    // 多选态跨渲染保持：切网格/列表、批量入库后列表刷新都要重新打标记
+    applySelMarks();
+    if (_dp.sel.on) syncSelBar();
   }
 
   // 入库后：失效本地 memo（ownedKeys 变了）→ 重建 latest/studios（缓存仍在，

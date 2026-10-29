@@ -1,37 +1,37 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.5.6
+version: 2.6.0
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
 settings:
   recentDays:
     displayName: "Recent Window (days)"
-    description: "Only show scenes released within the last N days. 0 = unlimited (show all). Prevents the tab from flooding with old scenes. Default 180."
+    description: "Only show scenes released in the last N days. 0 = all. Default 180."
     type: NUMBER
   previewDays:
     displayName: "Preview Window (days)"
-    description: "Future-dated scenes are previews. -1 = hide all previews, 0 = unlimited, N = only show previews releasing within N days. Default 7."
+    description: "Future-dated scenes are previews: -1 = hide, 0 = all, N = within N days. Default 7."
     type: STRING
   jackettUrl:
     displayName: "Jackett API URL"
-    description: "Jackett base URL or Torznab endpoint. Base URL is auto-completed (e.g. http://192.168.3.190:9117)"
+    description: "Jackett base URL or Torznab endpoint, e.g. http://0.0.0.0:9117. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   jackettApiKey:
     displayName: "Jackett API Key"
-    description: "Jackett API key (found in Jackett dashboard top-right)"
+    description: "Jackett API key (Jackett dashboard, top right)."
     type: STRING
   jackettTimeout:
     displayName: "Jackett Timeout (seconds)"
-    description: "How long to wait for a Jackett search. Raise it if searches time out on a slow NAS or with many indexers. Default 120, max 600."
+    description: "Jackett search timeout in seconds. Raise it for a slow NAS or many indexers. Default 120, max 600."
     type: NUMBER
   downloaderType:
     displayName: "Downloader Type"
-    description: "Torrent downloader for push-to-download (currently only qbittorrent)"
+    description: "Torrent downloader for push-to-download. qBittorrent only for now."
     type: STRING
   downloaderUrl:
     displayName: "Downloader URL"
-    description: "qBittorrent Web UI URL, e.g. http://localhost:8080"
+    description: "qBittorrent Web UI URL, e.g. http://0.0.0.0:8080. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   downloaderUsername:
     displayName: "Downloader Username"
@@ -43,11 +43,11 @@ settings:
     type: STRING
   preferredBox:
     displayName: "Preferred stash-box"
-    description: "Endpoint substring to prefer when multiple boxes are configured (e.g. javstash.org). Empty = query all."
+    description: "Endpoint substring to prefer when several boxes are configured, e.g. javstash.org. Empty = query all."
     type: STRING
   enableDiscoverPage:
     displayName: "Discover page"
-    description: "Show the Discover entry in the top navigation. Takes effect after a browser refresh."
+    description: "Master switch: off = no nav entry, no page, discover.js not loaded. Performer/studio Discover tabs are unaffected. To only hide the nav button, untick \"Discover\" in Settings → Interface → Menu Items. Refresh to apply."
     type: BOOLEAN
 
 exec:

@@ -108,6 +108,89 @@
 .ssd-btn-success { background: var(--ssd-success) !important; color: #fff; }
 .ssd-btn-danger { background: var(--ssd-danger) !important; color: #fff; }
 
+/* 单条忽略（§C8）：主按钮区最右。低调到不抢主按钮，但 hover/armed 立刻变红 */
+.ssd-ban-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--ssd-modal-border);
+  color: inherit;
+  opacity: 0.82;
+  font-weight: 500;
+  text-shadow: none;
+}
+.ssd-ban-btn:hover:not(:disabled) { border-color: var(--ssd-danger); color: var(--ssd-danger); opacity: 1; }
+.ssd-ban-btn svg { display: block; width: 12px; height: 12px; flex: none; }
+.ssd-ban-btn .ssd-ban-label { white-space: nowrap; }
+
+/* 撤销 toast（§5.2）：固定在底部居中，4 秒自动消失；层级高于弹窗(100000) */
+.ssd-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 8px);
+  z-index: 100200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(92vw, 520px);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #232323;
+  color: #f2f2f2;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.ssd-toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.ssd-toast-text { overflow: hidden; text-overflow: ellipsis; }
+.ssd-toast-act {
+  flex: none;
+  background: transparent;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: #7cb8ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ssd-toast-act:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* 批量入库汇总：三个圆点 + 数字（✓ 成功 / ! 跳过 / ✕ 失败）。
+   固定三项，宽度不随结果变——用户明确要求提示条别在结束时突然变长。 */
+.ssd-sums { display: inline-flex; align-items: center; gap: 14px; }
+.ssd-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f1f3f5;
+}
+.ssd-sum i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+.ssd-sum.ok i { background: #2f9e44; }
+.ssd-sum.skip i { background: #7a8288; }
+.ssd-sum.err i { background: #e03131; }
+
 /* ─── States ─────────────────────────────────────────────────────────────── */
 
 .ssd-spinner {
@@ -1054,6 +1137,13 @@
   margin: -6px 0 10px;
   line-height: 1.4;
 }
+/* 低匹配折叠条：一行说明 + 显示按钮（用户 2026-10-30） */
+.ssd-search-lowmatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .ssd-search-loading {
   font-size: 13px;
   color: var(--ssd-modal-muted);
@@ -1835,7 +1925,7 @@
   align-items: center;
   justify-content: center;
   width: 34px;
-  height: 32px;
+  height: 33px;   /* 33 + 上下各 1px 边框 = 34，和 select / 多选按钮同一基线 */
   border: none;
   background: transparent;
   color: var(--sx-tx3);
@@ -2178,6 +2268,26 @@
   margin: 12px 0;
 }
 .ssd-dp-pcount { color: var(--sx-tx3); font-size: 12px; }
+/* 底部翻页行：只有按钮，靠右收尾（§13.5 不再重复计数） */
+.ssd-dp-pagerow.is-end { justify-content: flex-end; margin-top: 4px; }
+
+/* 子 tab + 顶部翻页并成一行（§13.5）：原先三行各占一处，iPad 上白扔约 58px。
+   宽度不足时 flex-wrap 自动把右侧翻页掉到第二行 —— 「不够才换行」。 */
+.ssd-dp-headrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.ssd-dp-headrow > .ssd-dp-tabs { margin-bottom: 0; }
+.ssd-dp-headrow-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto; /* 靠右；换行后仍贴右，不与子 tab 抢位置 */
+  min-width: 0;
+}
 
 /* 工作室分组入口条（§8.2 进入点）*/
 .ssd-dp-grpstrip {
@@ -2232,6 +2342,20 @@
   color: var(--sx-acc-tx);
 }
 .ssd-dp-btn.ghost { background: transparent; }
+/* 实心中性（用户 2026-10-29「已忽略管理的动作按钮改实心」）：导出用它，
+   和主色的「还原全部」、绿色的「导入」靠色相区分，但三个都是实心底。 */
+.ssd-dp-btn.solid {
+  background: var(--sx-ui3);
+  border-color: var(--sx-ui3);
+  color: var(--sx-hi);
+}
+.ssd-dp-btn.solid:hover { filter: brightness(1.16); color: var(--sx-hi); }
+.ssd-dp-btn.solid.gr {
+  background: var(--sx-gr);
+  border-color: var(--sx-gr);
+  color: #fff;
+}
+.ssd-dp-btn.solid.gr:hover { filter: brightness(1.08); color: #fff; }
 .ssd-dp-btn.ghost.danger { color: var(--sx-re-tx); }
 .ssd-dp-btn.ghost.danger:hover { border-color: var(--sx-re); background: color-mix(in srgb, var(--sx-re) 10%, transparent); }
 /* tonal（半实心）：关注行「详情 / 取关」用。比 ghost 明显，又不像 primary 那样
@@ -2256,7 +2380,24 @@
   border-color: var(--sx-re);
   color: var(--sx-re-tx);
 }
-.ssd-dp-btn.loved { border-color: var(--sx-ma); color: var(--sx-ma-tx); }
+/* 关注按钮（用户 2026-10-29）：爱心比正文放大一号 + 白里透粉；已关注时整颗
+   按钮变成粉色实心，「♥ 已关注」跟着转白透粉。 */
+.ssd-dp-heart {
+  font-size: 15px;
+  line-height: 1;
+  color: color-mix(in srgb, #fff 78%, var(--sx-ma));
+}
+.ssd-dp-btn.loved {
+  background: var(--sx-ma);
+  border-color: var(--sx-ma);
+  color: color-mix(in srgb, #fff 90%, var(--sx-ma));
+}
+.ssd-dp-btn.loved:hover {
+  background: var(--sx-ma);
+  border-color: var(--sx-ma);
+  color: #fff;
+}
+.ssd-dp-btn.loved .ssd-dp-heart { color: color-mix(in srgb, #fff 92%, var(--sx-ma)); }
 /* 纯图标按钮（关注行「取关」）：只放一个 SVG，宽度不随中英文文案变化 */
 .ssd-dp-btn.icon-only { padding: 7px 9px; gap: 0; }
 .ssd-dp-btn.icon-only svg { width: 14px; height: 14px; }
@@ -2358,6 +2499,10 @@
 .ssd-dp-pfmeta { color: var(--sx-tx2); font-size: 13px; margin-top: 4px; }
 .ssd-dp-pfgender:empty, .ssd-dp-pfalias:empty, .ssd-dp-pfstat:empty { display: none; }
 .ssd-dp-pfalias { color: var(--sx-tx3); }
+/* 性别符号贴紧文字（用户 2026-10-30 第八轮）：符号上色后不能再靠「 · 」分隔，
+   用 inline-flex + 4px gap；字号跟行内正文一致，否则 12px 的符号偏小。 */
+.ssd-dp-pfsex { display: inline-flex; align-items: center; gap: 4px; }
+.ssd-dp-pfsex .ssd-dp-gm { font-size: 13px; }
 .ssd-dp-extbtn {
   position: absolute;
   top: 10px;
@@ -2512,6 +2657,344 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   margin-left: auto;
   flex-wrap: wrap;
 }
+/* 关注页：被忽略的关注演员提示条（§6.3，不静默消失）
+   虚线边框 + 次要文字色 = 「这是状态说明，不是内容」 */
+.ssd-dp-ignbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px dashed var(--sx-ui3);
+  background: var(--sx-bg2);
+  color: var(--sx-tx3);
+  font-size: 12px;
+}
+.ssd-dp-ignbar-text { flex: 1 1 auto; min-width: 0; }
+
+/* 忽略演员按钮（§6）：实心底（用户 2026-10-29），禁止图案用深红标示危险性，
+   hover / armed(.danger) 才整块转红。 */
+.ssd-dp-banbtn .ssd-dp-banico { display: inline-flex; color: var(--sx-re-d, #af3029); }
+.ssd-dp-banbtn .ssd-dp-banico svg { width: 13px; height: 13px; }
+.ssd-dp-banbtn:hover:not(.danger) {
+  border-color: var(--sx-re);
+  color: var(--sx-hi);
+}
+/* 两次点击确认态：整颗变红实心，图案也转白 */
+.ssd-dp-btn.solid.danger {
+  background: var(--sx-re);
+  border-color: var(--sx-re);
+  color: #fff;
+}
+.ssd-dp-btn.solid.danger .ssd-dp-banico { color: #fff; }
+
+/* ═══ 已忽略管理（§7 / §7.1）══════════════════════════════════════════════ */
+/* 一整行居中（用户 2026-10-29）：搜索 / 场景·演员 / 计数 / 按钮组作为一组
+   横向居中，不再让按钮被 margin-left:auto 顶到最右。搜索框与发现页筛选栏
+   同宽（280），各元素统一 30px 高。 */
+.ssd-dp-ignhead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+/* 搜索框与其它控件严格同高（用户 2026-10-29）：label 自身行盒比 30px 高，
+   input 在 display:flex 里默认 stretch 不到就顶部对齐 → 比按钮高 3px。
+   显式给 label 定高 + 内部居中，整行才是一条基线。 */
+.ssd-dp-ignsearch {
+  flex: 0 1 280px;
+  max-width: 280px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  height: 30px;
+  /* bootstrap 的 label 自带 margin-bottom: .5rem（实测 7px）—— 这 7px 让 label
+     的 margin-box 比按钮高，align-items:center 一居中，输入框就比按钮高 3px。
+     这一行的等高就靠这一句。 */
+  margin: 0;
+}
+.ssd-dp-ignsearch input {
+  width: 100%;
+  height: 30px;
+  background: var(--sx-ui);
+  border: 1px solid var(--sx-line2);
+  color: var(--sx-tx);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.ssd-dp-ignsearch input:focus { outline: 1px solid var(--sx-acc); border-color: var(--sx-acc); }
+/* 与行内其它控件同高：原生 .ssd-dp-tabs 带 4px padding + 1px 边框，
+   整体会比 30px 的输入框/按钮高出一截 */
+.ssd-dp-igntabs {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 30px;
+  padding: 0 3px;
+  border-radius: 8px;
+}
+.ssd-dp-igntabs .ssd-dp-tab { height: 24px; padding: 0 10px; }
+.ssd-dp-igntools { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.ssd-dp-igntools > * { height: 30px; }
+.ssd-dp-ignpp {
+  padding: 0 8px;
+  border: 1px solid var(--sx-line2);
+  border-radius: 7px;
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ssd-dp-ignpp:focus { outline: 1px solid var(--sx-acc); border-color: var(--sx-acc); }
+/* 超上限淘汰提示（§3.2：不静默） */
+.ssd-dp-igntrim {
+  margin: 0 0 12px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--sx-warn-tx, var(--sx-tx2));
+  background: color-mix(in srgb, var(--sx-yel, #f59f00) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sx-yel, #f59f00) 32%, transparent);
+}
+
+/* 小卡片窄一档（用户 2026-10-29）：原来走 .ssd-card-grid 的自适应，宽屏上
+   单卡会被拉到 240+，跟「标题 + 两行元信息」的信息量不匹配。
+   这里用定宽 + 居中换行（不用 grid 的 auto-fill：它会生成空轨道，卡片组
+   在宽屏上会贴左，与发现页的居中习惯不一致）。 */
+.ssd-dp-iggrid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* 卡片间距收紧（用户 2026-10-29）：10px 在 170 宽的卡上看像两列不相关的东西 */
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ssd-dp-iggrid > * { flex: 0 0 170px; width: 170px; min-width: 0; }
+/* 场景网格的类名是 `.ssd-card-grid`，而 `.ssd-dp-page .ssd-card-grid`
+   (0,2,0) 强制 display:grid + minmax(210px,1fr) + gap:10 —— 只写
+   `.ssd-dp-iggrid` (0,1,0) 打不过它，卡片会按 210 轨道排（实测相邻卡片
+   间距 82px，怎么改 gap 都没反应）。必须带上 `.ssd-dp-page` 前缀。 */
+.ssd-dp-page .ssd-dp-iggrid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+/* 演员 tab 的容器类名是 `.ssd-dp-grid.mini`，它自己的 `display: grid` 特异性
+   比 `.ssd-dp-iggrid` 高 —— 不在这里一起改成 flex，卡片会按 grid 轨道宽（180）
+   排、而 width 仍是 236，**相邻卡片重叠**（按钮被下一张卡的头像盖住，
+   实测 elementFromPoint 命中 IMG）。这条必须带上 `.ssd-dp-grid.mini`。
+   演员卡是行式（头像 38 + 名字/别名 + 恢复），236 才装得下。 */
+.ssd-dp-iggrid.ssd-dp-grid.mini {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.ssd-dp-iggrid.ssd-dp-grid.mini > * { flex: 0 0 236px; width: 236px; }
+/* 窄屏至少两列（用户 2026-10-29）：定宽 170/236 在 360 宽上只能排一列，
+   滚动会拉得很长。1200px 以下改成「两列平分」，仍然居中。 */
+@media (max-width: 700px) {
+  .ssd-dp-iggrid,
+  .ssd-dp-iggrid.ssd-dp-grid.mini {
+    gap: 6px;
+  }
+  .ssd-dp-iggrid > *,
+  .ssd-dp-iggrid.ssd-dp-grid.mini > * {
+    flex: 1 1 calc(50% - 3px);
+    width: calc(50% - 3px);
+    max-width: calc(50% - 3px);
+  }
+}
+/* 场景卡（快照渲染，不建 SSD.buildSceneCard）：封面 + 标题 + 元信息 + 恢复 */
+.ssd-dp-igcard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 11px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-ui3);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  min-width: 0;
+}
+.ssd-dp-igcard:hover { border-color: var(--sx-edge); background: var(--sx-ui); }
+.ssd-dp-igthumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--sx-ui2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ssd-dp-igthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ssd-dp-igph { color: var(--sx-tx3); font-size: 22px; font-weight: 700; }
+.ssd-dp-igtitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--sx-tx);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.ssd-dp-igmeta { font-size: 11.5px; color: var(--sx-tx2); line-height: 1.35; word-break: break-word; }
+.ssd-dp-igmeta.dim { color: var(--sx-tx3); }
+.ssd-dp-igrestore { align-self: flex-start; margin-top: 2px; }
+
+/* 演员卡：头像 + 名字 + 别名 + 恢复 */
+.ssd-dp-igperf {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  background: var(--sx-bg2);
+  border: 1px solid var(--sx-ui3);
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ssd-dp-igperf:hover { border-color: var(--sx-edge); background: var(--sx-ui); }
+.ssd-dp-igperfava {
+  flex: none;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--sx-ui2);
+}
+.ssd-dp-igperfava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ssd-dp-igperfinfo { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+/* 「恢复」不能跟着缩：之前它被挤到卡片外面，看着像叠在下一张卡上 */
+.ssd-dp-igperf > .ssd-dp-btn { flex: 0 0 auto; }
+/* 窄屏（两列布局，卡宽 ~169px）：「恢复」还挤在同一行的话，38px 头像 +
+   44px 按钮之后只剩 60px 给名字，名字必然被截成「…」（用户 2026-10-30）。
+   用一个 0 高度的整行占位（.ssd-dp-igperf-br）强制换行，按钮本身保持内容
+   宽度并靠左 —— 和场景卡的「恢复」一致；铺满整行会像多出一条信息栏，把卡片
+   撑高（用户 2026-10-30 第 3 条）。桌面端这一档不触发，仍是同行。 */
+.ssd-dp-igperf-br { display: none; }
+@media (max-width: 700px) {
+  /* row-gap 归零：换行占位 .ssd-dp-igperf-br 自己占一条 flex line，若保留
+     10px 行间距，「信息行 → 占位 → 按钮」会叠出 20px 空白（用户
+     2026-10-30 第 3 条说按钮上方空太多）。行间距改由按钮 margin-top 给。 */
+  .ssd-dp-igperf { flex-wrap: wrap; row-gap: 0; }
+  .ssd-dp-igperf-br { display: block; flex: 0 0 100%; height: 0; }
+  .ssd-dp-igperf > .ssd-dp-btn { flex: 0 0 auto; width: auto; margin-top: 5px; }
+}
+.ssd-dp-igperfinfo .ssd-dp-mini-name,
+.ssd-dp-igperfinfo .ssd-dp-mini-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 名字下方一行标签（国旗图片 / 性别符号 / 年龄）：从纯文本改成 flex 混排，
+   三项各留 5px 间距（用户 2026-10-30）。 */
+.ssd-dp-igperfinfo .ssd-dp-mini-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+/* 国旗：图片而不是 emoji —— Windows 没有国旗字形，🇯🇵 会显示成「JP」。3:2 是
+   旗面标准比例，16×11 在 11.5px 的文字行里不撑行高。 */
+.ssd-dp-flag {
+  width: 16px;
+  height: 11px;
+  flex: none;
+  border-radius: 2px;
+  object-fit: cover;
+  background: var(--sx-ui2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #fff 14%, transparent);
+}
+.ssd-dp-flag-cc {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 11px;
+  letter-spacing: 0.3px;
+  color: var(--sx-tx3);
+}
+/* 性别符号上色：粉 / 蓝 / 紫。用固定色相，主题强调色在部分主题里男女同色。 */
+.ssd-dp-gm { font-size: 12px; line-height: 1; font-weight: 600; }
+.ssd-dp-gm.gm-f { color: #e2649e; }
+.ssd-dp-gm.gm-m { color: #4d9fe0; }
+.ssd-dp-gm.gm-x { color: #a173d8; }
+.ssd-dp-igage { font-variant-numeric: tabular-nums; }
+
+/* 快照详情弹窗 */
+/* 详情弹窗收窄（用户 2026-10-29）：560 在 1080 屏上像一整页，缩到 420 */
+/* 特异性要压过后面的 .ssd-dp-modal（同单类、它排在文件更后，会把宽度
+   改回 760）—— 这条必须在选择器里带上 .ssd-dp-modal。 */
+.ssd-dp-modal.ssd-dp-igmodal { width: min(420px, 92vw); }
+/* 封面比例与小卡片一致（16:9 cover）：之前是「宽 100% + max-height 300」，
+   图片会按自身比例拉高，同一部片在卡片和弹窗里长得不一样。 */
+.ssd-dp-igcover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: var(--sx-ui2);
+}
+/* 演员弹窗头像与「发现演员」弹窗的竖版照片同尺寸（用户 2026-10-30 第 3 条）：
+   132×198（2:3 竖版），和 .ssd-find-photo-frame 完全一致。竖版比弹窗矮不了多少，
+   上下堆叠会白掉右边一大片，所以信息栏并排放在右侧（见 .ssd-dp-igbody）。 */
+.ssd-dp-igbody {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.ssd-dp-igmain { flex: 1 1 auto; min-width: 0; }
+.ssd-dp-igavatar {
+  display: block;
+  flex: 0 0 auto;
+  width: 132px;
+  height: 198px;
+  border-radius: 8px;
+  object-fit: cover;
+  margin: 0;
+  background: var(--sx-ui2);
+}
+/* 弹窗信息行：国旗 / 性别 / 年龄 / 生日混排，统一 6px 间距（原来是「·」连成串） */
+.ssd-dp-igfacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ssd-dp-igfacts .ssd-dp-flag { width: 18px; height: 12px; }
+.ssd-dp-igfacts .ssd-dp-gm { font-size: 13px; }
+.ssd-dp-igmodaltitle { font-size: 15px; font-weight: 600; color: var(--sx-tx); margin-bottom: 6px; word-break: break-word; }
+.ssd-dp-igmodalmeta { font-size: 12px; color: var(--sx-tx2); margin-bottom: 4px; word-break: break-word; }
+.ssd-dp-igmodalmeta.dim { color: var(--sx-tx3); font-size: 11px; }
+/* 演员名逐个套边框（用户 2026-10-29）：详情弹窗里一串「·」连起来的名字
+   分不清边界，chen 片名/别名里空格又多。 */
+.ssd-dp-igchips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.ssd-dp-igchip {
+  max-width: 100%;
+  padding: 1px 7px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 999px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssd-dp-igmodal .ssd-dp-pfactions { margin-top: 14px; }
 .ssd-dp-fgrp {
   border: 1px solid var(--sx-ui3);
   border-radius: 12px;
@@ -2736,6 +3219,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   padding: 9px 0;
 }
 .ssd-dp-setrow + .ssd-dp-setrow { border-top: 1px solid var(--sx-line); }
+/* 已忽略首行卡片（§7）：与下面的「通用」分组之间留一口气 */
+.ssd-dp-set-ign { margin-bottom: 18px; }
 .ssd-dp-setname { font-size: 13px; color: var(--sx-tx); }
 .ssd-dp-sethint {
   font-size: 12px;
@@ -2840,13 +3325,25 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-dp-setsel:focus { border-color: var(--sx-acc); }
 .ssd-dp-setsel.num { width: 88px; }
 .ssd-dp-btn.sm { padding: 4px 9px; font-size: 12px; }
+/* 设置页的入口按钮（已忽略管理 / 入库字段的场景·演员）要和同一行的下拉框
+   一样大（用户 2026-10-29）：下拉实测 30px 高，按钮基础样式是 34px（7px
+   padding + 18.75 行盒 + 边框），差 4px 一眼看得出来。 */
+.ssd-dp-btn.ssd-dp-setbtn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+}
 .ssd-dp-btn.ssd-dp-reset { align-self: flex-end; }
 .ssd-dp-btn:disabled { opacity: 0.38; cursor: default; }
 .ssd-dp-btn.loading { opacity: 0.6; pointer-events: none; }
 
 @media (max-width: 720px) {
   .ssd-dp-setrow { align-items: flex-start; flex-direction: column; gap: 8px; }
-  .ssd-dp-setctl { align-self: flex-end; }
+  /* 移动端整行改成竖排之后，控件跟着标题靠左（用户 2026-10-30）：靠右会
+     和上面的标题形成两个轴，看着像没对齐的浮动块。桌面端仍是横排、靠右。 */
+  .ssd-dp-setctl { align-self: flex-start; }
   .ssd-dp-switch { align-self: flex-end; }
 }
 
@@ -2934,8 +3431,11 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-modal-scenes[data-csize="0"] { --ssd-card-min: 100px; }
   .ssd-dp-modal-scenes[data-csize="2"] { --ssd-card-min: 265px; }
 
-  /* 发现页 + 演员弹窗内的场景网格：列间距收紧 */
-  .ssd-dp-page .ssd-card-grid,
+  /* 发现页 + 演员弹窗内的场景网格：列间距收紧。
+     已忽略管理页的网格（.ssd-dp-iggrid）要排除：它自己那套是 6px 定宽 flex，
+     加上 @media(max-width:700px) 的「两列平分」，被这条 grid 规则接管后
+     卡片宽度会算成轨道的 50%（实测 390 视口下 82px，内容全挤没）。 */
+  .ssd-dp-page .ssd-card-grid:not(.ssd-dp-iggrid),
   .ssd-dp-modal-scenes .ssd-card-grid {
     display: grid;
     column-gap: 6px;
@@ -3060,3 +3560,535 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
     padding: 1px 5px;
   }
 }
+
+/* ─── 入库弹窗（§4：场景 / 演员共用一套）────────────────────────────────── */
+/* 深色面板（--ssd-modal-* 系），因为发现页弹层与演员页弹层都要用，
+   跟着 Stash 主题的 --sx-* 走会在浅色主题下和封面/轮播打架。 */
+
+.ssd-imp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100500; /* 高于场景弹层 .ssd-modal-overlay(99999) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.ssd-imp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(86vh, 820px);
+  border: 1px solid var(--ssd-modal-border);
+  border-radius: 10px;
+  background: var(--ssd-modal-bg);
+  color: var(--ssd-modal-text);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.ssd-imp-sm { width: min(480px, 100%); }
+
+.ssd-imp-head {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--ssd-modal-border);
+}
+.ssd-imp-title { font-size: 15px; font-weight: 600; padding-right: 30px; }
+.ssd-imp-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--ssd-modal-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ssd-imp-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(20, 20, 20, 0.7);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ssd-imp-close:hover { background: var(--ssd-danger); }
+
+.ssd-imp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+.ssd-imp-req {
+  margin-bottom: 10px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ssd-imp-list { display: flex; flex-direction: column; gap: 1px; }
+
+/* 三列：勾选框 / 字段名 / 值。字段名定宽，值列允许长文本换行 */
+.ssd-imp-row {
+  display: grid;
+  grid-template-columns: 16px 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 5px;
+}
+.ssd-imp-row:not(.is-locked) { cursor: pointer; }
+.ssd-imp-row:hover { background: rgba(255, 255, 255, 0.05); }
+.ssd-imp-row.is-off { opacity: 0.5; }
+.ssd-imp-row.is-locked { opacity: 0.8; }
+/* 行内控件自己处理点击：光标别显示成「整行可点」误导 */
+.ssd-imp-row .ssd-imp-input,
+.ssd-imp-row .ssd-imp-select { cursor: auto; }
+.ssd-imp-cb { margin: 0; cursor: pointer; }
+.ssd-imp-cb:disabled { cursor: default; }
+.ssd-imp-name { font-size: 12.5px; }
+.ssd-imp-val {
+  min-width: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.ssd-imp-input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  background: #1f1f1f;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+.ssd-imp-input:focus { outline: 1px solid var(--ssd-accent); border-color: var(--ssd-accent); }
+.ssd-imp-select {
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  background: #1f1f1f;
+  color: inherit;
+  font-size: 12.5px;
+}
+.ssd-imp-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ssd-imp-hint { font-size: 12px; color: var(--ssd-modal-muted); }
+
+.ssd-imp-note {
+  padding: 4px 8px 8px 30px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ssd-modal-muted);
+}
+
+.ssd-imp-state {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ssd-imp-state.is-ok { background: rgba(55, 178, 77, 0.16); color: #8ce99a; }
+.ssd-imp-state.is-link { background: rgba(245, 159, 0, 0.16); color: #ffd43b; }
+
+.ssd-imp-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--ssd-modal-border);
+}
+/* 底部两个按钮做大（用户 2026-10-29）：.ssd-btn 本身不带尺寸类，之前只有
+   文字大小，点起来太窄。尺寸向弹层里其它控件看齐（34px 高）。 */
+.ssd-imp-foot .ssd-btn {
+  height: 34px;
+  padding: 0 20px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.ssd-imp-err {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ff8787;
+}
+
+@media (max-width: 560px) {
+  .ssd-imp-row { grid-template-columns: 16px 64px minmax(0, 1fr); }
+}
+
+/* ─── 设置页：入库字段弹窗 ─────────────────────────────────────────────── */
+
+.ssd-dp-fields-modal { width: min(520px, 100%); }
+
+.ssd-dp-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 10px;
+}
+.ssd-dp-fields-req {
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--sx-bg3, rgba(128, 128, 128, 0.1));
+}
+.ssd-dp-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 4px 2px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ssd-dp-field.is-req { cursor: default; opacity: 0.75; }
+.ssd-dp-field input { margin: 0; cursor: pointer; }
+.ssd-dp-field.is-req input { cursor: default; }
+.ssd-dp-fieldname { min-width: 0; }
+.ssd-dp-fieldtag {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--sx-text2, #888);
+  background: rgba(128, 128, 128, 0.16);
+}
+
+.ssd-dp-fieldsfoot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sx-ui3, rgba(128, 128, 128, 0.2));
+}
+
+@media (max-width: 520px) {
+  .ssd-dp-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ─── 多选（§8 / §13.3）──────────────────────────────────────────────────── */
+/* 入口按钮：和工具栏里的 select 一样高（实测 select 34 / 视图切换 34），
+   之前是 34×32，比同排控件矮 2px，一行里像小了一圈（用户 2026-10-30）。 */
+.ssd-dp-selbtn {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--sx-ui3);
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  cursor: pointer;
+}
+.ssd-dp-selbtn svg { width: 15px; height: 15px; }
+.ssd-dp-selbtn:hover { color: var(--sx-hi); border-color: var(--sx-edge); }
+
+/* 工具栏原地变身：不新增浮层，仍是同一行。搜索框与「更多」按钮直接收掉 ——
+   多选态没有可搜的东西，多选按钮组也不该被折进面板。
+   贴顶：sticky 相对最近的滚动祖先（Stash 里是 body），上滑到顶就吸附，
+   z-index 要高于卡片里的封面/勾选圈（6）但不能碰到弹层（99999）。 */
+.ssd-dp-toolbar.is-selecting {
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--sx-acc) 55%, var(--sx-line2));
+  position: sticky;
+  /* 桌面端 Stash 顶栏 fixed 48.75px / z-index 1030，top:0 会被盖住 */
+  top: var(--ssd-stick-top, 0px);
+  z-index: 90;
+}
+.ssd-dp-toolbar.is-selecting > input[type="search"],
+.ssd-dp-toolbar.is-selecting .ssd-dp-more {
+  display: none;
+}
+/* 按钮组不撑满：撑满后 justify-content 无处发力，整组会被推在左边 */
+.ssd-dp-toolbar.is-selecting .ssd-dp-selbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+/* 只留视图切换：网格/列表只改渲染形态，集合与顺序不变（§13.3 判据） */
+.ssd-dp-toolbar.is-selecting .ssd-dp-tools > * { display: none; }
+.ssd-dp-toolbar.is-selecting .ssd-dp-tools > .ssd-dp-viewtoggle { display: inline-flex; }
+/* 多选态统一 32px 高：× / 全选 / 忽略 / 入库 / 视图切换 同一基线。
+   视图切换抽离文档流靠右挂 —— 留在 flex 里会把操作组整体往左推 39px，
+   整组看着不居中（实测 barMid 632 / groupMid 593）。 */
+.ssd-dp-toolbar.is-selecting .ssd-dp-tools {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex: 0 0 auto;
+}
+
+.ssd-dp-selbar { display: none; }
+
+.ssd-dp-selicon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid var(--sx-line2);
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ssd-dp-selicon svg { width: 15px; height: 15px; }
+.ssd-dp-selicon:hover:not(:disabled) { color: var(--sx-hi); border-color: var(--sx-edge); }
+.ssd-dp-selicon.on {
+  color: var(--sx-hi);
+  background: color-mix(in srgb, var(--sx-acc) 22%, var(--sx-ui));
+  border-color: var(--sx-acc);
+}
+.ssd-dp-selicon:disabled { opacity: 0.45; cursor: default; }
+
+.ssd-dp-selcount {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 12.5px;
+  color: var(--sx-tx2);
+  white-space: nowrap;
+}
+.ssd-dp-selcount b { font-size: 14px; color: var(--sx-hi); }
+/* 「本页 N 部」是弱化说明，不是第二个数字 —— 避免被读成「共选了 N 部」 */
+.ssd-dp-selcount i { font-style: normal; font-size: 11.5px; opacity: 0.65; }
+.ssd-dp-selprog { font-size: 13px; color: var(--sx-acc); }
+
+.ssd-dp-selact {
+  height: 32px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  border: 1px solid var(--sx-line2);
+  background: var(--sx-ui);
+  color: var(--sx-tx);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ssd-dp-selact:hover:not(:disabled) { color: var(--sx-hi); border-color: var(--sx-edge); }
+.ssd-dp-selact.primary {
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+  color: #fff;
+}
+.ssd-dp-selact.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+.ssd-dp-selact:disabled { opacity: 0.45; cursor: default; }
+
+/* 窄屏多选栏（用户 2026-10-30）：390 视口下筛选栏只有 329px 宽，
+   × / 数字 / 全选 / 关注 / 忽略 / 入库 六件加起来就已经 316px，右侧那个
+   绝对定位的视图切换直接压在「入库」上（实测两者矩形相交）。
+   窄屏的取舍：视图切换不参与多选（退出多选照样能切），计数只留数字，
+   整组一行居中 —— 不做两行，两行会让贴顶的条高掉一截、更像错位。 */
+@media (max-width: 560px) {
+  .ssd-dp-toolbar.is-selecting { flex-wrap: wrap; padding: 6px 8px; }
+  .ssd-dp-toolbar.is-selecting .ssd-dp-selbar {
+    flex: 1 1 100%;
+    justify-content: center;
+    gap: 6px;
+  }
+  .ssd-dp-toolbar.is-selecting .ssd-dp-tools { display: none; }
+  .ssd-dp-selcount-lb,
+  .ssd-dp-selcount i { display: none; }
+}
+
+/* 勾选圈：叠在封面左上角。pointer-events:none —— 点它等于点卡片，选中与否
+   由卡片上的拦截统一处理，否则两个热点会互相打架。 */
+.ssd-dp-page.is-selecting .scene-card { position: relative; cursor: pointer; }
+/* 整卡描边：勾选圈在缩略图上，深色封面上不够醒目，卡片轮廓是第二重提示。
+   outline 不占布局、也不会被内部图片盖住（inset box-shadow 会被子元素遮掉）。 */
+.ssd-dp-page.is-selecting .scene-card.is-sel {
+  outline: 2px solid var(--sx-acc);
+  outline-offset: -2px;
+}
+.ssd-dp-selbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 6;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.ssd-dp-selbox svg { width: 13px; height: 13px; stroke-width: 3.2; }
+.scene-card.is-sel .ssd-dp-selbox,
+.ssd-scene-table tr.is-sel .ssd-dp-selbox {
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+
+/* 演员小卡也能进多选（用户 2026-10-29）：总览里场景与演员是两种卡，样式
+   作用域都在这条 .is-selecting 下，勾选圈统一用 .ssd-dp-selbox。 */
+.ssd-dp-page.is-selecting .ssd-dp-mini { cursor: pointer; }
+.ssd-dp-page.is-selecting .ssd-dp-mini.is-sel {
+  outline: 2px solid var(--sx-acc);
+  outline-offset: -2px;
+}
+.ssd-dp-page.is-selecting .ssd-dp-mini .ssd-dp-selbox {
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+}
+.ssd-dp-page.is-selecting .ssd-dp-mini .ssd-dp-selbox svg { width: 11px; height: 11px; }
+
+/* 列表模式：卡片那圈勾选圈不适用，改成封面格上的圈 + 整行淡底 */
+.ssd-dp-page.is-selecting .ssd-scene-table tbody tr { cursor: pointer; }
+.ssd-scene-table td:first-child { position: relative; }
+.ssd-scene-table td .ssd-dp-selbox { top: 4px; left: 4px; width: 22px; height: 22px; }
+.ssd-scene-table tbody tr.is-sel {
+  background: color-mix(in srgb, var(--sx-acc) 16%, transparent);
+}
+
+/* 子 tab + 翻页那一行在多选态下整体隐藏：切子 tab / 翻页都会换掉当前页的
+   数据集，已选卡片会当场错位（§13.3 表里第 5 条） */
+.ssd-dp-page.is-selecting .ssd-dp-headrow { display: none; }
+
+/* ─── 演员页「发现」tab 的多选（§P6）──────────────────────────────────────
+   这一页是 Stash 原生网格（.ssd-tab-pane），作用域与发现页不同。
+   按钮一律用原生 .btn 类，这里只留勾选圈 / 描边这类插件自己的视觉。
+   注意 --sx-acc 是发现页 .ssd-dp-page 自己那套变量，演员页拿不到 → 这里显式
+   给一份兜底色，否则 `outline: 2px solid var(--sx-acc)` 整条简写失效，
+   选中卡片会完全看不出边框。 */
+
+.ssd-tab-pane {
+  --ssd-sel-acc: #137cbd; /* = 原生 .btn-primary 底色，选中态和按钮同一色系 */
+  --ssd-sel-line: rgba(128, 128, 128, 0.4);
+}
+.ssd-tab-pane .ssd-dp-selbox { border-color: #fff; background: rgba(0, 0, 0, 0.45); }
+.ssd-tab-pane .scene-card.is-sel .ssd-dp-selbox,
+.ssd-tab-pane .ssd-scene-table tr.is-sel .ssd-dp-selbox {
+  background: var(--ssd-sel-acc);
+  border-color: var(--ssd-sel-acc);
+}
+
+/* 操作组内联进筛选栏：原生 toolbar 本来就是 flex，这组按钮作为同排项即可，
+   不再单独占一行（用户 2026-10-29）。
+   默认态完全交给原生 —— 不 sticky、不改底色，之前那条全局 sticky + #1c1c1c
+   就是「未知黑色底色」与「桌面端被顶栏盖住」两个问题的来源。 */
+.ssd-tabsel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* 多选入口（原生没有这个按钮）：尺寸必须和原生 .btn 一致（实测 33px 高）。
+   只写 inline-flex 会被 svg 的内容高度顶掉 —— svg 14 + padding 10.5×2 + 边框
+   只有 26px，比同排按钮矮 7px，一眼就能看出没对齐（用户 2026-10-29）。 */
+.ssd-tab-pane .btn.ssd-tabsel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 33px;
+  padding: 0;
+}
+.ssd-tabsel-btn svg { width: 15px; height: 15px; }
+/* 纯图标按钮（退出 × / 全选）给同一宽度：不写的话 × 是 32、全选是 22，
+   一排图标按钮宽窄不一（用户 2026-10-29）。 */
+.ssd-tabsel .ssd-tabsel-x,
+.ssd-tabsel .ssd-tabsel-all {
+  width: 36px;
+  height: 33px;   /* 不写就是内容高（× 只有 22px），一排按钮高低不齐 */
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ssd-tabsel .btn svg { width: 15px; height: 15px; }
+/* active 也只换底色深浅，边框/文字色跟着原生 btn 走，不另造配色 */
+.ssd-tabsel-btn.active { filter: brightness(1.18); }
+
+/* 选态：整行居中，收掉会换掉「当前页装的是哪些片」的控件（搜索 / 排序 /
+   每页 / 刷新 / 卡片大小 / 翻页），只留网格·列表切换与操作组。
+   不加边框、不加圆角、不换底色 —— 整行就是原生筛选栏，按钮也全是原生 .btn。
+   底色也不用自己写：原生 `.filtered-list-toolbar` 规则里本来就带
+   `background-color`（Dark 主题是 rgb(32,43,51)，Light 主题是另一份同值编译
+   产物），不覆盖就天然跟主题走（用户 2026-10-30 指出「写底色」这件事）。 */
+.ssd-tab-pane.is-selecting .filtered-list-toolbar {
+  position: sticky;
+  /* 桌面端 Stash 顶栏是 fixed 48.75px / z-index 1030，sticky top:0 会被它整个
+     盖住；--ssd-stick-top 由 JS 量顶栏高度后写入（移动端同样是 fixed） */
+  top: var(--ssd-stick-top, 0px);
+  z-index: 25;
+  /* justify-content 原生就是 center，这里跟着写一遍只是防止别处的 shorthand
+     把它改掉，不引入新值 */
+  justify-content: center;
+}
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .search-term-input,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .sort-by-select,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .page-size-selector,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .zoom-slider-container,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .ssd-tab-refresh,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .ssd-tabsel-btn,
+.ssd-tab-pane.is-selecting .ssd-pager {
+  display: none;
+}
+/* 视图切换留在流里跟着居中：抽到右边用绝对定位的话，它和操作组之间会空出
+   一大段，一行看着不像一个整体（用户 2026-10-30）。DOM 顺序本来就是
+   [操作组][网格·列表]，居中之后正好连成一排。 */
+
+/* 已选数量：原生就一个数字，不要文案（用户 2026-10-29）。它现在是 btn-group
+   里的一格（span.btn），所以只补「不响应鼠标」+ 居中 + 固定宽度：等宽数字让
+   1 → 12 时组内宽度不变，整排不会左右跳。 */
+.ssd-tabsel .ssd-tabsel-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 0 8px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ssd-tab-pane.is-selecting .scene-card {
+  position: relative;
+  cursor: pointer;
+}
+/* 用 box-shadow 而不是 outline：这一页的 .scene-card 上有一条 outline:none
+   之类的原生规则，outline 简写会在变量缺失/被覆盖时整条失效 */
+.ssd-tab-pane.is-selecting .scene-card.is-sel {
+  box-shadow: 0 0 0 2px var(--ssd-sel-acc), 0 0 0 4px rgba(59, 130, 246, 0.3);
+}
+.ssd-tab-pane.is-selecting .ssd-scene-table tbody tr { cursor: pointer; }

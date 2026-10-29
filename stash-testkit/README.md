@@ -110,7 +110,7 @@ stash-testkit/
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
-| `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、结果通道、显示映射、TPDB REST 语义、测试环境），见 `tests/stashDiscover/NOTES.md`；**探针**：`probe_tpdb_api.py`（TPDB REST 语义：批量 deepObject / uuid→整数 id / 分页上限 / 稳定性）、`node_tpdb_harness.js`（Node 里加载插件 TPDB 适配层跑真实源，不起 UI 也能验证，改适配层后先过一遍） |
+| `tests/stashDiscover/` | 发现页/弹窗/Jackett 链路的业务语义与实测口径（数据流、结果通道、显示映射、TPDB REST 语义、测试环境），见 `tests/stashDiscover/NOTES.md`；**探针**：`probe_tpdb_api.py`（TPDB REST 语义：批量 deepObject / uuid→整数 id / 分页上限 / 稳定性）、`node_tpdb_harness.js`（Node 里加载插件 TPDB 适配层跑真实源，不起 UI 也能验证）、`probe_back_key.js`（返回键关闭 7 个弹窗 + 不留 history 垫层）、`probe_ign_export.js`（忽略快照字段/导出结构/导入握手，**会临时清空并还原**）、`probe_ignored_page.js`（已忽略管理页：搜索/分页/恢复/还原全部/淘汰提示）、`probe_batch_select.js` 与 `probe_tab_select.js`（多选 + 批量忽略/入库，两条入口各一份）、`probe_import_dialog.js`（入库弹窗 + 字段开关持久化）、`probe_localstorage.js`（配额量具）、`probe_mobile_stick.js`（移动端贴顶量具）；**夹具**：`seed_ign_test.js` 造忽略记录 / `cleanup_ign_test.js` 清 |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 | `tests/ImageMetaSync/` | 图库图片元数据回填端到端验证（`verify_image_meta_sync.py`：快照/清空/任务/钩子/差异对比） |
 

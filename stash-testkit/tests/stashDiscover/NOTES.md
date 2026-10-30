@@ -674,3 +674,31 @@ country/birthdate/gender`），每个都有明确的读取点（卡片 / 弹窗 
 
 导出顶层固定 `{version:1, exportedAt, trimmed, scenes, performers}`；`exportedAt` / `trimmed`
 只给人看，导入不读。回归跑 `probe_ign_export.js`（会临时清空记录、跑完还原）。
+
+## 发现页缓存字段压缩（2026-10-31，v2.6.2）
+
+按 4000 条 × 3 图的基准重算了 payload，结论与三个改动：
+
+- **tags 是第二大字段，且四成是 JSON 壳**：stashdb 24 个 tag/条 → `[{name}]` 528 字符，
+  名字本身只有 239，剩下 289 是每元素 12 字符的 `{"name":"…"},`。改「全源去重词典
+  （`tagDict`）+ 场景存下标」后同一条 97 字符。实测同一条 trending 缓存（30 条场景）
+  60779 → 44808 字符，**省 26.3%**。
+  - 不升 `fmt`：老条目 `tags[0]` 是对象、新条目是数字，`hydrateCacheEntry` 靠
+    「有没有 `tagDict`」判别，两代 payload 共存，老条目 12h 内自然被覆盖。
+  - `tagDict` 不做裁剪收窄（被裁场景的 tag 仍留在词典里）：词典才几十 KB，remap 每条
+    下标需要给 `store` 存快照（`build()` 会被预算循环调多次），不值。
+- **图片 8 → 3**：实测三源每场景分别是 stashdb 1 / javstash 1 / TPDB 3 张，第 4 张起
+  没有任何读取点（弹窗 detail 一到就整份换掉），8 是个永远碰不到的死上限。
+- **`totalSeen` + 「缓存不完整」chip**：`cacheWrite` 把裁剪前条数写进 payload，读的时候
+  比 `scenes.length` 就知道被裁了多少；UI 在 `.ssd-dp-pcount` 旁挂 chip（title 写
+  「只存下最新 N 部（共拉到 M 部）」），点了走 `doRefresh()`。老条目没这字段 → 当完整。
+  - 文字用 `--sx-tx2` 而不是 `--ssd-warning`：后者当文字色在浅色主题下对比度不够。
+
+回归：`probe_cache_tags_index.js`（写→读往返、逐位比对下标→名字、老格式兼容、复原）、
+`probe_cache_trim_setup.js` + `probe_cache_trim_chip.js`（裁到 10 条 → 热门视图出现 chip
+→ 点它 → 重拉后「共 30 部」且 `totalSeen == scenes.length`）。
+
+顺带：**yml 的 `tasks:` 段已删**。那两个按钮是历史遗留 —— 前端走 `runPluginOperation`，
+不查 tasks 表；手动点必然因为没有 `query`/`magnet` 而失败，而 `runPluginTask` 只把 stdout
+当日志、不解析 `{"error"}`，于是任务页显示「完成、无错误、什么都没发生」。
+删除后实测 `runPluginOperation` 搜索仍返回 38 条。

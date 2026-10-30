@@ -142,7 +142,7 @@
     if (c3) {
       c3.click();
       await sleep(1200);
-      var saveBtn = [].slice.call(document.querySelectorAll(".ssd-modal .ssd-btn")).filter(function (b) {
+      var saveBtn = [].slice.call(document.querySelectorAll(".ssd-modal .ssd-modal-acts > *")).filter(function (b) {
         return (b.textContent || "").indexOf("加入库") !== -1;
       })[0];
       if (saveBtn) {

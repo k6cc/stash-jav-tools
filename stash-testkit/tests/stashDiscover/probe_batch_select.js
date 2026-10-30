@@ -69,7 +69,10 @@
     list[0].click();
     list[1].click();
     await sleep(200);
-    document.querySelector(".ssd-dp-selact").click();
+    // 按文案取按钮：.ssd-dp-selact 有三个（关注 / 忽略 / 入库），querySelector 拿到的是「关注」，
+    // 而它只对"选中的演员"生效 —— 只选了场景时是 disabled，点下去毫无反应，探针会假绿。
+    const ignBtn = [...document.querySelectorAll(".ssd-dp-selact")].find((b) => /忽略|Ignore/.test(b.textContent));
+    ignBtn.click();
     await sleep(900);
     const toast = document.querySelector(".ssd-toast");
     const ignAfter = SSD.dpIgnore.count().scenes;

@@ -12,9 +12,15 @@
   const ignBefore = SSD.dpIgnore.count().scenes;
   let pane = null;
   try {
+    await sleep(2500);   // 等首页渲染完，否则找不到导航链接
+    // 首页直接 pushState 进不了详情页（router 还没有 baseline），先落到
+    // /performers 列表页再 push —— 实测这条路径稳定
+    const nav = document.querySelector('a[href="/performers"]');
+    if (nav) nav.click();
+    await sleep(2500);
     window.history.pushState({}, "", PERF);
     window.dispatchEvent(new PopStateEvent("popstate"));
-    await sleep(2500);
+    await sleep(3000);
     document.querySelector(".ssd-nav-link").click();
     await sleep(7000);
     pane = document.querySelector(".ssd-tab-pane");
@@ -23,6 +29,7 @@
     // ── 1. 入口按钮存在，进入后 selbar 出来、搜索/分页收掉 ──
     const btn = pane.querySelector(".ssd-tabsel-btn");
     const n0 = pane.querySelectorAll(".ssd-scene-card").length;
+    out.stage = "enter";
     btn.click();
     await sleep(800);
     const bar = pane.querySelector(".ssd-tabsel");
@@ -62,6 +69,7 @@
     out.pick = { one: s1, two: s2, backToOne: s3 };
 
     // ── 3. 全选 ──
+    out.stage = "all";
     pane.querySelector(".ssd-tabsel-all").click();
     await sleep(200);
     out.all = { count: pane.querySelector(".ssd-tabsel-count").textContent, isel: pane.querySelectorAll(".scene-card.is-sel").length };
@@ -72,6 +80,7 @@
     cards()[0].click();
     cards()[1].click();
     await sleep(200);
+    out.stage = "ignore";
     pane.querySelector(".ssd-tabsel-ignore").click();
     await sleep(1000);
     const toast = document.querySelector(".ssd-toast");
@@ -87,16 +96,25 @@
     out.ignore.restored = SSD.dpIgnore.count().scenes;
 
     // ── 5. Esc 退出 ──
-    pane.querySelector(".ssd-tabsel-btn").click();
+    // 撤销会触发整页重扫（loadMissingScenes），期间 pane 是 loading 面板、没有工具栏，
+    // 所以要等它扫完再取，别用旧的 pane 引用
+    out.stage = "esc";
+    let pane2 = null;
+    for (let i = 0; i < 40; i++) {
+      await sleep(1000);
+      pane2 = document.querySelector(".ssd-tab-pane");
+      if (pane2 && pane2.querySelector(".ssd-tabsel-btn")) break;
+    }
+    pane2.querySelector(".ssd-tabsel-btn").click();
     await sleep(600);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await sleep(500);
     out.esc = {
-      selecting: pane.classList.contains("is-selecting"),
-      boxes: pane.querySelectorAll(".ssd-dp-selbox").length,
+      selecting: pane2.classList.contains("is-selecting"),
+      boxes: document.querySelectorAll(".ssd-dp-selbox").length,
     };
   } catch (e) {
-    out.error = String((e && e.message) || e);
+    out.error = String((e && e.message) || e) + " @" + (out.stage || "pre");
   } finally {
     if (SSD.dpIgnore.count().scenes !== ignBefore) {
       SSD.dpIgnore.restoreAll("scenes");

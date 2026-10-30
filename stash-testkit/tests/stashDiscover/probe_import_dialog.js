@@ -26,7 +26,7 @@
     if (!card) throw new Error("没有场景卡，先让发现页有数据");
     card.click();
     await sleep(3000);
-    const save = [...document.querySelectorAll(".ssd-modal .ssd-btn")]
+    const save = [...document.querySelectorAll(".ssd-modal .ssd-modal-acts > *")]
       .find((b) => /加入库|Add to Library/.test(b.textContent));
     if (!save) throw new Error("场景弹窗里没有「加入库」按钮");
     save.click();

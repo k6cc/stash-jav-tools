@@ -470,6 +470,94 @@ setbtn 在文件更后（3269），`height:30px` 生效，solid 只负责底色�
 **5. 多选入口图标与全选图标是两件事。** 入口固定「框+勾」（能力标识），全选才是
 空框 ↔ 框+勾（状态开关）。共用一个常量就会让「未全选」也显示成已勾选。
 
+## 忽略按钮只有一份实现（2026-10-30）
+
+场景详情弹窗的「忽略」与演员弹层的「忽略」改由同一个工厂生成 —— `ssdBanButton()`，
+导出为 `SSD.banButton({label,title,aria,onConfirm})`，产出 `.ssd-dp-btn solid ssd-dp-banbtn`，
+自己管 arm 态（4 秒自动复位）与二次确认；调用方只写「确认之后干什么」。
+
+- 老 `.ssd-ban-btn` 那一整套 CSS（含 armed 的 (0,4,0) 覆盖）已删：留着就是两份肉眼对不齐的色值。
+- **坑：场景详情弹窗挂在 body 上，拿不到主题 token。** suite 作用域必须带 `.ssd-modal`，
+  否则 `--sx-ui3` 等全部无效。更狠的一层：`enableDiscoverPage` 关掉时 discover.js 根本不注入，
+  token 连写都没人写 —— 所以 `.ssd-dp-btn.solid.ssd-dp-banbtn` / `.danger`（0,3,0 / 0,4,0）
+  自带 `var(--sx-ui3, #403e3c)` 这类兜底值；选择器要足够长才能压过 `.ssd-dp-btn.solid`(0,2,0)。
+- 回归：`probe_banbtn_parity.js`（idle / armed / 无 token 三态逐值比对两种容器；
+  按钮有 0.15s transition，加 class 后至少等 250ms 再读 `getComputedStyle`）。
+
+## 场景弹窗动作按钮同源改造（2026-10-30）
+
+场景详情弹窗的「加入库 / 在源站打开 / 搜索资源」原来用旧版 `.ssd-btn` 三件套
+（4px 圆角 + text-shadow + 写死的 `--ssd-*` 色），与演员弹层、已忽略管理不是一套。
+现在统一走 `.ssd-dp-btn`：`primary` 实心（加入库）/ 描边（开源站）/ `tonal` 淡底（搜索资源），
+加上忽略的 `solid` 中性实心 —— 四颗 8px 圆角、12.5px、34px 高，实测同排等高。
+
+- **按钮内的文案是单独一层**（`<span data-ssd-lbl>`）。老代码用 `btn.textContent = "准备中…"`
+  切状态，图标是 `innerHTML` 塞的，一改就跑丢；现在只换文案层（`setActLabel()`），
+  图标层与 trailing 外链图标都不受影响 —— `updateOpenButtonLabel()` 换品牌名同理。
+- **`.ssd-modal` 里补了一套 `--sx-*` 兜底（flexoki 暗色）**。弹窗挂在 body 上，
+  发现页关闭时 discover.js 不注入 token；注入的 `<style>` 在 head 末尾、特异性相同，
+  会正常覆盖这份兜底。
+- 窄屏（≤480）四颗走 `grid-template-columns: 1fr 1fr` 的 2×2：挤一行「搜索资源」贴边，
+  纯换行又会剩一颗半宽的忽略挂在末尾。
+- 搜索栏的「搜索」小按钮一并换掉（`.ssd-search-bar .ssd-dp-btn` 覆盖 stretch/字号），
+  输入框圆角同步 8px。
+- **搜索结果行内按钮也已换**：复制磁力 / 打开链接 / 分页 / 低匹配「显示」用 `ghost sm`，
+  推送下载用 `tonal sm`（不用 primary：一屏 20 行会连成蓝条色带，这是当初 tonal 存在的理由）；
+  成功态 `ok`（绿实心）、失败态 `err`（红实心），替代旧的 `ssd-btn-success` / `ssd-btn-danger`。
+- 回归：`probe_modal_acts.js`（分类配色 / 准备中状态图标是否保留 / 品牌名重写后 trail 图标）、
+  `probe_search_btns.js`（灌假搜索结果验五类按钮 + ok/err 两态；**加类后要等 260ms**，
+  否则读到的是 transition 起点的旧色）。
+  `probe_banbtn_parity.js`、`probe_back_key.js`、`probe_import_dialog.js` 里的按钮选择器
+  已从 `.ssd-modal .ssd-btn` 改成 `.ssd-modal .ssd-modal-acts > *`（旧选择器会找不到按钮）。
+
+## 发现页缓存只到「卡片级」，不等于详情（2026-10-30 核对）
+
+- localStorage `SSD:dp:cache:<host>:<family>.v3`，family = newScenes / trending / studios。
+  12h 新鲜期（`CACHE_TTL_MS`），7 天 SWR 兜底，单族上限 4000 条 / 3.6M 字符（超了按 0.7 反复裁）。
+- 存的是**卡片投影**：id / title / code / release_date / duration / director、details（截 400 字）、
+  studio{id,name}、performers（去重成 id，索引只留 name + 首图）、tags[{name}]、
+  images（前 8 张）、urls（只留 url，没有 site 名）。
+- 场景详情弹窗**读**这份：一打开就用 `item.scene` 渲染详情区，所以不是空白转圈。
+  但入库要完整字段（完整简介、标签 id、演员档案、源链接站点），必须再拉一次 `findScene` ——
+  这是分层，不是重复。**场景详情不做短时缓存**（用户 2026-10-30 明确否掉），每次打开请求一次。
+- 演员侧是另一回事：`boxPerfDetail` 有 10 分钟缓存，因为弹层和入库预览要的是同一份全字段。
+- 刷新按钮 = `cacheInvalidate(host)` 删三族缓存 + `invalidateLocalMemos()` 清会话 memo +
+  `_dp.d/_dp.err/_dp.fetchedAt` 归零 + `ensureData(keys, true)` 绕过缓存重拉并覆盖写回。
+
+## Jackett 结果的来源索引器（2026-10-30）
+
+聚合搜索每条 item 自带 `<jackettindexer id="torrentdownload">TorrentDownload</jackettindexer>`
+（标签无命名空间前缀，个别版本写作 `jackett:indexer`）。`torznab:attr name="tracker"` 在当前
+Jackett 版本不输出，所以老的 `tracker` 字段恒为空串 —— 前端 meta 里那一段从来没显示过。
+`_parse_torznab()` 改按子元素本地名 `endswith("indexer")` 抓取，写进 `indexer`（无 text 取 id，
+再退回 tracker 属性）。纯 XML 解析，零额外请求。
+
+- 前端渲染成标题下方的小标签 `.ssd-search-item-indexer`，meta 改 flex 排布；
+  结果行底色是写死的深灰，标签用中性半透明而不是 `--sx-*`（否则浅色主题下是亮块压深底）。
+- 回归：`probe_search_scroll.js` —— pills 数 = 行数、rowsWithoutIndexer = 0。
+- 本机连测时 Jackett 偶尔整批返回 0 条（索引器超时、channel 里没有 item），隔十几秒重跑即可，
+  不是解析问题 —— 空响应下 pills 自然是 0。
+
+## 弹窗滚动容器是 .ssd-modal-body（2026-10-30）
+
+`.ssd-modal` 是 `overflow:hidden`，`scrollHeight === clientHeight`（实测差 0），滚它等于没滚，
+所以「点搜索资源后自动上滑到底」静默失效了很久。改滚 `.ssd-modal-body`；结果渲染后再把
+`.ssd-search-header` 对齐到可视区顶部（否则滚动位置停在列表中间），翻页同样对齐。
+
+- 回归：`probe_search_scroll.js` —— onClick.top == max、afterRender.headerOffset == 8、翻页后仍 8。
+
+## box 演员详情只拉一次（2026-10-30）
+
+演员弹层要性别/年龄/别名/国籍/头像，入库预览要全字段（三围/纹身/链接/从业年…），
+以前是两条不同 query：2.2KB 子集（弹层）+ 4.3KB 全集（入库），且第二条要等一个往返。
+改成 `SSD.boxPerfDetail(endpoint, apiKey, stashId, timeout)` 一律拉全字段、按
+`endpoint|stashId` 缓存 10 分钟（上限 64 条、按 at 淘汰）；入库预览从此零请求即时出。
+
+- 失败降级为 `null` 且不写缓存：弹层不显示那几行标签、入库退成最小档案。
+- 渲染只读不改源对象（`perfFieldValues` 是纯读），所以缓存复用不会产生差异。
+- 回归：`probe_perf_detail_cache.js`（冷 1 请求 / 热 0 请求 / 入库 0 请求）；`probe_perf_box_queries.js` 量两条 query 的体积。
+- **本机连测多次后 stashdb/javstash 会返回 `blocked`**（HTTP 429 一类），不是代码问题，隔一会儿再跑。
+
 ## 返回键关闭弹窗（v2.6.0，2026-10-30）
 
 论坛 26 楼要求的「按返回键先关弹窗、而不是退出插件页」。`SSD.modalBack.hold(closeFn)`
@@ -488,6 +576,87 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
 
 覆盖 7 个弹窗：场景详情（演员页/发现页共用 `buildModal`）、入库预览 ×2、演员弹层、
 已忽略详情、还原全部确认、入库字段弹窗。回归跑 `probe_back_key.js`（缺数据的段会标 no-data）。
+
+## 多选入口图标与选中态层级（2026-10-30）
+
+- 入口图标 =「框里一支笔」的编辑图标（`I.selToggle` / `SSD_ICON_EDIT`，同一段 path），15px
+  与工具栏其它图标一致。演进过程：复选框（像「未勾选项」）→ 放大到 20px（留白还是散）→
+  「三行带勾」（和右边的列表视图撞脸）→ 现在这个。全选仍是 空盒 / 盒+勾 —— 两套图案分工：
+  入口说「这是批量操作」，全选说「选没选」，不混。发现页入口位置移到「24 / 页」右侧
+  （与视图切换连成一组「这一屏怎么展示」）。
+- **选中描边不能用 outline / box-shadow**：两者都是元素自身绘制的，会被 `position: relative`
+  的封面区（`.video-section`）整块盖住，只剩文字区那半圈（用户 2026-10-30 反馈「封面盖在
+  选中边框上面」）。改画在卡片 `::before`（inset: 0 / z-index 13）：发现页 `--sx-acc`、
+  演员页 `--ssd-sel-acc`。列表模式不受影响（那边是整行淡底）。
+- `.ssd-dp-selbox` z-index 6 → 14：`.ssd-badges`(9) / `.studio-overlay`(8) 之前压在这颗勾选圈上。
+- 多选态 `.ssd-badges` 默认在左上 6px，和勾选圈（8px, 24px 见方）完全重叠 → 让到 38px；
+  `data-badge-pos="bl"`（底部）本来不撞，不动。
+- 回归：`probe_batch_select.js`、`probe_tab_select.js`。**探针跑法**：先 `--path /` 并 `sleep 2500`
+  等首页导航渲染，再点 `/performers` 列表页、`pushState` 进详情页 —— 直接 `--path /performers/xx`
+  会被 SPA 弹回 `/`，首页直接 pushState 也进不去。
+
+## 卡片状态环：三种画法与取舍（2026-10-30 实测）
+
+给场景卡画一圈「状态描边」（未读红框 / 多选蓝框），只有三种画法，实测结果：
+
+| 画法 | 结果 |
+|---|---|
+| `outline` / `box-shadow` 画在卡片根 | 封面区**完全看不到**，只剩文字区那半圈 |
+| `outline` 画在封面区块（`.video-section`）上 | 仍被它内部的 `<img>` 盖掉，只剩封面底边/右边一条 |
+| 伪元素覆盖层（`inset:0` + `z-index`） | 四边完整，且 blur 插件开着也清晰 |
+
+前两种失败的原因相同：`outline` / `box-shadow` 属于**元素自身绘制**，任何定位子元素都画在它
+上面。所以这不是「选一种更好的」，而是只有伪元素这条路能走。
+
+- 关注页未读：`.ssd-card-new::after`，z-index 12，2px 红边 + 整卡 9% 淡红。
+- 多选选态：`.scene-card.is-sel::before`，z-index 13，只画边不染底。
+- **故意占两个伪元素槽位**：卡片可能同时「未读 + 已选」，两层各画各的才能都成立；挤在一个
+  槽位上，后声明的规则会把另一个整条顶掉（未读标记在多选期间就消失了）。
+- 选态不染底：多选时要靠封面认片，整屏发蓝反而挡事；未读那 9% 是因为它要当一条常驻信息。
+- z-index 阶梯：角标 9 < 未读环 12 < 选态环 13 < 勾选圈 14 < 演员小卡徽章 15 < 工具栏 25/90 < 弹层 99999。
+  **演员小卡的「新作 N」徽章必须高于选态环**：它 `top:0 + translateY(-50%)` 骑在卡片上边框上，
+  环在上层会从徽章文字中间划一道蓝线（用户 2026-10-30「边框应该在徽章下方」）。场景卡的角标
+  不骑边，所以不需要这一层。
+- 列表模式是例外（`<tr>` 不能定位）：`td` 14% 淡红 + 封面自身 `outline-offset:-2px`，
+  前提是那张封面上面没有别的子元素 —— 换成卡片就必须走伪元素。
+
+## 「临时查看已忽略」为什么不能靠摘列表（2026-10-30）
+
+演员页「发现」tab 原来在忽略后把卡片从 `cachedMissing` **splice 掉**，于是片一旦被忽略就
+从这个 tab 彻底消失 —— 空态还提示「清除搜索可查看已发现的全部场景」，点了也没用（搜索和
+忽略是两个独立过滤器）。现在：
+
+- 忽略只写记录，**不动 `cachedMissing`**；隐藏完全交给 `getFilteredMissing()` 的过滤器。
+  代价是 `cachedMissing.length` 不再等于「可见条数」，计数行改用 `filtered.length`（本来也是）。
+- `_state.showIgnored`（session 级，换人/刷新复位）打开时跳过忽略过滤，卡片回来，封面挂
+  `.ssd-overlay-ignored`；工具栏下方出 chip「已忽略：临时显示 · 本次」+「恢复隐藏」。
+- 空态分两种：搜索没命中（`no-match`，动作是清除搜索）vs 都忽略了（`ignored-hidden`，
+  动作是「查看已忽略的场景」）。两者同时成立时（搜索 + 有已忽略）抬头按「没有匹配的场景」走，
+  按钮变「清除搜索并查看已忽略」—— 只清搜索还是空屏，只显示忽略又会被搜索挡住。
+- 角标颜色写死 `rgba(209,77,65,.94)`：演员 tab 不在 suiteTheme 的 `--sx-*` 作用域里，
+  `color-mix(var(--sx-re)...)` 会整条失效只剩白字（实测第一版就是这么瞎的）。
+- 回归：`probe_ignored_show.js` —— 全忽略 → 面板 → 打开（8 卡 / 8 徽章 / chip / 计数含已忽略）
+  → 恢复隐藏 → 记录差集清零。
+
+## 对「已忽略的场景」再点一次忽略（2026-10-30 实测结论）
+
+「临时查看已忽略」打开后，已忽略的卡片照样能进多选、照样能点忽略 —— 这条路径必须想清楚：
+
+- **存储层是幂等的**：`ignoreScene()` 命中已有键时不覆盖、不新增（`at` 保持不变），
+  重复忽略后 payload 字节数一模一样（实测 2174 → 2174），不会写出重复键、不会虚增条数。
+- **真正的坑在撤销，不在写入**：批量忽略把本次的 key 收进 `keys[]` 供「撤销」回滚。
+  若把「早就忽略过的场景」也算进去，一次撤销会连**更早那次**忽略一起删掉 —— 用户只是
+  顺手全选了一次，昨天/上周的决策就没了。所以三处都改成：命中已忽略就 `already++` 跳过，
+  不进 `keys[]`。
+  - `tabSelIgnore()`（演员页发现 tab）、`batchIgnoreSelected()`（发现页）、
+    `toggleIgnoreScene()`（场景详情弹窗，弹窗里直接提示「已在忽略列表里」不动作）。
+  - 全选都是已忽略项时 `keys` 为空 —— 这时报「存储写不进去（可能已满）」是**误报**，
+    改写「选中的 N 项都已在忽略列表里，无需重复忽略」。
+- **撤销要真的重扫**：原来只清 `cachedMissing` + `renderTabContent()`，注释写的是「原地重扫」
+  但根本没扫 —— 实测撤销后列表一直空着，要用户手动刷新才回来。改调 `loadMissingScenes()`。
+- 回归：`probe_reignore.js` —— 8 部里留 5 部旧记录 → 全选 8 部再忽略（应只新增 3 部、
+  旧 5 部 `at` 不变、toast 报「已忽略 3 部 · 5 部已在列表，跳过」）→ 撤销（应只剩旧 5 部、
+  且键集合完全一致）→ 再来一次（应提示「都已在忽略列表里」而非误报写失败）。
 
 ## 忽略快照字段与导出结构（v2.6.0 定稿，此后只加不改）
 

@@ -2347,6 +2347,23 @@
   margin: 12px 0;
 }
 .ssd-dp-pcount { color: var(--sx-tx3); font-size: 12px; }
+/* 缓存被裁提示：预算护栏砍掉了更早的场景，界面原本毫无信号（用户只会觉得
+   「最新只到某天」）。小号警示 chip，点了就重拉；条数细节放 title。
+   文字走主题色、靠边框+底色提示：--ssd-warning 当文字色在浅色主题下对比度不足。 */
+.ssd-dp-cachetrim {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--ssd-warning) 60%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ssd-warning) 14%, transparent);
+  color: var(--sx-tx2);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ssd-dp-cachetrim:hover { background: color-mix(in srgb, var(--ssd-warning) 26%, transparent); }
 /* 底部翻页行：只有按钮，靠右收尾（§13.5 不再重复计数） */
 .ssd-dp-pagerow.is-end { justify-content: flex-end; margin-top: 4px; }
 

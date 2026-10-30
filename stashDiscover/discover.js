@@ -694,13 +694,17 @@
   // 对策：演员信息拆成去重索引（perfIndex，按 stashId 只存一次 name + 首图），
   // 场景里只留 id 列表；读取时 hydrate 还原成原结构，上层无感。
   // 实测单条降到约 1.2KB，1844 条 ≈ 2.2MB，可稳定写入。
-  var CACHE_IMAGES_PER_SCENE = 8;   // 卡片轮播 + 弹窗打底；其余由详情接口补
+  // 3 张：卡片封面 + TPDB 的竖版/外站兜底（它的首图常是外链、更容易 403）。
+  // 第 4 张起没有任何读取点 —— 弹窗 detail 一到就整份换掉，存了也是白存。
+  var CACHE_IMAGES_PER_SCENE = 3;
   var CACHE_DETAILS_CHARS = 400;    // 卡片描述是 2 行截断，400 字足够且可被搜索
   var CACHE_BUDGET_CHARS = 3600000; // 单条缓存 payload 预算（该源实测配额 5,242,880 字符；
                                     // 线上 1844 条实测 3.0MB，留 30% 给其余 key）
-  var CACHE_FMT = 3;                // 3 = 演员走 perfIndex 去重
+  // 不升 fmt：老条目的 tags 是 [{name}]、新条目是 tagDict 下标，读取端靠
+  // 「有没有 tagDict」区分，两代 payload 在同一 fmt 下共存（老条目 12h 内被覆盖）。
+  var CACHE_FMT = 3;                // 3 = 演员走 perfIndex 去重、标签走 tagDict 下标
 
-  // 读取时把 perfIndex 还原成 [{performer:{id,name,images}}]，与旧格式一致
+  // 读取时把 perfIndex / tagDict 还原成上层熟悉的结构，与旧格式一致
   function hydrateCacheEntry(e) {
     if (!e || e.fmt !== CACHE_FMT) return e;
     var idx = e.perfIndex || {};
@@ -713,10 +717,24 @@
         return o;
       });
     });
+    // 标签：新条目存的是词典下标，老条目本来就是 [{name}]（没有 tagDict → 原样返回）
+    var dict = Array.isArray(e.tagDict) ? e.tagDict : null;
+    if (dict) {
+      (e.scenes || []).forEach(function (sc) {
+        if (!sc || !Array.isArray(sc.tags)) return;
+        sc.tags = sc.tags.map(function (i) {
+          return { name: typeof dict[i] === "string" ? dict[i] : "" };
+        }).filter(function (t) { return t.name; });
+      });
+      delete e.tagDict;   // 词典只服务于还原，别让上层看到
+    }
     return e;
   }
 
-  function slimSceneForCache(sc, perfIndex) {
+  // tags 存词典下标：24 个 tag 的 [{name:"…"}] 要 528 字符，其中名字只占 239，
+  // 剩下 289 全是每个元素 12 字符的 JSON 壳。改成「全源去重词典 + 下标」后
+  // 同一条降到 97 字符，hydrate 时还原，上层（卡片/搜索/加库规划）无感。
+  function slimSceneForCache(sc, perfIndex, tagDict, tagIdx) {
     if (!sc || typeof sc !== "object") return sc;
     var perf = [], tags = [], imgs = [];
     (sc.performers || []).forEach(function (p) {
@@ -729,7 +747,13 @@
       }
       perf.push(id);
     });
-    (sc.tags || []).forEach(function (t) { if (t && t.name) tags.push({ name: t.name }); });
+    (sc.tags || []).forEach(function (t) {
+      var nm = t && t.name;
+      if (!nm) return;
+      var ti = tagIdx[nm];
+      if (ti === undefined) { ti = tagDict.length; tagDict.push(nm); tagIdx[nm] = ti; }
+      tags.push(ti);
+    });
     (sc.images || []).slice(0, CACHE_IMAGES_PER_SCENE).forEach(function (im) {
       if (im && typeof im.url === "string" && im.url) imgs.push({ url: im.url });
     });
@@ -746,8 +770,13 @@
   function cacheWrite(host, family, sinceIsoDate, scenes) {
     var key = cacheKey(host, family);
     try {
-      var perfIndex = {}, store = [];
-      (scenes || []).forEach(function (sc) { if (sc) store.push(slimSceneForCache(sc, perfIndex)); });
+      var perfIndex = {}, tagDict = [], tagIdx = Object.create(null), store = [];
+      var seen = 0;
+      (scenes || []).forEach(function (sc) {
+        if (!sc) return;
+        seen++;
+        store.push(slimSceneForCache(sc, perfIndex, tagDict, tagIdx));
+      });
       if (store.length > CACHE_SCENES_CAP) {
         store = store.slice().sort(function (a, b) {
           return String(b.release_date || "").localeCompare(String(a.release_date || ""));
@@ -760,9 +789,13 @@
           (sc.performers || []).forEach(function (id) { used[String(id)] = 1; });
         });
         Object.keys(perfIndex).forEach(function (id) { if (used[id]) idx[id] = perfIndex[id]; });
+        // tagDict 不做同样的收窄：词典本体才几十 KB，重建要 remap 每条的下标，
+        // 而 build() 会被预算循环调用多次，改 store 得多存一份快照才不出错 —— 不值。
         return JSON.stringify({
           fmt: CACHE_FMT, sinceIsoDate: sinceIsoDate || null, fetchedAt: Date.now(),
-          perfIndex: idx, scenes: store,
+          // 裁剪前条数：读的时候跟 scenes.length 比一下就知道被裁了多少（UI 要标）
+          totalSeen: seen,
+          perfIndex: idx, tagDict: tagDict, scenes: store,
         });
       };
       var payload = build();
@@ -992,7 +1025,7 @@
         var fresh = cacheRead(host, "newScenes", base.since);
         if (fresh) {
           return loadLinkedOwned(host, base.source.endpoint).then(function (lo) {
-            return buildResult(base, { scenes: fresh.scenes, fetchedAt: fresh.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "fresh");
+            return buildResult(base, { scenes: fresh.scenes, totalSeen: fresh.totalSeen, fetchedAt: fresh.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "fresh");
           });
         }
       }
@@ -1002,12 +1035,22 @@
         if (stale) {
           refreshDiscover(base, opts);
           return loadLinkedOwned(host, base.source.endpoint).then(function (lo) {
-            return buildResult(base, { scenes: stale.scenes, fetchedAt: stale.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "stale");
+            return buildResult(base, { scenes: stale.scenes, totalSeen: stale.totalSeen, fetchedAt: stale.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "stale");
           });
         }
       }
       return refreshDiscover(base, opts);
     });
+  }
+
+  // 缓存被裁（预算递减 / 4000 上限）时，读到的条数少于写入时的条数。
+  // 用户看到的会是「最新只到某天」而毫无提示 —— 所以计数旁要挂一句。
+  // 老条目没有 totalSeen → 当作完整（不升 fmt 的代价，只需接受这一种模糊）。
+  function cacheTrimOf(entry) {
+    var seen = entry && entry.totalSeen;
+    var kept = entry && Array.isArray(entry.scenes) ? entry.scenes.length : 0;
+    if (typeof seen !== "number" || seen <= kept) return null;
+    return { kept: kept, seen: seen };
   }
 
   function buildResult(base, entry, fromCache) {
@@ -1019,6 +1062,7 @@
       recentDays: base.recentDays, previewDays: base.previewDays,
       fetchedAt: entry.fetchedAt, fromCache: fromCache,
       linkedCount: linked.length,
+      cacheTrim: fromCache === "network" ? null : cacheTrimOf(entry),
       // linked 一并暴露：发现演员"共同出演"排除在库演员（§3.5）、关注视图
       // 头像渲染、场景卡 popover 的本地演员映射（§8.1）都依赖完整列表。
       linked: linked,
@@ -1086,7 +1130,8 @@
         item.hasLocalPerformer = hasLocal; // §5 角标标记
         return item;
       });
-      return { source: base.source, fetchedAt: entry.fetchedAt, fromCache: fromCache, items: items };
+      return { source: base.source, fetchedAt: entry.fetchedAt, fromCache: fromCache, items: items,
+               cacheTrim: fromCache === "network" ? null : cacheTrimOf(entry) };
     });
   }
 
@@ -1167,6 +1212,7 @@
       return {
         source: base.source, fetchedAt: entry.fetchedAt, fromCache: fromCache,
         studioCount: studios.length, items: capped, groups: groups,
+        cacheTrim: fromCache === "network" ? null : cacheTrimOf(entry),
       };
     });
   }
@@ -2666,7 +2712,7 @@
       });
       headrow.appendChild(subRow);
     }
-    var topPager = pagerBar(view, all.length, totalPages, perPage, { top: true });
+    var topPager = pagerBar(view, all.length, totalPages, perPage, { top: true, trim: ds.cacheTrim });
     if (topPager) headrow.appendChild(topPager);
     if (headrow.firstChild) c.appendChild(headrow);
 
@@ -2737,6 +2783,7 @@
   //                只有 1 页时整块返回 null（调用方跳过，保持一行干净）
   //   {plain:true} 底部行：只有按钮，不再重复计数；1 页返回 null
   //   默认         独立一行：页号 / 总数 / 每页 + 按钮（perfFilter、studioFilter 用）
+  //   {trim:true}  缓存被裁过 → 在计数后挂「缓存不完整」，点了重拉
   function pagerBar(view, total, totalPages, perPage, opts) {
     opts = opts || {};
     var pg = pagerNav(totalPages);
@@ -2747,13 +2794,27 @@
       end.appendChild(pg);
       return end;
     }
-    if (opts.top && !pg) return null;
+    if (opts.top && !pg && !opts.trim) return null;
     var bar = el("div", opts.top ? "ssd-dp-headrow-pager" : "ssd-dp-pagerow");
     // 页号由按钮高亮表达、每页数筛选栏已有 → 紧凑版只留总数
     bar.appendChild(el("span", "ssd-dp-pcount", opts.top
       ? tc("共 " + total + " 部", total + " scenes")
       : tc("第 " + _dp.page + " / " + totalPages + " 页 · 共 " + total + " 部 · 每页 " + perPage,
            "Page " + _dp.page + " / " + totalPages + " · " + total + " items")));
+    // 缓存被裁时的唯一可见信号。不写条数（左边「共 N 部」是过滤后的数，
+    // 两个数并排会互相打架），细节放 title。
+    if (opts.top && opts.trim) {
+      var chip = el("button", "ssd-dp-cachetrim", tc("缓存不完整", "Cache incomplete"));
+      chip.type = "button";
+      chip.title = tc(
+        "浏览器缓存只存下最新 " + opts.trim.kept + " 部（本次共拉到 " + opts.trim.seen +
+          " 部），更早的没写进存储。点一下重新拉取。",
+        "Only the newest " + opts.trim.kept + " of " + opts.trim.seen +
+          " scenes fit in the browser cache. Click to refetch.");
+      chip.setAttribute("aria-label", chip.title);
+      chip.addEventListener("click", doRefresh);
+      bar.appendChild(chip);
+    }
     if (pg) bar.appendChild(pg);
     return bar;
   }

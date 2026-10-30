@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.6.1
+version: 2.6.2
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -55,16 +55,6 @@ exec:
   - "{pluginDir}/stashDiscover.py"
 
 interface: raw
-
-tasks:
-  - name: "Search Resources"
-    description: "Search Jackett for a scene and return results (called by UI)"
-    defaultArgs:
-      mode: search
-  - name: "Push to Downloader"
-    description: "Push a magnet link to the configured downloader (called by UI)"
-    defaultArgs:
-      mode: push_download
 
 ui:
   javascript:

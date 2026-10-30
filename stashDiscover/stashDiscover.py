@@ -186,6 +186,18 @@ def _parse_torznab(xml_text):
             elif name == "tracker":
                 tracker = value
 
+        # 聚合搜索时 item 自带来源索引器：
+        #   <jackettindexer id="torrentdownload">TorrentDownload</jackettindexer>
+        # 标签名不带命名空间前缀，个别版本写作 <jackett:indexer>，所以按本地名
+        # 兜底匹配。这条信息本来就在响应里，解析零额外请求。
+        indexer = None
+        for child in item:
+            if not isinstance(child.tag, str):
+                continue
+            if child.tag.rsplit("}", 1)[-1].lower().endswith("indexer"):
+                indexer = (child.text or "").strip() or (child.get("id") or "").strip()
+                break
+
         if not magnet and link.startswith("magnet:"):
             magnet = link
         if not magnet and guid.startswith("magnet:"):
@@ -205,7 +217,7 @@ def _parse_torznab(xml_text):
             "seeders": seeders if seeders is not None else -1,
             "leechers": leechers if leechers is not None else -1,
             "pub_date": pub_date,
-            "tracker": tracker or "",
+            "indexer": indexer or tracker or "",
         })
 
     # Magnet-bearing results first, then by seeders — magnet-less proxy links

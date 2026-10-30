@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.0";
+  var PLUGIN_VERSION = "2.6.1";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -851,6 +851,9 @@
     allLoaded: false,          // all box pages exhausted
     loadingPage: false,        // currently fetching more pages
     searchQuery: "",           // client-side filter text
+    // 临时查看已忽略（用户 2026-10-30）：只改这一屏看不看，不动忽略记录。
+    // 与「不限时间（本次）」同口径 —— 都是 session 内的观看辅助，换人/刷新即复位
+    showIgnored: false,
     localPerformerMaps: {},    // endpoint(lower) -> box performer id(lower) -> {id,name,image_path}
   };
 
@@ -1238,6 +1241,7 @@
     _state.droppedByWindow = 0;
     _state.preferredFallback = false;
     _state.preferredBoxLabel = "";
+    _state.showIgnored = false;
     _state.allLoaded = false;
     _state.loadingPage = false;
     // 换人 / 重扫：上一页的选择集与条目都不再有意义（key 对不上，留着只会
@@ -1929,6 +1933,15 @@
     loadMissingScenes();
   }
 
+  // 「临时查看已忽略（本次）」：同 setWindowRelaxed，是观看辅助 —— 不写忽略记录、
+  // 不改库，只把这一屏的隐藏效果暂时关掉（用户 2026-10-30）。
+  // 不重扫源站：卡片本来就在 cachedMissing 里，只是被过滤器挡住了。
+  function setIgnoredShown(on) {
+    _state.showIgnored = !!on;
+    _state.currentPage = 1;
+    renderTabContent();
+  }
+
   function retryLoad() {
     loadMissingScenes();
   }
@@ -1952,6 +1965,7 @@
     "no-box": ["未配置 stash-box", "No stash-box configured"],
     "no-ids": ["该演员未关联 stash-box ID", "This performer has no stash-box ID"],
     "no-match": ["没有匹配的场景", "No matching scenes"],
+    "ignored-hidden": ["场景都已被忽略", "All scenes are ignored"],
     fatal: ["加载失败", "Loading failed"],
   };
 
@@ -1961,6 +1975,10 @@
         return tc("当前时间窗口内没有剩余场景", "Nothing left inside the time window");
       }
       return tc("源上没有待发现的场景", "Nothing left to discover on the source");
+    }
+    // 搜索还在生效时，抬头说「都被忽略」不准确 —— 挡住结果的是搜索，不是忽略
+    if (vs === "ignored-hidden" && (_state.searchQuery || "").trim()) {
+      return tc("没有匹配的场景", "No matching scenes");
     }
     var pair = PANEL_TITLES[vs] || PANEL_TITLES.loading;
     return isZh() ? pair[0] : pair[1];
@@ -2184,6 +2202,29 @@
       actions.appendChild(retryBtn4);
       if (findEntryVisible("empty")) actions.appendChild(findEntryBtn("lg", "info"));
 
+    } else if (vs === "ignored-hidden") {
+      // 已发现的片全被忽略：直说，并且给「临时查看」入口。忽略记录不动 ——
+      // 看只是想确认「忽略的是哪部」，不是要收回忽略（用户 2026-10-30）
+      var ignN = hiddenIgnoredCount();
+      var hasQuery = (_state.searchQuery || "").trim().length > 0;
+      body.appendChild(panelDesc(hasQuery
+        ? tc("当前搜索没有匹配的场景；另有 " + ignN + " 个已发现的场景被忽略了。",
+             "No scene matches the search; " + ignN + " discovered scene(s) are ignored.")
+        : tc("已发现的 " + ignN + " 个场景都被忽略了。",
+             "All " + ignN + " discovered scene(s) are ignored.")));
+      var showIgnBtn = makePanelBtn(hasQuery
+        ? tc("清除搜索并查看已忽略", "Clear search & show ignored")
+        : tc("查看已忽略的场景", "Show ignored scenes"), "primary");
+      showIgnBtn.title = tc("临时显示已忽略的场景，不改忽略记录",
+        "Temporarily show ignored scenes; the ignore list stays untouched");
+      showIgnBtn.onclick = function () {
+        // 搜索还挡着的话一并清掉，否则点了还是空屏
+        if (hasQuery) _state.searchQuery = "";
+        setIgnoredShown(true);
+      };
+      actions.appendChild(showIgnBtn);
+      if (findEntryVisible("ignored-hidden")) actions.appendChild(findEntryBtn("lg", "info"));
+
     } else if (vs === "no-match") {
       var found = _state.cachedMissing.length;
       body.appendChild(panelDesc(tc("清除搜索可查看已发现的全部场景（共 " + found + " 个）。",
@@ -2207,7 +2248,7 @@
 
     if (actions.children.length) panel.appendChild(actions);
     // The inline lookup expands inside any panel that offers its entry button
-    if (_state.findOpen && (vs === "no-ids" || vs === "empty" || vs === "no-match")) {
+    if (_state.findOpen && (vs === "no-ids" || vs === "empty" || vs === "no-match" || vs === "ignored-hidden")) {
       panel.appendChild(buildFindBlock());
     }
     return panel;
@@ -2403,7 +2444,7 @@
     var multi = (_state.allBoxes || []).length > 1;
     if (vs === "no-ids") return true;
     if (vs === "empty") return multi || _state.preferredFallback;
-    if (vs === "no-match" || vs === "content") return _state.preferredFallback;
+    if (vs === "no-match" || vs === "content" || vs === "ignored-hidden") return _state.preferredFallback;
     return false;
   }
 
@@ -2856,6 +2897,91 @@
     run();
   }
 
+  // ─── 两处「忽略」按钮共用的外观（用户 2026-10-30）───────────────────────
+  // 场景详情弹窗一直用旧版 .ssd-ban-btn（描边 + 图文字同色），与演员详情弹层
+  // 的实心按钮不是一套；改成一个工厂：
+  //   实心底 + 深红禁止图标 → 二次点击整颗转红、图标与文字转白（.danger）
+  // 视觉定义只此一份（.ssd-dp-btn solid ssd-dp-banbtn），两处都走这里，
+  // 不会再各自漂色。onConfirm 在第二次点击时触发，4 秒无操作自动复位。
+  var BAN_SVG = '<svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true">' +
+    '<path d="M367.2 412.5L99.5 144.8C77.1 176.1 64 214.5 64 256c0 106 86 192 192 192c41.5 0 79.9-13.1 111.2-35.5zm45.3-45.3C434.9 335.9 448 297.5 448 256c0-106-86-192-192-192c-41.5 0-79.9 13.1-111.2 35.5L412.5 367.2zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/>' +
+    "</svg>";
+  function ssdBanButton(o) {
+    var label = o.label || tc("忽略", "Ignore");
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ssd-dp-btn solid ssd-dp-banbtn";
+    btn.innerHTML = '<span class="ssd-dp-banico">' + BAN_SVG + "</span><span>" + label + "</span>";
+    if (o.title) btn.title = o.title;
+    if (o.aria) btn.setAttribute("aria-label", o.aria);
+    function disarm() {
+      clearTimeout(btn._armT);
+      btn.removeAttribute("data-armed");
+      btn.classList.remove("danger");
+      var lab = btn.querySelector("span:last-child");
+      if (lab) lab.textContent = label;
+    }
+    btn.addEventListener("click", function () {
+      if (btn.getAttribute("data-armed") !== "1") {
+        btn.setAttribute("data-armed", "1");
+        btn.classList.add("danger");
+        var lab = btn.querySelector("span:last-child");
+        if (lab) lab.textContent = tc("确认忽略？", "Confirm?");
+        clearTimeout(btn._armT);
+        btn._armT = setTimeout(function () { if (btn.isConnected) disarm(); }, 4000);
+        return;
+      }
+      disarm();
+      if (typeof o.onConfirm === "function") o.onConfirm();
+    });
+    return btn;
+  }
+
+  // ─── 场景详情弹窗的动作按钮（用户 2026-10-30）────────────────────────────
+  // 原来这三颗用旧版 .ssd-btn 三件套（4px 圆角 + text-shadow + 写死的 --ssd-*
+  // 色），跟「演员详情弹层」「已忽略管理」不是一套。现在统一走 .ssd-dp-btn：
+  // primary 实心（加入库）/ 描边（在源站打开）/ tonal 淡底（搜索资源），
+  // 忽略仍是 solid 中性实心（见上方 ssdBanButton）——四颗各自可分辨，
+  // 又都是同一套圆角、字号、间距与主题 token。
+  // 文案单独一层 span：状态切换（准备中… / 搜索中…）只改字，不会把图标抹掉。
+  var ACT_ADD_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+    'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+  var ACT_FIND_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/>' +
+    '<path d="M16.5 16.5L21 21"/></svg>';
+
+  function ssdActButton(o) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ssd-dp-btn" + (o.tone ? " " + o.tone : "");
+    if (o.icon) btn.innerHTML = '<span class="ssd-dp-bico">' + o.icon + "</span>";
+    var tx = document.createElement("span");
+    tx.className = "ssd-dp-btxt";
+    tx.setAttribute("data-ssd-lbl", "");
+    tx.textContent = o.label;
+    btn.appendChild(tx);
+    // trailing 图标（源站按钮的外链箭头）不随文案变化，单独一层
+    if (o.trail) {
+      var tr = document.createElement("span");
+      tr.className = "ssd-dp-bico ssd-dp-bico-trail";
+      tr.innerHTML = o.trail;
+      btn.appendChild(tr);
+    }
+    if (o.title) btn.title = o.title;
+    if (typeof o.on === "function") btn.onclick = o.on;
+    return btn;
+  }
+
+  // 只改文案层；没有该层（老按钮 / 别处传进来的节点）时退回整颗改字
+  function setActLabel(btn, txt) {
+    if (!btn) return;
+    var t = btn.querySelector("[data-ssd-lbl]");
+    if (t) t.textContent = txt;
+    else btn.textContent = txt;
+  }
+
   // ─── Actions: Link (append) / Overwrite (source wins) ─────────────────────
 
   function runFindAction(r, mode, btn) {
@@ -3107,9 +3233,10 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>';
 
-  // 复选框三态（用户 2026-10-30）：多选入口用空盒、全选用「已勾选」的盒子。
-  // 之前入口和全选都用裸对勾 ✓，语义上「进多选」被画成了「已经全选」。
-  // 三个图标共用 24 格 viewBox + 15px 显示尺寸，× 与全选视觉等大（之前 ×
+  // 复选框两态（用户 2026-10-30）：全选用 空盒 / 盒+勾 表示开没开。
+  // 多选入口不用勾选框（那会把「进多选」读成「已经全选」），改用「三行带勾」——
+  // 它指的是批量操作这个能力，与全选那套是两种语言，不会混淆。
+  // 图标共用 24 格 viewBox + 15px 显示尺寸，× 与全选视觉等大（之前 ×
   // 是文字 &times;，字号撑不出 15px，看起来比全选小一圈）。
   var SSD_ICON_BOX =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
@@ -3119,9 +3246,14 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 12.3l3.2 3.2 5.8-6.4"/></svg>';
-  // 多选入口：「已勾选的复选框」图案（用户 2026-10-30 第 2 条）。入口是「多选
-  // 这个能力」的标识，不是开关状态，所以固定带勾；状态由全选那枚空盒/盒+勾表示。
-  var SSD_ICON_CHECKBOX = SSD_ICON_BOX_ON;
+  // 多选用「框里一支笔」的编辑图标（用户 2026-10-30）：框 = 要操作的这一屏卡片，
+  // 笔 = 在上面做编辑。既不会像勾选框那样把「进多选」读成「已经全选」，也不会像
+  // 「三行带勾」那样跟旁边的列表视图撞脸。发现页 I.selToggle 同款路径。
+  var SSD_ICON_EDIT =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M12.5 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6.5"/>' +
+    '<path d="M17.6 3.6l2.8 2.8L11.6 15l-3.7.9.9-3.7z"/></svg>';
   var SSD_ICON_X =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" aria-hidden="true"><path d="M4.5 4.5l15 15M19.5 4.5l-15 15"/></svg>';
@@ -3254,19 +3386,23 @@
     renderTabContent();
   }
 
-  // 批量忽略：写库后从 cachedMissing 摘掉（这一页不走发现页的 filterPipeline）
+  // 批量忽略：只写忽略记录，**不从 cachedMissing 摘掉**（用户 2026-10-30）。
+  // 卡片由 getFilteredMissing 的过滤器隐藏；摘掉的话「临时查看已忽略」就再也
+  // 拿不回来 —— 而这条记录本身还躺在忽略库里，两处状态就对不上。
   function tabSelIgnore() {
     if (_tabSel.busy) return;
     var items = _tabSel.items.slice();
     if (!items.length) return;
-    var keys = [], dropped = 0, failed = 0;
+    var keys = [], dropped = 0, failed = 0, already = 0;
     items.forEach(function (item) {
+      // 已在忽略列表里的跳过（用户 2026-10-30）：重复忽略本身是幂等的 —— 不写重复键、
+      // 不改原记录的 at。真正的坑在撤销：keys 里若混进早就被忽略的场景，一次撤销会把
+      // 更早那次的决策一起删掉。跳过它，撤销就只回滚本次新增。
+      if (isItemIgnored(item)) { already++; return; }
       var r = SSD.dpIgnore.ignoreScene(item);
       if (r && r.ok) {
         keys.push(r.key);
         dropped += r.dropped || 0;
-        var i = _state.cachedMissing.indexOf(item);
-        if (i !== -1) _state.cachedMissing.splice(i, 1);
       } else failed++;
     });
     _tabSel.on = false;
@@ -3274,12 +3410,18 @@
     _tabSel.items = [];
     renderTabContent();
     if (!keys.length) {
+      if (already) {
+        SSD.toast(tc("选中的 " + already + " 部都已在忽略列表里，无需重复忽略",
+                     "Selected " + already + " scenes are already ignored"), { duration: 4000 });
+        return;
+      }
       showModalNotice(tc("忽略失败：浏览器存储写不进去（可能已满）",
         "Ignore failed: browser storage rejected the write"), "error");
       return;
     }
     var msg = tc("已忽略 " + keys.length + " 部场景", keys.length + " scenes ignored") +
-      (failed ? tc(" · " + failed + " 部失败", " · " + failed + " failed") : "");
+      (failed ? tc(" · " + failed + " 部失败", " · " + failed + " failed") : "") +
+      (already ? tc(" · " + already + " 部已在列表，跳过", " · " + already + " already ignored, skipped") : "");
     if (dropped) msg += tc(" · 超出上限，淘汰最旧 " + dropped + " 条",
                            " · cap reached, dropped " + dropped + " oldest");
     SSD.toast(msg, {
@@ -3287,12 +3429,10 @@
       duration: 6000,
       onAction: function () {
         keys.forEach(function (k) { SSD.dpIgnore.remove("scenes", k); });
-        // 撤销后原地重扫一次，条数才对得上（记录已不在，重扫会重新捞回来）
-        _state.allLoaded = false;
-        _state.boxCursors = {};
-        _state.boxExhausted = {};
-        _state.cachedMissing = [];
-        renderTabContent();
+        // 撤销后原地重扫一次，条数才对得上（记录已不在，重扫会重新捞回来）。
+        // 必须真的调 loadMissingScenes：只清 cachedMissing 再 render 的话，这一屏
+        // 会一直空着等用户手动刷新（2026-10-30 实测）。
+        loadMissingScenes();
       },
     });
   }
@@ -3568,7 +3708,7 @@
       var selBtn = document.createElement("button");
       selBtn.type = "button";
       selBtn.className = "btn btn-secondary ssd-tabsel-btn" + (_tabSel.on ? " active" : "");
-      selBtn.innerHTML = SSD_ICON_CHECKBOX;
+      selBtn.innerHTML = SSD_ICON_EDIT;
       selBtn.title = tc("多选", "Select");
       selBtn.setAttribute("aria-label", tc("多选", "Select"));
       selBtn.onclick = function () {
@@ -3682,7 +3822,10 @@
     // block would be rendered a second time inside the panel).
     var filtered = getFilteredMissing();
     if (filtered.length === 0) {
-      pane.appendChild(buildStatePanel("no-match"));
+      // 一条都不剩时分清「搜索没命中」和「都忽略了」：后者给一个临时查看入口，
+      // 而不是让用户对着「清除搜索」白点（用户 2026-10-30）
+      var ignHidden = _state.showIgnored ? 0 : hiddenIgnoredCount();
+      pane.appendChild(buildStatePanel(ignHidden > 0 ? "ignored-hidden" : "no-match"));
       return;
     }
 
@@ -3690,7 +3833,7 @@
     // chip → its restore button → preferred-source fallback chip → inline lookup
     // entry. Only the parts that apply are rendered. The four are grouped in
     // pairs so a very narrow viewport wraps between them instead of overflowing.
-    if (_state.windowRelaxed || _state.preferredFallback) {
+    if (_state.windowRelaxed || _state.preferredFallback || _state.showIgnored) {
       var metaRow = document.createElement("div");
       metaRow.className = "ssd-window-row";
 
@@ -3705,6 +3848,14 @@
           "Restore default (" + _state.cfgRecentDays + "/" + _state.cfgPreviewDays + ")"), "secondary", "sm");
         restoreBtn.onclick = function () { setWindowRelaxed(false); };
         winGroup.appendChild(restoreBtn);
+      }
+
+      // 已经忽略的片重新出现在列表里：必须明说，否则「我明明忽略过的片怎么还在」
+      if (_state.showIgnored) {
+        winGroup.appendChild(makeChip(tc("已忽略：临时显示 · 本次", "Ignored: shown · this session"), "muted"));
+        var hideIgnBtn = makePanelBtn(tc("恢复隐藏", "Hide again"), "secondary", "sm");
+        hideIgnBtn.onclick = function () { setIgnoredShown(false); };
+        winGroup.appendChild(hideIgnBtn);
       }
 
       // Preferred source had no ID → the others were queried. Say so; a silent
@@ -3773,8 +3924,12 @@
         countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 匹配 " + filtered.length + " / " + _state.cachedMissing.length + " 个",
           "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " matched / " + _state.cachedMissing.length + " found");
       } else {
-        countInfo.textContent = tc("第 " + _state.currentPage + " / " + totalPages + " 页 · 共 " + filtered.length + " 个",
-          "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " total");
+        var ignShown = _state.showIgnored ? hiddenIgnoredCount() : 0;
+        countInfo.textContent = tc(
+          "第 " + _state.currentPage + " / " + totalPages + " 页 · 共 " + filtered.length + " 个"
+            + (ignShown ? "（含 " + ignShown + " 个已忽略）" : ""),
+          "Page " + _state.currentPage + " of " + totalPages + " · " + filtered.length + " total"
+            + (ignShown ? " (" + ignShown + " ignored)" : ""));
       }
     } else {
       // Not all box pages fetched yet — results load on demand while paging
@@ -3893,17 +4048,26 @@
     return b;
   }
 
+  function isItemIgnored(item) {
+    if (!SSD.dpIgnore) return false;
+    var ep = item.endpoint || (item.box && item.box.endpoint);
+    return SSD.dpIgnore.isSceneIgnored(ep, item.scene && item.scene.id);
+  }
+
+  // 已发现但被忽略条数：给「全被忽略」的空态面板与提示条用
+  function hiddenIgnoredCount() {
+    if (!SSD.dpIgnore) return 0;
+    return _state.cachedMissing.filter(isItemIgnored).length;
+  }
+
   function getFilteredMissing() {
     var q = (_state.searchQuery || "").trim().toLowerCase();
     // 已忽略（§5.1 第 3 处）：这个 tab 原先只拿已读做角标统计、并不隐藏场景，
-    // 忽略要单独过滤一次 —— 分页、搜索、计数都走这个函数，一处收口全生效
-    var ig = SSD.dpIgnore;
+    // 忽略要单独过滤一次 —— 分页、搜索、计数都走这个函数，一处收口全生效。
+    // 「临时查看已忽略」打开时跳过这段：卡片留着，封面挂「已忽略」徽章。
     var base = _state.cachedMissing;
-    if (ig) {
-      base = base.filter(function (item) {
-        var ep = item.endpoint || (item.box && item.box.endpoint);
-        return !ig.isSceneIgnored(ep, item.scene && item.scene.id);
-      });
+    if (!_state.showIgnored) {
+      base = base.filter(function (item) { return !isItemIgnored(item); });
     }
     if (!q) return base;
     return base.filter(function (item) {
@@ -4152,6 +4316,14 @@
     titleSpan.textContent = sc.title || sc.code || tc("无标题", "Untitled");
     titleLink.appendChild(titleSpan);
     titleTd.appendChild(titleLink);
+    // 列表模式同款标记：行里没有封面角标的位置，文字尾巴上补一个（同上，只在
+    // 「临时查看已忽略」时出现）
+    if (_state.showIgnored && isItemIgnored(item)) {
+      var ignTag = document.createElement("span");
+      ignTag.className = "ssd-row-ignored";
+      ignTag.textContent = tc("已忽略", "Ignored");
+      titleTd.appendChild(ignTag);
+    }
     tr.appendChild(titleTd);
 
     // Date / studio code / duration — plain cells
@@ -4256,6 +4428,17 @@
       boxBadge.className = "ssd-overlay-box";
       boxBadge.textContent = item.boxName;
       videoSection.appendChild(boxBadge);
+    }
+
+    // 「已忽略」角标：只在「临时查看已忽略」打开时出现。这些片平时被过滤器挡住，
+    // 既然放出来了就得标明白 —— 否则用户以为忽略没生效（用户 2026-10-30）。
+    // 插在「预告」之前：CSS 用相邻选择器把它后面的预告角标压下一行，两者不重叠。
+    var shownIgnored = !!(st.showIgnored && isItemIgnored(item));
+    if (shownIgnored) {
+      var ignBadge = document.createElement("span");
+      ignBadge.className = "ssd-overlay-ignored";
+      ignBadge.textContent = tc("已忽略", "Ignored");
+      videoSection.appendChild(ignBadge);
     }
 
     // Preview pill for future-dated scenes — top-left corner
@@ -4381,10 +4564,6 @@
     '<svg data-prefix="fas" data-icon="user" class="svg-inline--fa fa-user fa-icon" role="img" viewBox="0 0 448 512" aria-hidden="true">' +
     '<path fill="currentColor" d="M224 248a120 120 0 1 0 0-240 120 120 0 1 0 0 240zm-29.7 56C95.8 304 16 383.8 16 482.3 16 498.7 29.3 512 45.7 512l356.6 0c16.4 0 29.7-13.3 29.7-29.7 0-98.5-79.8-178.3-178.3-178.3l-59.4 0z"></path></svg>';
 
-  // FA6 solid/ban —— 「忽略」按钮用（§C8）。现有 19 个图标里没有拉黑语义的
-  var SSD_ICON_BAN =
-    '<svg data-prefix="fas" data-icon="ban" class="svg-inline--fa fa-ban fa-icon" role="img" viewBox="0 0 512 512" aria-hidden="true">' +
-    '<path fill="currentColor" d="M367.2 412.5L99.5 144.8C77.1 176.1 64 214.5 64 256c0 106 86 192 192 192c41.5 0 79.9-13.1 111.2-35.5zm45.3-45.3C434.9 335.9 448 297.5 448 256c0-106-86-192-192-192c-41.5 0-79.9 13.1-111.2 35.5L412.5 367.2zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"></path></svg>';
 
   // Show a hover-only popover under `el`; `buildContent()` returns a Node.
   // The popover is hoverable (mouse can rest on it without hiding) but fully
@@ -4635,41 +4814,44 @@
     var actionSection = document.createElement("div");
     actionSection.className = "ssd-modal-section";
     var btnRow = document.createElement("div");
-    btnRow.className = "ssd-action-row";
+    btnRow.className = "ssd-modal-acts";
 
-    var saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "ssd-btn ssd-btn-primary ssd-btn-lg";
-    saveBtn.textContent = tc("加入库", "Add to Library");
-    saveBtn.onclick = function () { handleSaveScene(item, saveBtn); };
+    var saveBtn = ssdActButton({
+      tone: "primary",
+      icon: ACT_ADD_SVG,
+      label: tc("加入库", "Add to Library"),
+      title: tc("预览字段后写入本地库", "Preview fields, then add to the library"),
+      on: function () { handleSaveScene(item, saveBtn); },
+    });
     btnRow.appendChild(saveBtn);
 
-    var openBtn = document.createElement("button");
-    openBtn.type = "button";
-    openBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-lg";
-    openBtn.textContent = brandNameForEndpoint(item.endpoint);
-    appendExtIcon(openBtn);
+    var openBtn = ssdActButton({
+      label: brandNameForEndpoint(item.endpoint),
+      trail: FIND_EXT_SVG,
+      title: tc("在源站打开这条场景", "Open this scene on the source"),
+      on: function () { handleOpenInBox(item); },
+    });
     openBtn.setAttribute("data-ssd-open-btn", "");
-    openBtn.onclick = function () { handleOpenInBox(item); };
     btnRow.appendChild(openBtn);
 
-    var searchBtn = document.createElement("button");
-    searchBtn.type = "button";
-    searchBtn.className = "ssd-btn ssd-btn-accent ssd-btn-lg";
-    searchBtn.textContent = tc("搜索资源", "Search Resources");
-    searchBtn.onclick = function () { handleSearchResources(item, searchBtn); };
+    var searchBtn = ssdActButton({
+      tone: "tonal",
+      icon: ACT_FIND_SVG,
+      label: tc("搜索资源", "Search Resources"),
+      title: tc("用番号/标题在 Jackett 里搜资源", "Search Jackett by code/title"),
+      on: function () { handleSearchResources(item, searchBtn); },
+    });
     btnRow.appendChild(searchBtn);
 
     // 忽略（§C8）：主按钮区最右，二次点击确认。图标 + 文字并存 —— 三个大按钮
     // 旁边一个纯图标认不出来；arm 态把文字换成「确认忽略？」才不至于误按。
-    var banBtn = document.createElement("button");
-    banBtn.type = "button";
-    banBtn.className = "ssd-btn ssd-btn-ghost ssd-btn-lg ssd-ban-btn";
-    banBtn.innerHTML = SSD_ICON_BAN + '<span class="ssd-ban-label">' + tc("忽略", "Ignore") + "</span>";
-    banBtn.title = tc("从发现页忽略这条（设置 → 已忽略管理 可恢复）",
-                      "Ignore this scene (restore under Settings → Ignored)");
-    banBtn.setAttribute("aria-label", tc("忽略这条场景", "Ignore this scene"));
-    banBtn.onclick = function () { toggleIgnoreScene(item, banBtn); };
+    // 外观与「演员详情弹层」的忽略按钮同源（用户 2026-10-30）。
+    var banBtn = ssdBanButton({
+      label: tc("忽略", "Ignore"),
+      title: tc("从发现页忽略这条（设置 → 已忽略管理 可恢复）", "Ignore this scene (restore under Settings → Ignored)"),
+      aria: tc("忽略这条场景", "Ignore this scene"),
+      onConfirm: function () { toggleIgnoreScene(item); },
+    });
     btnRow.appendChild(banBtn);
 
     actionSection.appendChild(btnRow);
@@ -4704,11 +4886,8 @@
   function updateOpenButtonLabel(item) {
     var btn = document.querySelector("[data-ssd-open-btn]");
     if (!btn) return;
-    var brand = brandNameForEndpoint(item.endpoint);
-    // textContent wipes any children, so the trailing glyph has to be rebuilt
-    // every time the label changes (otherwise the icon is silently dropped)
-    btn.textContent = brand;
-    appendExtIcon(btn);
+    // 只换文案层：外链图标是单独一层 span，不会被 textContent 抹掉
+    setActLabel(btn, brandNameForEndpoint(item.endpoint));
   }
 
   // ─── DMM gallery screenshot probing ──────────────────────────────────────
@@ -5336,27 +5515,15 @@
 
   // ─── Action: ignore one scene (§C8 / §5.2) ───────────────────────────────
 
-  function toggleIgnoreScene(item, btn) {
-    if (!SSD.dpIgnore) return;
-    var label = btn.querySelector(".ssd-ban-label");
-    if (btn.getAttribute("data-ssd-armed") !== "1") {
-      btn.setAttribute("data-ssd-armed", "1");
-      btn.classList.add("ssd-btn-danger");
-      if (label) label.textContent = tc("确认忽略？", "Confirm?");
-      clearTimeout(btn._ssdArmTimer);
-      btn._ssdArmTimer = setTimeout(function () {
-        if (!btn.isConnected) return;
-        btn.removeAttribute("data-ssd-armed");
-        btn.classList.remove("ssd-btn-danger");
-        if (label) label.textContent = tc("忽略", "Ignore");
-      }, 4000);
+  function toggleIgnoreScene(item) {
+    if (!SSD.dpIgnore) return;   // 进退业务逻辑：二次确认交给 ssdBanButton
+    // 已在忽略列表里（「临时查看已忽略」下点开卡片才会走到）：重复忽略是幂等的，
+    // 但撤销会把更早那次决策一起删掉，所以这里直接不动作（用户 2026-10-30）
+    if (isItemIgnored(item)) {
+      closeModal();
+      SSD.toast(tc("已在忽略列表里", "Already in the ignore list"), { duration: 4000 });
       return;
     }
-    clearTimeout(btn._ssdArmTimer);
-    btn.removeAttribute("data-ssd-armed");
-    btn.classList.remove("ssd-btn-danger");
-    if (label) label.textContent = tc("忽略", "Ignore");
-
     var r = SSD.dpIgnore.ignoreScene(item);
     var sc = item.scene || {};
     var name = sc.title || sc.code || String(sc.id);
@@ -5374,9 +5541,8 @@
       // 发现页：卡片由页面重绘（filterPipeline 会再跑一遍）
       try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
     } else {
-      // 演员页发现 tab：直接从内存列表摘掉并重绘当前页
-      var idx = _state.cachedMissing.indexOf(item);
-      if (idx !== -1) _state.cachedMissing.splice(idx, 1);
+      // 演员页发现 tab：卡片留着，靠 getFilteredMissing 的过滤器隐藏 —— 这样
+      // 「临时查看已忽略」还能把它拿回来（用户 2026-10-30）
       renderTabContent();
     }
 
@@ -5484,15 +5650,17 @@
 
   function handleSaveScene(item, btn) {
     var sc = _state.modalDetail ? _state.modalDetail.scene : item.scene;
-    var label = btn.textContent;
+    // 只记住文案层，图标留着（按钮已换成 ssd-dp-btn：图标 + 文案两层）
+    var lbl = btn.querySelector("[data-ssd-lbl]");
+    var label = lbl ? lbl.textContent : btn.textContent;
     btn.disabled = true;
-    btn.textContent = tc("准备中…", "Preparing…");
+    setActLabel(btn, tc("准备中…", "Preparing…"));
     planSceneImport(item, sc).then(function (draft) {
-      if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+      if (btn.isConnected) { btn.disabled = false; setActLabel(btn, label); }
       openSceneImportDialog(draft, btn);
     }).catch(function (e) {
       console.error("[SSD] import plan failed:", e);
-      if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+      if (btn.isConnected) { btn.disabled = false; setActLabel(btn, label); }
       showModalNotice(tc("读取本地库失败：", "Could not read the library: ") +
         (e && e.message ? e.message : String(e)), "error");
     });
@@ -5980,6 +6148,50 @@
     "waist_size hip_size career_start_year career_end_year ethnicity hair_color eye_color " +
     "tattoos{location description} piercings{location description}}}";
 
+  // 详情只拉一次、两处共用（用户 2026-10-30）：演员弹层以前拉子集（性别/年龄/
+  // 别名/国籍/头像 ≈2.2KB），点「加入库」再拉全字段（≈4.3KB）——重复了一整份
+  // name/aliases/images/gender/country/birth_date，且第二次要等一个往返。
+  // 改成一律走全字段 + 内存缓存：入库预览变成零请求即时出，重开同一个演员也不再拉。
+  // TTL 10 分钟——源上的档案不会在这段时间里改到你正在看的那一笔上。
+  var BOX_PERF_DETAIL_TTL_MS = 10 * 60 * 1000;
+  var BOX_PERF_DETAIL_MAX = 64;              // 条目上限，防反复浏览把内存撑起来
+  var _boxPerfDetail = Object.create(null);  // "endpoint|stashId" → {at, p}
+  var _boxPerfInflight = Object.create(null);
+
+  function boxPerfCacheTrim() {
+    var keys = Object.keys(_boxPerfDetail);
+    if (keys.length <= BOX_PERF_DETAIL_MAX) return;
+    keys.sort(function (a, b) { return (_boxPerfDetail[a].at || 0) - (_boxPerfDetail[b].at || 0); });
+    keys.slice(0, keys.length - BOX_PERF_DETAIL_MAX).forEach(function (k) { delete _boxPerfDetail[k]; });
+  }
+
+  // 失败一律降级为 null（不写缓存）：调用方原本就有各自的兜底——弹层不显示这几行
+  // 标签，入库弹窗退成「只有名字 + 源编号」的最小档案。
+  function boxPerfDetail(endpoint, apiKey, stashId, timeoutMs) {
+    var key = String(endpoint || "") + "|" + String(stashId || "");
+    var hit = _boxPerfDetail[key];
+    if (hit && Date.now() - hit.at < BOX_PERF_DETAIL_TTL_MS) return Promise.resolve(hit.p);
+    if (_boxPerfInflight[key]) return _boxPerfInflight[key];
+    var id = key.slice(key.indexOf("|") + 1);
+    var p = callBoxGQL(endpoint, apiKey, BOX_PERF_DETAIL_QUERY, { id: id }, timeoutMs || 12000)
+      .then(function (r) {
+        var pf = (r && r.findPerformer) || null;
+        if (pf) { _boxPerfDetail[key] = { at: Date.now(), p: pf }; boxPerfCacheTrim(); }
+        return pf;
+      })
+      .catch(function (e) {
+        console.warn("[SSD] performer detail failed:", (e && e.message) || e);
+        return null;
+      });
+    // 并发的第二次调用共用同一条在途请求（弹层刚开就点「加入库」时很常见）。
+    // p 已在上面 catch 过，永远不会拒绝 → 派生出来的这条也不会，无需再兜。
+    _boxPerfInflight[key] = p.then(function (pf) {
+      delete _boxPerfInflight[key];
+      return pf;
+    });
+    return _boxPerfInflight[key];
+  }
+
   var PERF_FIELD_LABELS = {
     gender: ["性别", "Gender"],
     birthdate: ["生日", "Birthdate"],
@@ -6234,15 +6446,11 @@
     foot.appendChild(ok);
     panel.appendChild(foot);
 
+    // 详情先拉、再判定：第 3 步（别名）要用源侧的 aliases。
+    // 演员弹层开过的话这里走缓存（10 分钟内零请求、不出现读取提示）。
     body.appendChild(panelNote(tc("正在从源上读取字段…", "Reading fields from the source…"), true, false));
 
-    // 详情先拉、再判定：第 3 步（别名）要用源侧的 aliases
-    callBoxGQL(endpoint, opts.apiKey, BOX_PERF_DETAIL_QUERY, { id: stashId }, 12000)
-      .then(function (r) { return (r && r.findPerformer) || null; })
-      .catch(function (e) {
-        console.warn("[SSD] performer detail failed:", (e && e.message) || e);
-        return null;
-      })
+    boxPerfDetail(endpoint, opts.apiKey, stashId, 12000)
       .then(function (p) {
         if (!_impEl) return;
         var full = p || { id: stashId, name: opts.name || "" };
@@ -6574,7 +6782,7 @@
 
     var goBtn = document.createElement("button");
     goBtn.type = "button";
-    goBtn.className = "ssd-btn ssd-btn-accent ssd-btn-sm";
+    goBtn.className = "ssd-dp-btn primary";
     goBtn.textContent = tc("搜索", "Search");
 
     function submit() {
@@ -6593,13 +6801,31 @@
     section.appendChild(bar);
   }
 
+  // 滚动容器是 .ssd-modal-body，不是 .ssd-modal（后者 overflow:hidden，
+  // scrollHeight 恒等于 clientHeight，滚它等于没滚）。
+  function modalBody() {
+    return document.querySelector(".ssd-modal .ssd-modal-body");
+  }
+
   // Smooth-scroll the modal to its bottom so the search status/results are
   // visible (the search section sits at the end of the modal).
   function scrollModalToBottom() {
-    var modalEl = document.querySelector(".ssd-modal");
-    if (!modalEl) return;
-    try { modalEl.scrollTo({ top: modalEl.scrollHeight, behavior: "smooth" }); }
-    catch (e) { modalEl.scrollTop = modalEl.scrollHeight; }
+    var body = modalBody();
+    if (!body) return;
+    try { body.scrollTo({ top: body.scrollHeight, behavior: "smooth" }); }
+    catch (e) { body.scrollTop = body.scrollHeight; }
+  }
+
+  // 结果渲染出来比那行「搜索中…」高一个数量级，滚动位置却还停在旧底部，
+  // 视口会落在列表中间。这里把结果抬头对齐到可视区顶部。
+  function scrollResultsToTop(section) {
+    var body = modalBody();
+    if (!body || !section) return;
+    var anchor = section.querySelector(".ssd-search-header") || section;
+    var delta = anchor.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    var top = body.scrollTop + delta - 8;
+    try { body.scrollTo({ top: top, behavior: "smooth" }); }
+    catch (e) { body.scrollTop = top; }
   }
 
   function doSearchResources(section, item, btn, query) {
@@ -6614,7 +6840,7 @@
     results.innerHTML = "";
 
     btn.disabled = true;
-    btn.textContent = tc("搜索中...", "Searching...");
+    setActLabel(btn, tc("搜索中...", "Searching..."));
     var loading = document.createElement("div");
     loading.className = "ssd-search-loading";
     loading.textContent = tc("正在通过 Jackett 搜索: ", "Searching via Jackett: ") + query;
@@ -6623,9 +6849,8 @@
 
     runPluginOp({ mode: "search", query: query }).then(function (result) {
       btn.disabled = false;
-      btn.textContent = tc("搜索资源", "Search Resources");
-      // No re-scroll: results render in place of the loading line, so the
-      // viewport already shows the result header and first entries
+      setActLabel(btn, tc("搜索资源", "Search Resources"));
+      // 结果渲染完由 renderSearchPage 统一把抬头对齐到可视区（见 scrollResultsToTop）
       // 排序要用实际下发的搜索词；后端老版本没回 query 时用本次的兜底
       var payload = result || {};
       if (!payload.query) payload.query = query;
@@ -6633,7 +6858,7 @@
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
       btn.disabled = false;
-      btn.textContent = tc("搜索资源", "Search Resources");
+      setActLabel(btn, tc("搜索资源", "Search Resources"));
       results.innerHTML = "";
       var err = document.createElement("div");
       err.className = "ssd-search-error";
@@ -6798,7 +7023,7 @@
           "Plus " + _searchLow.length + " results with a weak title match (sorted by match)")));
       var lowBtn = document.createElement("button");
       lowBtn.type = "button";
-      lowBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-sm";
+      lowBtn.className = "ssd-dp-btn ghost sm";
       lowBtn.textContent = tc("显示", "Show");
       lowBtn.onclick = function () {
         _searchResults = _searchResults.concat(_searchLow);
@@ -6837,7 +7062,7 @@
 
       var prevBtn = document.createElement("button");
       prevBtn.type = "button";
-      prevBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-sm";
+      prevBtn.className = "ssd-dp-btn ghost sm";
       prevBtn.textContent = "← " + tc("上一页", "Prev");
       prevBtn.disabled = _searchPage <= 1;
       prevBtn.onclick = function () {
@@ -6854,7 +7079,7 @@
 
       var nextBtn = document.createElement("button");
       nextBtn.type = "button";
-      nextBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-sm";
+      nextBtn.className = "ssd-dp-btn ghost sm";
       nextBtn.textContent = tc("下一页", "Next") + " →";
       nextBtn.disabled = _searchPage >= totalPages;
       nextBtn.onclick = function () {
@@ -6865,6 +7090,8 @@
 
       section.appendChild(pager);
     }
+
+    scrollResultsToTop(section);
   }
 
   function buildSearchResultItem(res) {
@@ -6880,12 +7107,21 @@
     info.appendChild(title);
     var meta = document.createElement("div");
     meta.className = "ssd-search-item-meta";
+    // 来源索引器（Jackett 聚合结果里的出处）。后端老版本没有 indexer，
+    // 退回 tracker 属性；两者都没有就不留空壳节点。
+    var srcName = res.indexer || res.tracker || "";
+    if (srcName) {
+      var src = document.createElement("span");
+      src.className = "ssd-search-item-indexer";
+      src.textContent = srcName;
+      src.title = srcName;
+      meta.appendChild(src);
+    }
     var metaParts = [];
     if (res.size_human) metaParts.push(res.size_human);
     if (res.seeders >= 0) metaParts.push(tc("种子", "S") + ": " + res.seeders);
     if (res.leechers >= 0) metaParts.push(tc("下载", "L") + ": " + res.leechers);
-    if (res.tracker) metaParts.push(res.tracker);
-    meta.textContent = metaParts.join(" · ");
+    meta.appendChild(document.createTextNode(metaParts.join(" · ")));
     info.appendChild(meta);
     row.appendChild(info);
 
@@ -6895,15 +7131,15 @@
     if (res.magnet) {
       var copyBtn = document.createElement("button");
       copyBtn.type = "button";
-      copyBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-sm";
+      copyBtn.className = "ssd-dp-btn ghost sm";
       copyBtn.textContent = tc("复制磁力", "Copy Magnet");
       copyBtn.onclick = function () {
         navigator.clipboard.writeText(res.magnet).then(function () {
           copyBtn.textContent = tc("已复制 ✓", "Copied ✓");
-          copyBtn.classList.add("ssd-btn-success");
+          copyBtn.classList.add("ok");
           setTimeout(function () {
             copyBtn.textContent = tc("复制磁力", "Copy Magnet");
-            copyBtn.classList.remove("ssd-btn-success");
+            copyBtn.classList.remove("ok");
           }, 2000);
         }).catch(function () {
           var ta = document.createElement("textarea");
@@ -6922,7 +7158,7 @@
       openLinkBtn.href = res.link;
       openLinkBtn.target = "_blank";
       openLinkBtn.rel = "noopener noreferrer";
-      openLinkBtn.className = "ssd-btn ssd-btn-secondary ssd-btn-sm";
+      openLinkBtn.className = "ssd-dp-btn ghost sm";
       openLinkBtn.textContent = tc("打开链接", "Open Link");
       actions.appendChild(openLinkBtn);
     }
@@ -6930,27 +7166,27 @@
     if (res.magnet) {
       var pushBtn = document.createElement("button");
       pushBtn.type = "button";
-      pushBtn.className = "ssd-btn ssd-btn-accent ssd-btn-sm";
+      pushBtn.className = "ssd-dp-btn tonal sm";
       pushBtn.textContent = tc("推送下载", "Push to DL");
       pushBtn.onclick = function () {
         pushBtn.disabled = true;
         pushBtn.textContent = tc("推送中...", "Pushing...");
         runPluginOp({ mode: "push_download", magnet: res.magnet }).then(function () {
           pushBtn.textContent = tc("已推送 ✓", "Pushed ✓");
-          pushBtn.classList.add("ssd-btn-success");
+          pushBtn.classList.add("ok");
           setTimeout(function () {
             pushBtn.disabled = false;
             pushBtn.textContent = tc("推送下载", "Push to DL");
-            pushBtn.classList.remove("ssd-btn-success");
+            pushBtn.classList.remove("ok");
           }, 2500);
         }).catch(function (e) {
           pushBtn.disabled = false;
           pushBtn.textContent = tc("推送失败", "Failed");
-          pushBtn.classList.add("ssd-btn-danger");
+          pushBtn.classList.add("err");
           showModalNotice(tc("推送失败: ", "Push failed: ") + (e.message || String(e)), "error");
           setTimeout(function () {
             pushBtn.textContent = tc("推送下载", "Push to DL");
-            pushBtn.classList.remove("ssd-btn-danger");
+            pushBtn.classList.remove("err");
           }, 3000);
         });
       };
@@ -7612,6 +7848,10 @@
     // internal URL builder (respects sub-path deployments — see appUrl)
     appUrl: appUrl,
     callBoxGQL: callBoxGQL,
+    // box 演员详情：弹层与入库共用一次请求（见 BOX_PERF_DETAIL_QUERY 处注释）
+    boxPerfDetail: boxPerfDetail,
+    // 两处「忽略」按钮共用的外观（场景详情弹窗 / 演员详情弹层）
+    banButton: ssdBanButton,
     // TPDB REST fallback（列表接口故障）
     callBoxSceneList: callBoxSceneList,
     callBoxPerformerList: callBoxPerformerList,

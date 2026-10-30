@@ -108,21 +108,11 @@
 .ssd-btn-success { background: var(--ssd-success) !important; color: #fff; }
 .ssd-btn-danger { background: var(--ssd-danger) !important; color: #fff; }
 
-/* 单条忽略（§C8）：主按钮区最右。低调到不抢主按钮，但 hover/armed 立刻变红 */
-.ssd-ban-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: 1px solid var(--ssd-modal-border);
-  color: inherit;
-  opacity: 0.82;
-  font-weight: 500;
-  text-shadow: none;
-}
-.ssd-ban-btn:hover:not(:disabled) { border-color: var(--ssd-danger); color: var(--ssd-danger); opacity: 1; }
-.ssd-ban-btn svg { display: block; width: 12px; height: 12px; flex: none; }
-.ssd-ban-btn .ssd-ban-label { white-space: nowrap; }
+/* 单条忽略（§C8）：外观已迁到 discover.js 那颗「忽略」用的同一组类
+   （.ssd-dp-btn solid ssd-dp-banbtn），由 stashDiscover.js 的 ssdBanButton()
+   统一生成 —— 场景详情弹窗与演员详情弹层不再各有一份 CSS。
+   注意：场景详情弹窗挂在 body 上，不在 .ssd-dp-page 里，所以 discover.js
+   的 suite 主题作用域必须带上 .ssd-modal，否则这里拿不到 --sx-* token。 */
 
 /* 撤销 toast（§5.2）：固定在底部居中，4 秒自动消失；层级高于弹窗(100000) */
 .ssd-toast {
@@ -702,6 +692,12 @@
   top: auto;
   bottom: 6px;
 }
+/* 多选态：勾选圈固定在左上 8px 处（24px 见方），角标默认也落在 6px ——
+   两块完全重叠，谁压谁都看不清。让角标整体让到勾选圈下方。
+   底部模式（data-badge-pos="bl"）本来就不撞，不动。 */
+.ssd-dp-page.is-selecting:not([data-badge-pos="bl"]) .ssd-badges {
+  top: 38px;
+}
 /* 进了容器的角标不再各自定位（static 会忽略 top/left/right/bottom） */
 .ssd-dp-page .ssd-badges > *,
 .ssd-dp-modal-scenes .ssd-badges > * {
@@ -882,6 +878,24 @@
   color: var(--ssd-modal-text) !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+  /* 弹窗挂在 body 上，不在 .ssd-dp-page 里。discover.js 的 suiteTheme() 注入
+     scope 已含 .ssd-modal（同特异性，注入的 <style> 在 head 末尾 → 会覆盖这
+     里），所以下面只是「发现页没启用 / 首帧注入还没跑」时的兜底：值取 flexoki
+     暗色，与弹窗自身的深色底一致，不至于按钮掉成透明或黑字。 */
+  --sx-ui: #282726;
+  --sx-ui2: #343331;
+  --sx-ui3: #403E3C;
+  --sx-edge: #48463F;
+  --sx-tx: #CECDC3;
+  --sx-tx2: #878580;
+  --sx-hi: #E6E4D9;
+  --sx-acc: #DA702C;
+  --sx-acc-d: #BC5215;
+  --sx-acc-tx: #100F0F;
+  --sx-gr: #879A39;
+  --sx-re: #D14D41;
+  --sx-re-d: #AF3029;
+  --sx-re-tx: #E8705F;
 }
 /* 内容内层滚动：关闭按钮悬浮在弹窗右上角，不随内容滚出视野
    （与 .ssd-dp-modal-body 同构 — 用户 2026-10-27） */
@@ -1001,12 +1015,18 @@
   line-height: 1.4;
 }
 
-/* Action row */
-.ssd-action-row {
+/* Action row（场景详情弹窗，用户 2026-10-30）：按钮本体走 discover 那套
+   .ssd-dp-btn（primary / 描边 / tonal / solid），这里只管排布 —— 圆角、字号、
+   间距、hover 与「演员详情弹层」「已忽略管理」完全同源。 */
+.ssd-modal-acts {
   display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
+/* 按钮内的图标层 / 文案层：状态切换只改文案，图标留着 */
+.ssd-dp-bico { display: inline-flex; align-items: center; }
+.ssd-dp-bico-trail { margin-left: -1px; }
 
 /* Meta grid */
 .ssd-meta-grid {
@@ -1121,9 +1141,11 @@
   margin-bottom: 12px;
 }
 .ssd-search-bar .clearable-input-group { flex: 1; min-width: 0; margin-bottom: 0; }
-.ssd-search-bar .form-control { font-size: 13px; }
-/* Follow the input's height (overrides .ssd-btn-sm's fixed 22px) */
-.ssd-search-bar .ssd-btn { align-self: stretch; height: auto; font-size: 13px; padding: 0 14px; }
+/* 圆角跟按钮统一（原生 .form-control 是 4px，紧挨 8px 圆角的按钮会显得一硬一软） */
+.ssd-search-bar .form-control { font-size: 13px; border-radius: 8px; }
+/* Follow the input's height (overrides .ssd-btn-sm / .ssd-dp-btn.sm 的固定高度) */
+.ssd-search-bar .ssd-btn,
+.ssd-search-bar .ssd-dp-btn { align-self: stretch; height: auto; font-size: 13px; padding: 0 14px; }
 .ssd-search-header {
   font-size: 14px;
   font-weight: 600;
@@ -1189,8 +1211,27 @@
   margin-bottom: 2px;
 }
 .ssd-search-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--ssd-modal-muted);
+}
+/* 每条结果的来源索引器。行底色是写死的深灰，所以这里用中性半透明，
+   不跟 --sx-* 走，否则浅色主题下会翻成亮块压在深底上 */
+.ssd-search-item-indexer {
+  max-width: 190px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #cfcfcf;
+  font-size: 10px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ssd-search-item-actions {
   display: flex;
@@ -1330,7 +1371,10 @@
     max-height: 100vh !important;
   }
   .ssd-carousel-hero { max-height: 280px; }
-  .ssd-action-row .ssd-btn { flex: 1; }
+  /* 窄屏：四颗按 2×2 铺开。挤成一行会短到「搜索资源」贴边，放开又会
+     剩一颗半宽的忽略挂在末尾 —— 网格最稳，换中英文案都不破。 */
+  .ssd-modal-acts { display: grid; grid-template-columns: 1fr 1fr; }
+  .ssd-modal-acts .ssd-dp-btn { justify-content: center; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2134,6 +2178,9 @@
   top: 0;
   right: 8px;
   transform: translateY(-50%);
+  /* 15 > 选中态描边(13) 与勾选圈(14)：徽章一半露在卡外、另一半压着卡的上边框，
+     描边若在上层会从徽章文字中间划一道蓝线（用户 2026-10-30） */
+  z-index: 15;
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 10.5px;
@@ -2217,6 +2264,38 @@
   font-size: 10.5px;
   font-weight: 700;
   pointer-events: none;
+}
+/* 「已忽略」角标：只在演员页发现 tab 的「临时查看已忽略」里出现。
+   top-left 与「预告」撞位 —— 已忽略的片多半也不该再被当预告推，但信息不丢更好，
+   所以让被它挡在后面的预告角标整体下移一行，两个角标都露出来。
+   颜色写死 rgba：演员 tab 不在 suiteTheme 的注入作用域里（--sx-* 为空，
+   color-mix 会整条失效只剩白字），与相邻的 .ssd-overlay-box / -preview 同处理。 */
+.ssd-overlay-ignored {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 10;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(209, 77, 65, 0.94);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.ssd-overlay-ignored ~ .ssd-overlay-preview { top: 2.45rem; }
+/* 列表模式下同一个标记（行里没有封面角标，挂在标题文字尾巴上） */
+.ssd-row-ignored {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(209, 77, 65, 0.94);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+  white-space: nowrap;
 }
 /* ⚠️ 卡片里的 `filter: blur(30px)`（封面）/ `blur(2px)`（标题、描述、工作室链接）
    不是占位残留，是 sfwswitch（社区插件「Blur NSFW images and unblur on mouse over」）
@@ -2688,6 +2767,24 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   color: #fff;
 }
 .ssd-dp-btn.solid.danger .ssd-dp-banico { color: #fff; }
+
+/* token 缺失兜底（用户 2026-10-30）：这颗按钮也会出现在没加载 discover.js 的
+   环境里 —— 「发现页」硬开关关闭时 discover.js 根本不注入，--sx-* token 就没人
+   写，而演员页发现 tab 照样能打开场景详情弹窗。此时上面的 var(--sx-*) 全部
+   无效，按钮会退化成「透明底 + 继承字色」（看着像没做好）。
+   这里把两态的底色自带兜底值，token 在时取 token，不在时取深色方案的目标值。
+   优先级要过 .ssd-dp-btn.solid(0,2,0) / .solid:hover(0,3,0) / .solid.danger(0,3,0)，
+   所以用两条更长的选择器（0,3,0 与 0,4,0）。 */
+.ssd-dp-btn.solid.ssd-dp-banbtn {
+  background: var(--sx-ui3, #403e3c);
+  border-color: var(--sx-ui3, #403e3c);
+  color: var(--sx-hi, #e6e4d9);
+}
+.ssd-dp-btn.solid.ssd-dp-banbtn.danger {
+  background: var(--sx-re, #d14d41);
+  border-color: var(--sx-re, #d14d41);
+  color: #fff;
+}
 
 /* ═══ 已忽略管理（§7 / §7.1）══════════════════════════════════════════════ */
 /* 一整行居中（用户 2026-10-29）：搜索 / 场景·演员 / 计数 / 按钮组作为一组
@@ -3798,6 +3895,9 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   color: var(--sx-tx2);
   cursor: pointer;
 }
+/* 图标尺寸跟工具栏里其它图标一致（15px）。之前为了「更像按钮」放大到 20px，
+   换了「三行带勾」图案后不需要了 —— 那一版的问题是方框勾留白太多显得像
+   未勾选项，不是尺寸问题（用户 2026-10-30）。 */
 .ssd-dp-selbtn svg { width: 15px; height: 15px; }
 .ssd-dp-selbtn:hover { color: var(--sx-hi); border-color: var(--sx-edge); }
 
@@ -3922,16 +4022,28 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
    由卡片上的拦截统一处理，否则两个热点会互相打架。 */
 .ssd-dp-page.is-selecting .scene-card { position: relative; cursor: pointer; }
 /* 整卡描边：勾选圈在缩略图上，深色封面上不够醒目，卡片轮廓是第二重提示。
-   outline 不占布局、也不会被内部图片盖住（inset box-shadow 会被子元素遮掉）。 */
-.ssd-dp-page.is-selecting .scene-card.is-sel {
-  outline: 2px solid var(--sx-acc);
-  outline-offset: -2px;
+   **不能用 outline / box-shadow**：两者都是元素自身绘制的，会被
+   `position: relative` 的封面区（.video-section）整块盖住 —— 只看得见文字区
+   那半圈（用户 2026-10-30 反馈）。改画在卡片最上层的伪元素上，z-index 同时
+   高于封面角标(9) 与未读红框(12)。
+   关注页未读红框（§3.4 `.ssd-card-new::after`）是同一套画法，实测三种画法的
+   对照见 stash-testkit/tests/stashDiscover/NOTES.md「卡片状态环」。 */
+
+.ssd-dp-page.is-selecting .scene-card.is-sel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  pointer-events: none;
+  border: 2px solid var(--sx-acc);
+  border-radius: inherit;
 }
 .ssd-dp-selbox {
   position: absolute;
   top: 8px;
   left: 8px;
-  z-index: 6;
+  /* 14 高于封面角标(9) 与未读红框(12)：工作室徽章这类角标以前压在这颗勾选圈上面 */
+  z-index: 14;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -3954,9 +4066,15 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 /* 演员小卡也能进多选（用户 2026-10-29）：总览里场景与演员是两种卡，样式
    作用域都在这条 .is-selecting 下，勾选圈统一用 .ssd-dp-selbox。 */
 .ssd-dp-page.is-selecting .ssd-dp-mini { cursor: pointer; }
-.ssd-dp-page.is-selecting .ssd-dp-mini.is-sel {
-  outline: 2px solid var(--sx-acc);
-  outline-offset: -2px;
+/* 同场景卡：outline 会被卡内的定位子元素盖住，画到伪元素上 */
+.ssd-dp-page.is-selecting .ssd-dp-mini.is-sel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  pointer-events: none;
+  border: 2px solid var(--sx-acc);
+  border-radius: inherit;
 }
 .ssd-dp-page.is-selecting .ssd-dp-mini .ssd-dp-selbox {
   top: 4px;
@@ -4021,6 +4139,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   height: 33px;
   padding: 0;
 }
+/* 入口图标与工具栏其它图标同尺寸（15px）。换「三行带勾」后不再需要放大 ——
+   原方框勾的毛病是留白太散，不是太小（用户 2026-10-30）。 */
 .ssd-tabsel-btn svg { width: 15px; height: 15px; }
 /* 纯图标按钮（退出 × / 全选）给同一宽度：不写的话 × 是 32、全选是 22，
    一排图标按钮宽窄不一（用户 2026-10-29）。 */
@@ -4086,9 +4206,14 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   position: relative;
   cursor: pointer;
 }
-/* 用 box-shadow 而不是 outline：这一页的 .scene-card 上有一条 outline:none
-   之类的原生规则，outline 简写会在变量缺失/被覆盖时整条失效 */
-.ssd-tab-pane.is-selecting .scene-card.is-sel {
-  box-shadow: 0 0 0 2px var(--ssd-sel-acc), 0 0 0 4px rgba(59, 130, 246, 0.3);
+/* 同样不能靠 box-shadow：外圈那 2px 会被卡内封面盖掉一半（同场景卡） */
+.ssd-tab-pane.is-selecting .scene-card.is-sel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 13;
+  pointer-events: none;
+  border: 2px solid var(--ssd-sel-acc);
+  border-radius: inherit;
 }
 .ssd-tab-pane.is-selecting .ssd-scene-table tbody tr { cursor: pointer; }

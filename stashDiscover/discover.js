@@ -252,9 +252,11 @@
 
   // 发现页所有自绘元素都在 .ssd-dp-page 下；导航按钮与角标在 MainNavBar 里
   // （P1 注入），主题 token 通过 scope 覆盖到两处。
+  // .ssd-modal 是场景详情弹窗（老 Modal，挂在 body 上）：它的「忽略」按钮要跟
+  // 演员弹层用同一套 token（用户 2026-10-30），所以一并纳入作用域。
   var THEME = suiteTheme({
     id: "ssd-dp",
-    scope: ".ssd-dp-page, .ssd-nav-item, .ssd-dp-modal",
+    scope: ".ssd-dp-page, .ssd-nav-item, .ssd-dp-modal, .ssd-modal",
   });
 
   // ═══ P2: 数据管线（设计文档 §4/§5，binge 已验证模式）═════════════════════
@@ -1473,11 +1475,16 @@
     // 筛选行收起后的「更多筛选」：两条滑杆，比漏斗更贴合「多个可调选项」的语义
     filter: sv('<circle cx="9" cy="7" r="2.5"/><path d="M3 7h3.5M11.5 7H21"/><circle cx="15" cy="17" r="2.5"/><path d="M3 17h9.5M17.5 17H21"/>'),
     check: sv('<path d="M20 6L9 17l-5-5"/>'),
-    // 多选：入口固定用「已勾选的复选框」（多选这个能力的标识，用户 2026-10-30），
-    // 全选按钮仍用 空盒 / 盒+勾 表示开关状态。和演员页「发现」tab 同一套图案。
+    // 多选两套图案（用户 2026-10-30）：入口 =「框里一支笔」的编辑图标，指的是
+    // 批量操作这个能力；全选 = 空盒 / 盒+勾，指的是开没开。入口不能画成勾选框
+    // —— 那会把「进多选」读成「已经全选」，而「三行带勾」又和右边的列表视图撞脸。
+    // 和演员页「发现」tab 同一套图案。
     select: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/>'),
     selectOn: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 12.3l3.2 3.2 5.8-6.4"/>'),
-    selToggle: sv('<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 12.3l3.2 3.2 5.8-6.4"/>'),
+    // 「笔 + 框」：框是「要操作的一屏卡片」，笔是「在上面做编辑」，两笔就够，
+    // 15px 下仍认得出（细部太多会糊成一团）
+    selToggle: sv('<path d="M12.5 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6.5"/>' +
+      '<path d="M17.6 3.6l2.8 2.8L11.6 15l-3.7.9.9-3.7z"/>'),
     // ← / × 这类纯图标按钮用 svg 而不是文字 &times;：文字字号撑不满 15px，
     // 和旁边的 svg 图标并排时明显小一圈（用户 2026-10-30）
     close: sv('<path d="M4.5 4.5l15 15M19.5 4.5l-15 15"/>'),
@@ -1979,10 +1986,11 @@
   function batchIgnoreSelected() {
     var items = _dp.sel.items.slice();
     if (!items.length || !SSD.dpIgnore) return;
-    var sceneKeys = [], perfKeys = [], dropped = 0, failed = 0;
+    var sceneKeys = [], perfKeys = [], dropped = 0, failed = 0, already = 0;
     items.forEach(function (it) {
       if (selKind(it) === "performer") {
         var p = it.performer || {};
+        if (SSD.dpIgnore.isPerformerIgnored(it.endpoint, p.stashId)) { already++; return; }
         var rp = SSD.dpIgnore.ignorePerformer({
           endpoint: it.endpoint, stashId: p.stashId, name: p.name, image: p.image,
           aliases: p.aliases, country: p.country, birthdate: p.birthdate, gender: p.gender,
@@ -1990,6 +1998,7 @@
         if (rp && rp.ok) perfKeys.push(rp.key); else failed++;
         return;
       }
+      if (SSD.dpIgnore.isSceneIgnored(it.endpoint, it.scene && it.scene.id)) { already++; return; }
       var r = SSD.dpIgnore.ignoreScene(it);
       if (r && r.ok) { sceneKeys.push(r.key); dropped += r.dropped || 0; }
       else failed++;
@@ -1997,8 +2006,12 @@
     exitSel();
     try { window.dispatchEvent(new CustomEvent("ssd:ignore-changed")); } catch (_) {}
     if (!sceneKeys.length && !perfKeys.length) {
-      SSD.toast(tc("忽略失败：浏览器存储写不进去（可能已满）",
-        "Ignore failed: browser storage rejected the write"), { duration: 6000 });
+      // 选中的全是已忽略项：不是写失败，别报「存储写不进去」（用户 2026-10-30）
+      SSD.toast(already
+        ? tc("选中的 " + already + " 项都已在忽略列表里，无需重复忽略",
+             "Selected " + already + " items are already ignored")
+        : tc("忽略失败：浏览器存储写不进去（可能已满）",
+             "Ignore failed: browser storage rejected the write"), { duration: 6000 });
       return;
     }
     var parts = [];
@@ -2826,38 +2839,15 @@
   }
   // 忽略演员（§C3 / §6.1）：二次点击确认。忽略 = 从 stash-box 查询输入里摘掉
   // 这位演员（真不查，省流量）；记录进全局 ignore.v1，管理页可恢复。
-  var BAN_SVG = '<svg viewBox="0 0 512 512" fill="currentColor" aria-hidden="true">' +
-    '<path d="M367.2 412.5L99.5 144.8C77.1 176.1 64 214.5 64 256c0 106 86 192 192 192c41.5 0 79.9-13.1 111.2-35.5zm45.3-45.3C434.9 335.9 448 297.5 448 256c0-106-86-192-192-192c-41.5 0-79.9 13.1-111.2 35.5L412.5 367.2zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256z"/>' +
-    "</svg>";
+  // 外观由 stashDiscover.js 的 SSD.banButton() 生成（与场景详情弹窗同源）；
+  // 这里只留下二次点击之后要做的业务：入库/忽略/撤销/toast。
   function perfIgnoreButton(endpoint, p, after) {
-    // 实心（用户 2026-10-29）：详情页里「忽略」和「加入库」并排，之前一个实心
-    // 一个描边，看着像次要比主操作低一档；忽略是不可逆动作，不该显弱。
-    var btn = el("button", "ssd-dp-btn solid ssd-dp-banbtn",
-      '<span class="ssd-dp-banico">' + BAN_SVG + "</span><span>" + tc("忽略", "Ignore") + "</span>");
-    btn.type = "button";
-    btn.title = tc("忽略这位演员（设置 → 已忽略管理 可恢复）",
-                   "Ignore this performer (restore under Settings → Ignored)");
-    btn.setAttribute("aria-label", tc("忽略这位演员", "Ignore this performer"));
-    var isArmed = function () { return btn.getAttribute("data-armed") === "1"; };
-    var disarm = function () {
-      clearTimeout(btn._armT);
-      btn.removeAttribute("data-armed");
-      btn.classList.remove("danger");
-      var lab = btn.querySelector("span:last-child");
-      if (lab) lab.textContent = tc("忽略", "Ignore");
-    };
-    btn.addEventListener("click", function () {
-      if (!isArmed()) {
-        btn.setAttribute("data-armed", "1");
-        btn.classList.add("danger");
-        var lab = btn.querySelector("span:last-child");
-        if (lab) lab.textContent = tc("确认忽略？", "Confirm?");
-        clearTimeout(btn._armT);
-        btn._armT = setTimeout(function () { if (btn.isConnected) disarm(); }, 4000);
-        return;
-      }
-      disarm();
-      if (!SSD.dpIgnore) return;
+    return SSD.banButton({
+      label: tc("忽略", "Ignore"),
+      title: tc("忽略这位演员（设置 → 已忽略管理 可恢复）",
+                "Ignore this performer (restore under Settings → Ignored)"),
+      aria: tc("忽略这位演员", "Ignore this performer"),
+      onConfirm: function () {
       var r = SSD.dpIgnore.ignorePerformer({
         endpoint: endpoint, stashId: p.stashId, name: p.name, image: p.image, aliases: p.aliases,
         country: p.country, birthdate: p.birthdate, gender: p.gender,
@@ -2876,8 +2866,8 @@
         },
       });
       if (typeof after === "function") after();
+      },
     });
-    return btn;
   }
 
   function openPerfModal(p) {
@@ -2977,12 +2967,10 @@
       if (e.key === "Escape") { closePerfModal(); document.removeEventListener("keydown", onEsc); }
     });
 
-    // 演员详情补全（性别/年龄/别名/国籍/头像）：box findPerformer
-    SSD.callBoxGQL(endpoint, apiKey,
-      "query($id:ID!){findPerformer(id:$id){id name gender birth_date country aliases images{url}}}",
-      { id: p.stashId }, BOX_TIMEOUT).then(function (r) {
+    // 演员详情补全（性别/年龄/别名/国籍/头像）：走共享的 box 详情查询，
+    // 结果顺带被「加入库」复用 —— 点入库时不再二次请求（用户 2026-10-30）
+    SSD.boxPerfDetail(endpoint, apiKey, p.stashId, BOX_TIMEOUT).then(function (pf) {
         if (!_dpModal) return;
-        var pf = r && r.findPerformer;
         fillPerfDetail(h, pf);
         // 头像翻页：stash-box 头像常有多张，箭头贴在头像左右外侧
         if (pf && pf.images && pf.images.length) avatarPager = buildAvatarPager(h, pf.images);
@@ -4893,15 +4881,6 @@
     // 再加多选按钮就会掉进收起态，删文字后余量 125px+。配套不能省：下拉的
     // 当前值本身就是标签（「发布日期 ↓」= 排序，「StashDB」= 数据源），但要补
     // aria-label/title 给读屏与 hover —— 否则删了就是信息空洞。
-    // 多选入口（§13.4 删掉文字标签后余 145px，这个 34px 图标按钮放得下）。
-    // 进多选后它自己也被隐藏 —— 退出走工具栏里的 ×
-    refs.selBtn = el("button", "ssd-dp-selbtn", I.selToggle);
-    refs.selBtn.type = "button";
-    refs.selBtn.title = tc("多选", "Select");
-    refs.selBtn.setAttribute("aria-label", tc("多选", "Select"));
-    refs.selBtn.addEventListener("click", function () { enterSel(); });
-    tools.appendChild(refs.selBtn);
-
     refs.sort = document.createElement("select");
     refs.sort.title = tc("排序方式", "Sort by");
     refs.sort.setAttribute("aria-label", tc("排序方式", "Sort by"));
@@ -4938,6 +4917,17 @@
       render();
     });
     tools.appendChild(refs.perPage);
+
+    // 多选入口（§13.4 删掉文字标签后余 145px，这个 34px 图标按钮放得下）。
+    // 位置用户 2026-10-30 定：紧跟「24 / 页」右侧 —— 两者都是「这一屏怎么展示」，
+    // 而右边那颗视图切换是同一语义的延续。原先排在排序下拉之前，离得远且和
+    // 排序/分页两种语义混在一起。进多选后它自己也被隐藏 —— 退出走工具栏里的 ×
+    refs.selBtn = el("button", "ssd-dp-selbtn", I.selToggle);
+    refs.selBtn.type = "button";
+    refs.selBtn.title = tc("多选", "Select");
+    refs.selBtn.setAttribute("aria-label", tc("多选", "Select"));
+    refs.selBtn.addEventListener("click", function () { enterSel(); });
+    tools.appendChild(refs.selBtn);
 
     var vt = el("div", "ssd-dp-viewtoggle");
     var gBtn = el("button", null, I.grid), lBtn = el("button", null, I.list);

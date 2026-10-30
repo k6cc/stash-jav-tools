@@ -3,7 +3,7 @@
 // 跑法：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_mobile_stick.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_mobile_stick.js)" \
 //     --path / --settle 5 --vsize 390x844 --timeout 200
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

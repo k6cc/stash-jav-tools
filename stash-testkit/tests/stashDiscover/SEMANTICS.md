@@ -132,13 +132,33 @@ country/birthdate/gender`），每个都有明确的读取点（卡片 / 弹窗 
 导出顶层固定 `{version:1, exportedAt, trimmed, scenes, performers}`；`exportedAt` / `trimmed`
 只给人看，导入不读。回归跑 `probe_ign_export.js`（会临时清空记录、跑完还原）。
 
-## 发现页缓存只到「卡片级」，不等于详情（2026-10-30 核对）
+## 发现页缓存只到「卡片级」，不等于详情（2026-10-30 核对，v2.6.2 压缩过）
 
 - localStorage `SSD:dp:cache:<host>:<family>.v3`，family = newScenes / trending / studios。
-  12h 新鲜期（`CACHE_TTL_MS`），7 天 SWR 兜底，单族上限 4000 条 / 3.6M 字符（超了按 0.7 反复裁）。
+  12h 新鲜期（`CACHE_TTL_MS`），7 天 SWR 兜底，单族上限 4000 条 / 3.6M 字符（`CACHE_BUDGET_CHARS`，
+  超了按 0.7 反复裁到能写进去）。
 - 存的是**卡片投影**：id / title / code / release_date / duration / director、details（截 400 字）、
-  studio{id,name}、performers（去重成 id，索引只留 name + 首图）、tags[{name}]、
-  images（前 8 张）、urls（只留 url，没有 site 名）。
+  studio{id,name}、performers（去重成 id，`perfIndex` 只留 name + 首图）、**tags（下标数组）**、
+  images（**前 3 张**，`CACHE_IMAGES_PER_SCENE`）、urls（只留 url，没有 site 名）。
+- **tags 走「全源去重词典 + 下标」**（v2.6.2）：`tagDict: ["Masturbation", …]` 全源只写一次，
+  场景里只留 `tags:[0,1,2]`。原因：`[{name}]` 形态下每条 24 个 tag 是 528 字符，**名字本身只占
+  239，另 289 是每元素 12 字符的 `{"name":"…"},` 壳**。改完同一条 97 字符（stashdb），同一条
+  trending 缓存 60779 → 44808 字符（-26.3%）。**不升 `fmt`**：老条目 `tags[0]` 是对象、新条目是
+  数字，`hydrateCacheEntry` 靠「有没有 `tagDict`」判别两代 payload；还原成 `[{name}]` 后上层
+  （`planSceneImport` 等）一行都没改。`tagDict` **不做裁剪收窄**：词典才几十 KB，而 remap 下标
+  要给 `store` 存快照（`build()` 会被预算循环调多次），不值。
+- **`totalSeen` + 「缓存不完整」chip**：`cacheWrite` 把裁剪前条数写进 payload，读时
+  `scenes.length < totalSeen` 就判被裁。UI 在 `.ssd-dp-pcount` 旁挂 chip（title 写「只存下最新 N 部
+  （共拉到 M 部）」），点了走 `doRefresh()`。老条目没这字段 → 当完整。
+  **chip 文字用 `--sx-tx2` 而不是 `--ssd-warning`**：后者当文字色在浅色主题下对比度只有 2:1。
+- 场景详情弹窗**读**这份：一打开就用 `item.scene` 渲染详情区，所以不是空白转圈。
+  但入库要完整字段（完整简介、标签 id、演员档案、源链接站点），必须再拉一次 `findScene` ——
+  这是分层，不是重复。**场景详情不做短时缓存**（用户 2026-10-30 明确否掉），每次打开请求一次。
+- 演员侧是另一回事：`boxPerfDetail` 有 10 分钟缓存，因为弹层和入库预览要的是同一份全字段。
+- 刷新按钮 = `cacheInvalidate(host)` 删三族缓存 + `invalidateLocalMemos()` 清会话 memo +
+  `_dp.d/_dp.err/_dp.fetchedAt` 归零 + `ensureData(keys, true)` 绕过缓存重拉并覆盖写回。
+- 预算账（4000 条 × 3 图，按实测 20 部/源投影重算）：stashdb 1235 → 索引化后 788 字符/条；
+  javstash 801 → 726；TPDB 1306 → 1181（3 张图 561 字符是它的主因，仍超预算，暂不处理）。
 - 场景详情弹窗**读**这份：一打开就用 `item.scene` 渲染详情区，所以不是空白转圈。
   但入库要完整字段（完整简介、标签 id、演员档案、源链接站点），必须再拉一次 `findScene` ——
   这是分层，不是重复。**场景详情不做短时缓存**（用户 2026-10-30 明确否掉），每次打开请求一次。

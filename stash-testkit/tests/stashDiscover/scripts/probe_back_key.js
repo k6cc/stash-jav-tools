@@ -11,7 +11,7 @@
 // 跑法（需登录态，脚本会自己判断有没有垫层再按返回键，不会真退页）：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval --path /plugins/stashDiscover --settle 5 \
-//     "$(cat E:/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_back_key.js)"
+//     "$(cat E:/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_back_key.js)"
 //
 // 覆盖 7 个弹窗；缺数据的段会跳过并在结果里标 no-data。
 // D/E 要先造忽略记录：先跑 seed_ign_test.js。

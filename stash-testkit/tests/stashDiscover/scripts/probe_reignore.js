@@ -7,7 +7,7 @@
 // 跑法：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_reignore.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_reignore.js)" \
 //     --path / --settle 5 --timeout 180
 // 会真的写忽略记录，结束时按前后差集删掉（不碰用户原有记录）。
 (async () => {

@@ -46,7 +46,7 @@
 
 ## 测试工具集（stash-testkit/）
 
-插件开发/验证用的本地 Stash 实例测试工具集，**不随插件发布**。AI 做插件测试时入口是 `stash-testkit/INVENTORY.md`（任务→脚本映射表 + 硬约束 top5），流程细节与硬约束清单在 `stash-testkit/README.md`，业务语义深查在 `tests/<plugin>/`（入口是该目录的 `NOTES.md`，只放文件地图与路由，正文按用途分文件），历史结论在 `_archive/`。
+插件开发/验证用的本地 Stash 实例测试工具集，**不随插件发布**。AI 做插件测试时入口是 `stash-testkit/INVENTORY.md`（任务→脚本映射表 + 硬约束 top5），流程细节与硬约束清单在 `stash-testkit/README.md`，业务语义深查在 `tests/<plugin>/`（入口是该目录的 `NOTES.md`，只放文件地图与路由，正文按用途分文件；脚本统一放该目录的 `scripts/`，索引见 `SCRIPTS.md`），历史结论在 `_archive/`。
 
 **用户说"沉淀本轮经验"时**，按 `stash-testkit/INVENTORY.md` 末尾的「沉淀规范」四步走：分流（新脚本→INVENTORY+README 索引 / 通用坑→README 硬约束 / 业务语义→子目录，入口 NOTES.md、正文按用途分文件 / 一次性结论→_archive/）→ 写作（操作导向、不重复、可执行）→ 反模式（不写设计辩护/流水账/已被脚本覆盖的人工步骤）→ 自检（两处索引同步、分类正确、无重复）。
 

@@ -175,3 +175,14 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
   否则读到的是 transition 起点的旧色）。
   `probe_banbtn_parity.js`、`probe_back_key.js`、`probe_import_dialog.js` 里的按钮选择器
   已从 `.ssd-modal .ssd-btn` 改成 `.ssd-modal .ssd-modal-acts > *`（旧选择器会找不到按钮）。
+
+## 缓存不完整提示（v2.6.2）
+
+预算裁条数原本是静默的（只 `console.warn`），用户看到的是「最新只到某天」。
+
+- 触发：`cacheRead` 发现 `scenes.length < totalSeen`（`totalSeen` 是 `cacheWrite` 裁剪前写进去的条数）。
+- 位置：计数行 `.ssd-dp-pcount` 右侧的小胶囊 `.ssd-dp-cachetrim`，文案「缓存不完整」/`Cache incomplete`，
+  `title` 写「只存下最新 N 部（共拉到 M 部）」。
+- 点击 = `doRefresh()`（清该源三族缓存后重拉），重拉成功 chip 自动消失。
+- 老条目没有 `totalSeen` → 当完整、不显示；不需要升 `fmt`。
+- 回归：`probe_cache_trim_setup.js`（把缓存裁到 10 条）→ `probe_cache_trim_chip.js`（出现 → 点击 → 消失）。

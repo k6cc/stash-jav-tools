@@ -3,7 +3,7 @@
 // 跑法（直接 --path /performers/34 会被 SPA 弹回首页，必须 pushState）：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_ignored_show.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_ignored_show.js)" \
 //     --path / --settle 5 --timeout 120
 // 会真的写忽略记录，结束时按前后差集删掉（不碰用户原有记录）。
 (async () => {

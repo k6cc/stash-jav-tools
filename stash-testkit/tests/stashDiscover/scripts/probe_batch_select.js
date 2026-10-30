@@ -4,7 +4,7 @@
 // 跑法：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_batch_select.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_batch_select.js)" \
 //     --path /plugins/stashDiscover --settle 5
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

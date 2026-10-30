@@ -3,7 +3,7 @@
 // 用法（在页面上下文执行，结果是一段 JSON）：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_localstorage.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_localstorage.js)" \
 //     --path /plugins/stashDiscover --settle 3
 //
 // 口径说明：

@@ -16,7 +16,7 @@
 // 跑法（**会临时清空忽略记录，跑完自动还原原值**）：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval --path /plugins/stashDiscover --settle 5 \
-//     "$(cat E:/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_ign_export.js)"
+//     "$(cat E:/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_ign_export.js)"
 (async function () {
   var D = SSD.dpIgnore;
   var KEY = "SSD:dp:ignore.v1";

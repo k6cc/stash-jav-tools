@@ -1,6 +1,6 @@
 # stashDiscover — 脚本总览
 
-> 每个脚本验什么、会不会写数据、怎么跑。挑脚本看这里，别靠文件名猜。
+> 所有脚本都在 **`scripts/`** 子目录。每个脚本验什么、会不会写数据、怎么跑 —— 挑脚本看这里，别靠文件名猜。
 > 业务口径见 [SEMANTICS.md](SEMANTICS.md) / [FEATURES.md](FEATURES.md)，历史见 [HISTORY.md](HISTORY.md)。
 
 ## 通用跑法
@@ -10,7 +10,7 @@
 ```bash
 cd E:/stashAPP/devtools
 MSYS_NO_PATHCONV=1 python stash_dev.py eval \
-  "$(cat /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/<脚本>.js)" \
+  "$(cat /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/<脚本>.js)" \
   --path /plugins/stashDiscover --settle 5 --timeout 200
 ```
 
@@ -18,6 +18,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 - 演员页相关探针用 `--path /`（直接 `/performers/<id>` 会被 SPA 弹回首页，探针内部自己 `pushState`）。
 - 移动端布局加 `--vsize 390x844`；`shot` 子命令也支持 `--vsize`。
 - 断言前必须等元素出现（异步渲染/预载/回填），点击后立刻读 DOM 拿到的是中间态。
+- `shot --js` 要包成 `(async()=>{...})()`；`console` 子命令不支持 `--settle`。细节见 [PITFALLS.md](PITFALLS.md)「测试方法」。
 
 ## 发现页
 

@@ -20,7 +20,7 @@ stash-testkit/
 │   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
 │   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
 │   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
-│   ├── stashDiscover/       # 发现页/弹窗/Jackett/TPDB 链路验证（文档按用途分层，入口 NOTES.md）
+│   ├── stashDiscover/       # 发现页/弹窗/Jackett/TPDB 链路验证（文档分层 + scripts/ 放全部脚本，入口 NOTES.md）
 │   └── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
@@ -88,7 +88,7 @@ stash-testkit/
 
 ### 工具链
 
-- **Node 的 fetch 默认不读 `HTTPS_PROXY`**：脚本要过代理得自己起 CONNECT 隧道（`tests/stashDiscover/node_tpdb_harness.js` 已内置这套做法）。
+- **Node 的 fetch 默认不读 `HTTPS_PROXY`**：脚本要过代理得自己起 CONNECT 隧道（`tests/stashDiscover/scripts/node_tpdb_harness.js` 已内置这套做法）。
 - **GraphQL 查询写 `.py` 脚本文件**，别在 PowerShell 命令行内联（`$id`/`!` 被插值导致 422）。
 - **破坏性测试前备份**：实例数据目录或 `stash-go.sqlite`。
 - **测流媒体/播放别用 `--virtual-time-budget`**：headless Chrome 加该参数时媒体时钟不推进、`currentTime` 恒为 0，验证播放与 seek 恢复必须跑真实时间。
@@ -110,7 +110,7 @@ stash-testkit/
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
-| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、实测踩过的坑。文档按用途分层，**脚本逐个的用途、副作用与跑法见该目录 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
+| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 | `tests/ImageMetaSync/` | 图库图片元数据回填端到端验证（`verify_image_meta_sync.py`：快照/清空/任务/钩子/差异对比） |
 

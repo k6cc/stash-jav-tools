@@ -2,7 +2,7 @@
 // 跑法：
 //   cd E:/stashAPP/devtools
 //   MSYS_NO_PATHCONV=1 python stash_dev.py eval "$(cat \
-//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/probe_ignored_page.js)" \
+//     /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/probe_ignored_page.js)" \
 //     --path "/plugins/stashDiscover?view=ignored" --settle 5
 // 会自动还原 ignore.v1。
 (async () => {

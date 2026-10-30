@@ -5,7 +5,7 @@
 // 单跑某个用例用 --only，改适配层后先在这里过一遍再去点界面。
 //
 // 用法：
-//   node stash-testkit/tests/stashDiscover/node_tpdb_harness.js
+//   node stash-testkit/tests/stashDiscover/scripts/node_tpdb_harness.js
 //   node .../node_tpdb_harness.js --src <插件 js> --config <config.yml> --only batchTwo,ghost
 //
 // 需要走代理时设 HTTPS_PROXY（Node 的 fetch 不读环境代理，这里自带 CONNECT 隧道）；
@@ -28,7 +28,7 @@ const arg = (name, dflt) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
 
-const SRC = arg("src", path.resolve(HERE, "../../../stashDiscover/stashDiscover.js"));
+const SRC = arg("src", path.resolve(HERE, "../../../../stashDiscover/stashDiscover.js"));
 const CONFIG = arg("config", "E:/stashAPP/config.yml");
 const PROXY = arg("proxy", process.env.HTTPS_PROXY || process.env.https_proxy || "");
 const ONLY = (arg("only", "") || "").split(",").filter(Boolean);

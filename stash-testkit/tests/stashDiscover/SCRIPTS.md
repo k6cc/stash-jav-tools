@@ -26,6 +26,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 |---|---|---|
 | `probe_429_backoff.js` | 429 退避：两次 429 后成功（2s+4s）／`Retry-After` 超上限直接报错不重试／重试耗尽带 `retried 2x`／500 不重试／被限流的源下一次至少隔 1s／没被打过的源零排队（< 200ms） | 否，全程 mock `fetch`。用 `--path /`（任何加载了 `SSD` 的页面都行，不需要进插件页） |
 | `probe_imgfail_retry.js` | 封面失败负缓存：1 分钟内失败被跳过／超过 10 分钟自动重试／超过 12h 视为未失败／`clearAllImgFail()` 清空 | 会写 `sessionStorage` 的 `SSD:imgfail.v1`，**跑完还原原值**。用 `--path /plugins/stashDiscover` |
+| `probe_plugin_settings.js` | 设置项类型与脏值：`recentDays`/`jackettTimeout` 是 STRING／配置里没有旧 NUMBER 留下的 `0` | 否，纯 GraphQL 只读。用 `--path /` |
 
 ## 发现页
 

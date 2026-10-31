@@ -172,6 +172,12 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   交给进程；tasks 的 `defaultArgs` 只在手动点击时生效，而手动点击没有 query / magnet，
   `runPluginTask` 又只把 stdout 当日志、不解析 `{"error"}` → 任务页显示「完成、无错误、什么都没
   发生」。（第七轮）
+- **NUMBER 类型设置项「没填」会被存成 0，不是空**：`type: NUMBER` 的项在设置页显示的数字和
+  落盘的值都以 0 兜底 —— 用户点过一次保存，`plugins.<id>` 里就多一个 `key: 0`，之后无论代码怎么
+  兜默认值，设置页永远显示 0。要「可留空」只能改 `type: STRING`（同 `previewDays`），并把历史
+  脏值删掉：判据是 `typeof v === "number" && v === 0`（JSON number 只可能来自旧类型；用户手填的
+  是字符串 `"0"`，那个 0 有语义）。改完记得 `configurePlugin` 是**整体替换**，要把读回来的 map
+  整个带回去，而且别和 `seedNavOnce` 并行跑（两条链互相覆盖）。（2026-10-31）
 
 ## 数据与标识
 
@@ -214,6 +220,14 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   （弹窗路径 `probeModalGallery` 本来就是「10 分钟内跳过、更早的重探」）。改成同一个 10 分钟窗口后
   能自己恢复；失败会刷新时间戳，等价于「每 10 分钟最多重试一次」，不会每次重建卡片都重演空白。
   另需 `clearAllImgFail()` 挂在刷新按钮上：用户主动点刷新就是想重来，只清数据缓存不够。（2026-10-31）
+
+- **`navigator.clipboard` 只在 secure context 存在**：`https` 或 `localhost` 有，用局域网 IP 走
+  `http://192.168.x.x:9999` 访问时它是 **undefined**（`isSecureContext: false` 实测）。直接写
+  `navigator.clipboard.writeText(x)` 会在**同步阶段**抛 TypeError，`onclick` 里又没 try/catch ——
+  表现「点了完全没反应、也没复制」，连报错都看不到。统一走 `copyText()`：API 存在就优先，否则/
+  被拒时回退 `textarea + execCommand("copy")`（不受 secure context 限制，实测局域网 http 下
+  真实点击返回 `true`）。注意 execCommand 还要求 `document.hasFocus()`，在 CDP eval 里跑会恒
+  返回 false —— 别拿它当「代码坏了」的证据，要用真实鼠标点击验（2026-10-31）。
 
 ## 测试方法
 

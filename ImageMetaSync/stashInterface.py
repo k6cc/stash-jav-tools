@@ -189,6 +189,25 @@ class StashInterface:
         q = """mutation($i:ImageUpdateInput!){imageUpdate(input:$i){id}}"""
         return self.__gql(q, {"i": data}).get("imageUpdate")
 
+    # ---------- 标签 ----------
+
+    def gql_findAllTagIds(self):
+        # tag 合并是常态：写 tag_ids 前用它过滤，写入已被删除的 id 会让整条 imageUpdate
+        # 触发 FOREIGN KEY 约束失败并整体回滚。取不到时返回空集合，调用方据此放弃过滤。
+        q = """query($f:FindFilterType){findTags(filter:$f){tags{id}}}"""
+        ids = set()
+        page = 1
+        while True:
+            data = self.__gql(q, {"f": {"per_page": 500, "page": page}}).get("findTags", {})
+            tags = data.get("tags", [])
+            if not tags:
+                break
+            ids.update(t["id"] for t in tags if t.get("id"))
+            if len(tags) < 500:
+                break
+            page += 1
+        return ids
+
     # ---------- 场景 ----------
 
     def gql_findSceneFull(self, scene_id):

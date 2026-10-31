@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Image Meta Sync v1.0.2: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
+Image Meta Sync v1.0.3: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
 
 - 钩子 Gallery.Create.Post / Gallery.Update.Post：派生 detached 子进程处理该图库，不阻塞扫描队列。
 - 任务 "Sync Image Metadata"：批量处理全部图库；开启 includeScenesWithoutGallery 时兜底处理无图库场景。
@@ -43,6 +43,9 @@ READY_POLL_INTERVAL = 3
 READY_POLL_ATTEMPTS = 6
 READY_EMPTY_BREAK_AFTER = 3
 
+# 现存 tag id 集合的缓存时长：tagMergeAuto 合并删 tag 会持续发生，太长则过滤失效
+TAG_CACHE_TTL = 60
+
 
 class ImageMetaSync:
 
@@ -54,6 +57,8 @@ class ImageMetaSync:
         self._stash = stash
         self._settings = None
         self._excluded_tag_names = None
+        self._tag_ids = None
+        self._tag_ids_at = 0.0
 
     # ============================================================
     # 入口
@@ -335,6 +340,36 @@ class ImageMetaSync:
                 out.append(i)
         return out
 
+    def __valid_tag_ids(self):
+        # 返回现存 tag id 集合；None 表示未知（此时不过滤，避免误删全部 tag）
+        now = time.time()
+        if self._tag_ids is not None and now - self._tag_ids_at < TAG_CACHE_TTL:
+            return self._tag_ids
+        try:
+            ids = self._stash.gql_findAllTagIds()
+        except Exception as e:
+            log.LogWarning(f"Tag list fetch failed, tag ids left unfiltered: {repr(e)}")
+            return self._tag_ids
+        if not ids:
+            log.LogWarning("Tag list empty, tag ids left unfiltered")
+            return self._tag_ids
+        self._tag_ids = ids
+        self._tag_ids_at = now
+        return ids
+
+    def __filter_tags(self, ids):
+        # 读图库到写图之间可能有 tag 被 tagMergeAuto 合并掉，写回死 id 会整条回滚
+        if not ids:
+            return []
+        valid = self.__valid_tag_ids()
+        if valid is None:
+            return list(ids)
+        kept = [t for t in ids if t in valid]
+        if len(kept) != len(ids):
+            log.LogWarning(f"Dropped {len(ids) - len(kept)} tag id(s) no longer exist: "
+                           f"{[t for t in ids if t not in valid]}")
+        return kept
+
     @staticmethod
     def __first_path(image):
         paths = []
@@ -405,6 +440,7 @@ class ImageMetaSync:
         base_title = meta.get("title")
         ow = meta["overwrite"]
         ordered = sorted(images, key=self.__first_path)
+        meta["tag_ids"] = self.__filter_tags(meta.get("tag_ids") or [])
 
         # 标题编号：封面用纯标题，剧照用「标题 #N」；已有标题占位，冲突则顺延。
         # 先按文件名尾部数字分配（fanart1→#1），再给无数字的图顺延，避免整体挤号
@@ -445,15 +481,48 @@ class ImageMetaSync:
                 upd["details"] = meta["details"]
             if meta.get("urls") and (ow or not img.get("urls")):
                 upd["urls"] = meta["urls"]
-            if meta.get("tag_ids") and (ow or not (img.get("tags") or [])):
-                upd["tag_ids"] = meta["tag_ids"]
+            if meta.get("tag_ids"):
+                # 关覆盖时按「并集补缺」写：图片已写的 tags 可能落后于场景（nfoSceneParser 后补
+                # tags、场景事后加 tag），只判空会导致永不跟进；手工加的 tag 不会被抹掉。
+                have = [t.get("id") for t in (img.get("tags") or []) if t.get("id")]
+                if ow:
+                    if set(have) != set(meta["tag_ids"]):
+                        upd["tag_ids"] = list(meta["tag_ids"])
+                else:
+                    missing = [t for t in meta["tag_ids"] if t not in have]
+                    if missing:
+                        upd["tag_ids"] = have + missing
             t = titles.get(img["id"])
             if t and (ow or not (img.get("title") or "").strip()):
                 upd["title"] = t
-            if len(upd) > 1:
-                self._stash.gql_imageUpdate(upd)
+            if len(upd) > 1 and self.__write_image(upd):
                 updated += 1
         return updated
+
+    def __write_image(self, upd):
+        # 一张图失败不能拖垮整库；GraphQL 出错时底层返回空，等价于「被拒」
+        iid = upd["id"]
+        try:
+            if self._stash.gql_imageUpdate(upd):
+                return True
+        except Exception as e:
+            log.LogWarning(f"Image {iid}: update failed: {repr(e)}")
+            return False
+
+        if "tag_ids" not in upd:
+            log.LogWarning(f"Image {iid}: update rejected")
+            return False
+        # 常见原因是 tag 在过滤之后又被合并删除（FOREIGN KEY 回滚），去掉 tags 重试保住其余字段
+        retry = {k: v for k, v in upd.items() if k != "tag_ids"}
+        if len(retry) <= 1:
+            log.LogWarning(f"Image {iid}: update rejected (tags), nothing else to write")
+            return False
+        log.LogWarning(f"Image {iid}: update rejected, retried without tags")
+        try:
+            return bool(self._stash.gql_imageUpdate(retry))
+        except Exception as e:
+            log.LogWarning(f"Image {iid}: retry failed: {repr(e)}")
+            return False
 
     # ============================================================
     # 图库路径

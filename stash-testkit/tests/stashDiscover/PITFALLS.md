@@ -178,6 +178,11 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   脏值删掉：判据是 `typeof v === "number" && v === 0`（JSON number 只可能来自旧类型；用户手填的
   是字符串 `"0"`，那个 0 有语义）。改完记得 `configurePlugin` 是**整体替换**，要把读回来的 map
   整个带回去，而且别和 `seedNavOnce` 并行跑（两条链互相覆盖）。（2026-10-31）
+  实测（合成配置回放迁移、跑完还原）：`{recentDays:0(int), jackettTimeout:"0"(str)}` → 只删
+  `recentDays`，字符串 `"0"` 和其余键原样保留；`{recentDays:180(int), jackettTimeout:0(int)}` →
+  只删 `jackettTimeout`，`180` 连类型都不变。唯一副作用：旧类型下**故意**填 0 表示「不限」的人会
+  被清成默认 180 —— 旧类型里「没填」和「填 0」是同一个值，无法区分，只能按误存处理；重新填一次
+  `0`（这次是字符串）即可，迁移只跑一次（`SSD:cfgMigrated.v2`）。
 
 ## 数据与标识
 

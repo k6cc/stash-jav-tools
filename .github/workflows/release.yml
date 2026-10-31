@@ -5,7 +5,8 @@ name: release
 #   1. 从 tag 提取插件名和版本号（sceneTranslate-v2.3.0 → sceneTranslate + 2.3.0）
 #   2. 打包对应子目录的 zip
 #   3. 计算 sha256 + 北京时间戳 + 下载 URL
-#   4. clone stash-plugins 仓库 → 同一 commit 更新 index.yml + README 版本表 → push
+#   4. clone stash-plugins 仓库 → 同一 commit 更新 index.yml（版本/日期/路径/sha256/描述）
+#      + README 版本表 → push
 #      （单次 push 只触发一次 Pages 部署；stash-plugins 侧 sync-readme.yml 保留作兜底，
 #        README 已同步时其幂等检查不会再产生 commit）
 #   5. 创建 GitHub Release（上传 zip）
@@ -95,6 +96,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           python3 -m pip install --quiet pyyaml
+          # index.yml 的 metadata.description 原先只在首次发布时写入，之后没有任何规则
+          # 同步，插件 yml 改了描述也不会反映到插件源。这里从插件自己的 yml 读一次，
+          # 随版本一起刷进 index.yml，让 yml 保持唯一事实源。
+          # 输出 JSON 字符串（单行、已转义）：描述里带 ": " 时不加引号会让 YAML 解析失败。
+          PLUGIN_YML="$GITHUB_WORKSPACE/$PLUGIN_ID/$PLUGIN_ID.yml"
+          [ -f "$PLUGIN_YML" ] || PLUGIN_YML=$(ls "$GITHUB_WORKSPACE/$PLUGIN_ID"/*.yml 2>/dev/null | head -1)
+          DESC=$(python3 -c 'import json,sys,yaml; d=yaml.safe_load(open(sys.argv[1],encoding="utf-8")) or {}; print(json.dumps(str(d.get("description") or "").strip(), ensure_ascii=False))' "$PLUGIN_YML")
+          # awk -v 会解释转义序列（\" → "），先把反斜杠加倍，JSON 的转义才能原样落到 YAML
+          DESC_AWK=$(printf '%s' "$DESC" | sed 's/\\/\\\\/g')
+          echo "description: $DESC"
           # 竞争安全：多个 release 并发推送时 push 可能被拒（non-fast-forward），
           # 每次重试前 fetch + reset 到远程最新（已包含其他插件刚推的改动），
           # 再重新套用本插件的 index.yml 更新与 README 同步。
@@ -102,9 +113,11 @@ jobs:
           for attempt in 1 2 3 4 5; do
             git fetch origin main
             git reset --hard origin/main
-            # awk 只更新匹配 PLUGIN_ID 的条目，避免误改其他插件
-            awk -v id="$PLUGIN_ID" -v version="$VERSION" -v date="$DATE" -v path="$PATH_URL" -v sha="$SHA" '
+            # awk 只更新匹配 PLUGIN_ID 的条目，避免误改其他插件；
+            # DESC 由插件 yml 的 description 得来（空值则保持原描述不动）
+            awk -v id="$PLUGIN_ID" -v version="$VERSION" -v date="$DATE" -v path="$PATH_URL" -v sha="$SHA" -v desc="$DESC_AWK" '
             /^- id: / { in_block = ($3 == id) }
+            in_block && desc != "" && /^    description: / { print "    description: " desc; next }
             in_block && /^  version: / { print "  version: " version; next }
             in_block && /^  date: / { print "  date: " date; next }
             in_block && /^  path: / { print "  path: " path; next }

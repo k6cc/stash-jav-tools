@@ -1,6 +1,6 @@
 name: stashDiscover
-description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.6.5
+description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, and look for download sources.
+version: 2.6.6
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -15,7 +15,7 @@ settings:
     type: STRING
   jackettUrl:
     displayName: "Jackett API URL"
-    description: "Jackett base URL or Torznab endpoint, e.g. http://0.0.0.0:9117. In Docker use the host IP or host.docker.internal, not localhost."
+    description: "Jackett base URL or Torznab endpoint, e.g. http://192.168.1.10:9117. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   jackettApiKey:
     displayName: "Jackett API Key"
@@ -31,7 +31,7 @@ settings:
     type: STRING
   downloaderUrl:
     displayName: "Downloader URL"
-    description: "qBittorrent Web UI URL, e.g. http://0.0.0.0:8080. In Docker use the host IP or host.docker.internal, not localhost."
+    description: "qBittorrent Web UI URL, e.g. http://192.168.1.10:8080. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   downloaderUsername:
     displayName: "Downloader Username"
@@ -47,7 +47,7 @@ settings:
     type: STRING
   enableDiscoverPage:
     displayName: "Discover page"
-    description: "Master switch: off = no nav entry, no page, discover.js not loaded. Performer/studio Discover tabs are unaffected. To only hide the nav button, untick \"Discover\" in Settings → Interface → Menu Items. Refresh to apply."
+    description: "Master switch: off = no nav entry, no page, no follow notifications. Performer/studio Discover tabs are unaffected. To only hide the nav button, untick \"Discover\" in Settings → Interface → Menu Items. Refresh to apply."
     type: BOOLEAN
 
 exec:

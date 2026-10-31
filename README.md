@@ -16,7 +16,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [tagMergeAuto](./tagMergeAuto/) | 1.2.5 | 纯后台 | 钩子自动合并新建 tag + 任务页全量扫描；Fill Stash IDs 任务与钩子自动补 stash_id（与 tagMerge 填充ID 规则同源，词级跳过已写入词） |
 | [sceneTranslateAuto](./sceneTranslateAuto/) | 1.3.1 | 纯后台 | 钩子自动翻译场景标题/简介为目标语言 + 任务页全量扫描（复用 sceneTranslate 引擎，无代理无端口） |
 | [javstashAutofill+](./javstashAutofill+/) | 1.3.2 | 纯后台 | 演员带 stash_id 反查复用/直抓补全，无 id 走 0.9 名称匹配（防重复）；新场景按 oshash 补空白字段+stash_id，番号全失败后剥离 BD 重试；手动任务批量回填 |
-| [stashDiscover](./stashDiscover/) | 2.6.5 | Python + UI | 演员页「发现」标签：从已配置 stash-box 实例发现本地未拥有的场景，浏览/详情/加入库，Jackett 搜索资源；源无数据/演员未关联编号时提供兜底面板（可就地搜源并关联编号、临时放宽时间窗口）；主导航「发现」页含关注演员新片、最新/热门/预览、工作室上新，支持网格与列表两种查看模式，两个入口均可多选忽略/入库，已忽略记录带快照可检索恢复、可临时查看 |
+| [stashDiscover](./stashDiscover/) | 2.6.6 | Python + UI | 演员页 / 工作室页「发现」标签 + 主导航「发现」页：找出 stash-box 上本地未拥有的场景，浏览、加入库、搜索资源；含关注新作提醒、忽略管理与多选批量 |
 | [ImageMetaSync](./ImageMetaSync/) | 1.0.2 | 纯后台 | 把场景级元数据（演员/工作室/日期/tag/标题/番号）回填到场景图库的图片记录（封面+fanart+剧照）；多演员/无演员图库跳过并记录日志 |
 
 ## 安装
@@ -105,7 +105,7 @@ pip3 install requests
 | tagMergeAuto | 纯后台 | Tag.Create.Post 钩子 + 手动任务 |
 | sceneTranslateAuto | 纯后台 | Scene.Create.Post / Scene.Update.Post 钩子 + 手动任务 |
 | javstashAutofill+ | 纯后台 | Performer.Create.Post / Scene.Create.Post 钩子 + 手动任务 |
-| stashDiscover | Python + UI | 演员页「发现」标签 + 手动任务（Jackett 搜索/推送下载） |
+| stashDiscover | Python + UI | 演员页/工作室页「发现」标签 + 主导航「发现」页 + 手动任务 |
 | ImageMetaSync | 纯后台 | Gallery.Create.Post / Gallery.Update.Post 钩子 + 手动任务 |
 
 各插件详细使用说明见对应目录下的 `README.md`。

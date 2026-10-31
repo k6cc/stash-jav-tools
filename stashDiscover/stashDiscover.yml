@@ -1,14 +1,14 @@
 name: stashDiscover
 description: Adds a "Missing Scenes" tab to performer pages, discovering scenes from configured stash-box instances that are not in the local library. Browse covers, view details, save to Stash, and search/download resources via Jackett.
-version: 2.6.4
+version: 2.6.5
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
 settings:
   recentDays:
     displayName: "Recent Window (days)"
-    description: "Only show scenes released in the last N days. 0 = all. Default 180."
-    type: NUMBER
+    description: "Only show scenes released in the last N days. 0 = all. Leave empty for the default (180)."
+    type: STRING
   previewDays:
     displayName: "Preview Window (days)"
     description: "Future-dated scenes are previews: -1 = hide, 0 = all, N = within N days. Default 7."
@@ -23,8 +23,8 @@ settings:
     type: STRING
   jackettTimeout:
     displayName: "Jackett Timeout (seconds)"
-    description: "Jackett search timeout in seconds. Raise it for a slow NAS or many indexers. Default 120, max 600."
-    type: NUMBER
+    description: "Jackett search timeout in seconds. Raise it for a slow NAS or many indexers. Leave empty for the default (120), max 600."
+    type: STRING
   downloaderType:
     displayName: "Downloader Type"
     description: "Torrent downloader for push-to-download. qBittorrent only for now."

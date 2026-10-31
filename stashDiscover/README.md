@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.6.4：封面图加载失败不再被长期记住，网络恢复或切换节点后自动重试，刷新即立即重试；修复此前一次网络抖动就让封面一直空到关闭标签页的问题。
+> v2.6.5：修复通过局域网 http 访问时「复制磁力」无任何反应（剪贴板 API 在非安全上下文不存在，原实现未兜底）；「Jackett 超时」「回看天数」改为可留空的输入框，不再显示误导的 0，并自动清掉历史上误存的 0（那会让搜索超时实际退到 10 秒而不是默认 120 秒）。
 
 在 Stash 演员页面插入「发现」分页，发现该演员在已配置 stash-box 实例中存在、但本地库未拥有的场景。点击场景打开详情弹窗，可浏览封面剧照、加入库、在 stash-box 查看、通过 Jackett 搜索资源并复制磁力链接或推送到下载器。
 
@@ -150,10 +150,11 @@ USER stash
 
 | 设置项 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| Recent Window (days) | NUMBER | 180 | 仅显示最近 N 天发行的场景。0 = 不限制 |
+| Recent Window (days) | STRING | 180 | 仅显示最近 N 天发行的场景。留空 = 180，0 = 不限制 |
 | Preview Window (days) | STRING | 7 | 未来场景的预告窗口，字符串输入以支持 "-1"。-1 = 隐藏全部预告，0 = 不限制，N = N 天内 |
 | Jackett API URL | STRING | — | Jackett 根地址（自动补全 Torznab 端点）或完整 Torznab 端点 |
 | Jackett API Key | STRING | — | Jackett API Key |
+| Jackett Timeout (seconds) | STRING | 120 | Jackett 搜索超时秒数，留空 = 120，上限 600 |
 | Downloader Type | STRING | — | 目前仅支持 qbittorrent |
 | Downloader URL | STRING | — | qBittorrent Web UI 地址 |
 | Downloader Username | STRING | — | qBittorrent 用户名 |

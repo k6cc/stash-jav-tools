@@ -254,6 +254,10 @@ def _int_setting(cfg, key, default, lo, hi):
         v = int(str(cfg.get(key) or "").strip())
     except (TypeError, ValueError):
         return default
+    # 0 是旧版 NUMBER 设置项被 Stash 写下的「未设置」脏值（现已改 STRING 并在前端
+    # 迁移）。0 秒超时没有意义，落到下限只会让搜索必然失败，所以按默认值处理。
+    if v <= 0:
+        return default
     return max(lo, min(hi, v))
 
 

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.4";
+  var PLUGIN_VERSION = "2.6.5";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -5387,20 +5387,9 @@
             codeItem.classList.remove("ssd-copied");
           }, 800);
         };
-        var fallbackCopy = function () {
-          var ta = document.createElement("textarea");
-          ta.value = sc.code;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          flashCopied();
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(sc.code).then(flashCopied, fallbackCopy);
-        } else {
-          fallbackCopy();
-        }
+        copyText(sc.code).then(flashCopied, function () {
+          dpToast(tc("复制失败：请手动选中番号复制", "Copy failed — select the code and copy it manually"));
+        });
       });
       metaGrid.appendChild(codeItem);
     }
@@ -7287,22 +7276,16 @@
       copyBtn.className = "ssd-dp-btn ghost sm";
       copyBtn.textContent = tc("复制磁力", "Copy Magnet");
       copyBtn.onclick = function () {
-        navigator.clipboard.writeText(res.magnet).then(function () {
+        var flashOk = function () {
           copyBtn.textContent = tc("已复制 ✓", "Copied ✓");
           copyBtn.classList.add("ok");
           setTimeout(function () {
             copyBtn.textContent = tc("复制磁力", "Copy Magnet");
             copyBtn.classList.remove("ok");
           }, 2000);
-        }).catch(function () {
-          var ta = document.createElement("textarea");
-          ta.value = res.magnet;
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          copyBtn.textContent = tc("已复制 ✓", "Copied ✓");
-          setTimeout(function () { copyBtn.textContent = tc("复制磁力", "Copy Magnet"); }, 2000);
+        };
+        copyText(res.magnet).then(flashOk, function () {
+          dpToast(tc("复制失败：请手动选中磁力链接复制", "Copy failed — select the magnet link and copy it manually"));
         });
       };
       actions.appendChild(copyBtn);
@@ -7883,6 +7866,40 @@
     reload: function () { _importMemo = null; return importStore(); },
   };
 
+  // ─── 剪贴板 ────────────────────────────────────────────────────────────
+  // navigator.clipboard 只在 secure context（https 或 localhost）存在。用局域网 IP
+  // 走 http 访问 Stash 时它是 undefined，直接 `navigator.clipboard.writeText(...)`
+  // 会在同步阶段抛 TypeError —— 表现就是「点了完全没反应」，还不报错
+  //（用户 2026-10-31：弹窗搜索资源里的复制磁力）。
+  // 统一走这里：API 优先，不可用或被拒时回退 textarea + execCommand（不受该限制）。
+  function copyText(text) {
+    var legacy = function () {
+      return new Promise(function (resolve, reject) {
+        var ta = document.createElement("textarea");
+        ta.value = text == null ? "" : String(text);
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        var ok = false;
+        try {
+          ta.select();
+          ta.setSelectionRange(0, ta.value.length);
+          ok = document.execCommand("copy");
+        } catch (_) { ok = false; }
+        document.body.removeChild(ta);
+        if (ok) resolve(); else reject(new Error("copy failed"));
+      });
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(legacy);
+      }
+    } catch (_) {}
+    return legacy();
+  }
+
   // ─── 轻量 toast（§5.2 撤销）─────────────────────────────────────────────
   // 只有一处用途也要有：忽略是"一按就消失"的操作，没有撤销入口等于误触即丢。
   var _toastEl = null, _toastTimer = 0;
@@ -8042,6 +8059,8 @@
     buildSourceRow: buildSourceRow,
     // events
     SCENE_SAVED_EVENT: SCENE_SAVED_EVENT,
+    // 剪贴板：局域网 http 访问时 navigator.clipboard 是 undefined，统一走这里
+    copyText: copyText,
     // 图片失败负缓存（发现页刷新按钮清空：换节点 / 网络恢复后封面要能回来）
     clearAllImgFail: clearAllImgFail,
     // ignore records (§3) + undo toast
@@ -8291,7 +8310,7 @@
     //    配置整体带上；否则写一个 navSeeded 就把 jackettApiKey 之类全删了。
     //  · 这段在插件脚本加载时跑，不在 render 里 —— 用普通 fetch，别用 GQL hook。
     function seedNavOnce() {
-      callGQL("query{configuration{interface{menuItems}plugins}}").then(function (data) {
+      return callGQL("query{configuration{interface{menuItems}plugins}}").then(function (data) {
         var cfg = (data && data.configuration) || {};
         var items = ((cfg.interface || {}).menuItems) || [];
         if (items.indexOf(NAV_ID) !== -1) return null;      // 已经在菜单里
@@ -8312,7 +8331,41 @@
       });
     }
 
-    try { seedNavOnce(); } catch (e) { console.warn("[SSD] nav seed skipped:", e); }
+    // 设置项类型从 NUMBER 改成 STRING 后的一次性清理：旧版 Stash 会把「没填」的
+    // NUMBER 存成 0 —— 用户在设置页点过一次保存就落盘了。类型改了之后这个 0 还留着，
+    // 设置页继续显示 0（正是要消除的误导），后端还会把 Jackett 超时压到 10 秒下限。
+    // 只认 JSON number 的 0：用户手动输入的是字符串 "0"，那个 0 有语义
+    //（Recent Window 里 0 = 不限），不能动。
+    var LEGACY_ZERO_KEYS = ["recentDays", "jackettTimeout"];
+    var CFG_MIGRATED_KEY = "SSD:cfgMigrated.v2";
+    function dropLegacyZeros() {
+      var done = false;
+      try { done = localStorage.getItem(CFG_MIGRATED_KEY) === "1"; } catch (_) {}
+      if (done) return;
+      callGQL("query{configuration{plugins}}").then(function (data) {
+        var mine = (((data || {}).configuration || {}).plugins || {})[NAV_ID] || {};
+        var next = Object.assign({}, mine), changed = false;
+        LEGACY_ZERO_KEYS.forEach(function (k) {
+          if (typeof next[k] === "number" && next[k] === 0) { delete next[k]; changed = true; }
+        });
+        if (!changed) return null;
+        // configurePlugin 是整体替换（同 seedNavOnce）：必须带上读回来的完整 map
+        return callGQL(
+          "mutation($id:ID!,$input:Map!){configurePlugin(plugin_id:$id,input:$input)}",
+          { id: NAV_ID, input: next }
+        );
+      }).then(function () {
+        try { localStorage.setItem(CFG_MIGRATED_KEY, "1"); } catch (_) {}
+      }).catch(function (e) {
+        // 非致命：最坏情况设置页继续显示 0，后端已把 0 当默认值处理
+        console.warn("[SSD] legacy setting cleanup skipped:", e);
+      });
+    }
+
+    // 串行：两者都读 plugins 再整体写回，并行会互相覆盖
+    try {
+      Promise.resolve(seedNavOnce()).then(dropLegacyZeros, dropLegacyZeros);
+    } catch (e) { console.warn("[SSD] nav seed skipped:", e); }
 
     // 入口是否显示：以 Stash 的 menuItems 为准（和内置项同一判据）。读不到
     // 配置时一律当「显示」—— 绝不让入口因为一次读取失败而静默消失。

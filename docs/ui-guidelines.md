@@ -98,6 +98,8 @@ window.__<插件缩写>Loaded = true;
 
 **双语言中文/英文**，跟随 Stash 界面语言，不引入第三方语言与翻译文件。JavStashLinker / performerMerge / tagMerge 共用同一实现，新插件照抄：
 
+（设置项 `yml` 的 `displayName`/`description` 不在本节范围，一律英文；四类插件的对照表见 `AGENTS.md`「多语言约定」。）
+
 - **调用约定**：模块级 `tc(zh, en)`，`_intlLocale` 以 `zh` 开头返回中文，否则英文。**所有用户可见字符串必须包 `tc()` 且两个参数都写**：按钮文案、标题、tooltip（`title` 属性）、`alert`/`confirm` 弹窗、badge、placeholder、日志条目、空态提示
 - **语言来源**：`initIntlBridge()` 通过 `PluginApi` 挂 React 组件读 `api.libraries.Intl.useIntl().locale` 同步到 `_intlLocale`；桥接失败（PluginApi 不可用/异常）静默降级英文——不抛错阻塞插件加载
 - **动态文案**：拼接变量写法 `tc("已合并 " + n + " 个", "Merged " + n)`，两种语言各自完整组句，不抽词根

@@ -21,7 +21,8 @@
 | 测建库钩子 + 竞态等待 + 编号 + 各开关 | `python scripts/test_e2e_gallery.py full` |
 | 只校验当前样本结果（独立 oracle 推算） | `python scripts/test_e2e_gallery.py check` |
 | 测无图库兜底路径 | `python scripts/test_fallback_no_gallery.py {clear\|run\|dir}` |
-| 测锁 / 队列 / 过期清理 | `python scripts/test_lock_queue.py` |
+| 测锁 / 队列 / 过期清理（需 Stash） | `python scripts/test_lock_queue.py` |
+| 测锁语义：硬杀持锁进程后能否立即抢占（离线） | `python scripts/test_lock_takeover.py` |
 | 测 `fillTagsTitleCode=OFF` 时两条路径的行为 | `python scripts/test_title_off.py`（结束会还原设置） |
 | 校验插件用到的 GraphQL 字段在当前版本可用 | `python scripts/probe_schema.py` |
 | 触发钩子并抓后台进程日志 | `python scripts/probe_hook_trigger.py <image_id> <gallery_id>` |
@@ -77,6 +78,20 @@ v1.0.3 的对应处理（`test_tag_guard.py` 离线覆盖全部分支）：
 - 验证钩子是否生效一律看**数据**（演员/tags/标题），日志只作参考；`test_e2e_gallery.py` 的
   `wait_synced()` 与 `test_title_off.py` 都按这个口径判定。
 - 跑测试前先清 `run.lock` / `queue.jsonl*`（`clear_pending()`），否则上一轮的残留会让本轮全部走"入队代跑"路径。
+- `__process_gallery` 只在 `updated > 0` 时打 `N image(s) checked, N updated`；**已经同步过的图库跑一遍是零日志**。
+  因此"日志没输出"不等于"没执行"，否则会把幂等的正常重跑误判成失败。
+
+## 运行锁（`run.lock`）
+
+- 锁是**内核持有的字节锁**（Windows `msvcrt.locking` / POSIX `flock`），不是"文件存在即上锁"。
+  持锁进程被硬杀、崩溃、关机后锁**立即**消失，后来者马上能接替——不需要 pid 判存活，也不需要等超时。
+- **锁文件永不 unlink**（`__release_lock` 只 close 句柄）。删掉文件会让后来者锁到新 inode，
+  与老进程的锁互相看不见 → 双持锁。看到 `run.lock` 残留是正常的，内容里的 `pid` 只用于排查。
+- `queue` 语义不变：抢不到锁就 `{"gallery_id": ...}` 追加进 `queue.jsonl`，由持锁进程 `__drain_queue()` 代跑。
+- 兜底：文件系统不支持字节锁（少数 FUSE/网络盘）时自动退化到"文件创建时长 > `lock_stale_max_age` 可抢占"的老逻辑。
+  探测走 `run.lock.probe`（临时文件，用完即删）。
+- 测试占锁**必须起真实进程**（`scripts/_lock_helper.py` 的 `spawn_holder()`）：
+  往 `run.lock` 写一行 JSON 已经**不再**能占住锁，钩子会照常处理。
 
 ## 实测环境
 

@@ -1254,6 +1254,9 @@
     return resolveBase().then(function (base) {
       cacheInvalidate(base.source.host);
       invalidateLocalMemos();
+      // 图片失败负缓存也要清：网络波动时的失败记录会让重建的卡片直接跳过封面，
+      // 只清数据缓存的话刷新后封面照样空着（用户 2026-10-31）
+      try { if (SSD.clearAllImgFail) SSD.clearAllImgFail(); } catch (_) {}
       return base;
     });
   }

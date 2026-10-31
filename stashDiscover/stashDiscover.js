@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.3";
+  var PLUGIN_VERSION = "2.6.4";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -4371,6 +4371,11 @@
     delete o[u];
     try { sessionStorage.setItem(IMG_FAIL_KEY, JSON.stringify(o)); } catch (_) {}
   }
+  // 清空整张负缓存（刷新按钮）：用户主动刷新就是想重来一遍，
+  // 网络恢复 / 换节点后不该再被上一次的失败记录挡住（用户 2026-10-31）
+  function clearAllImgFail() {
+    try { sessionStorage.removeItem(IMG_FAIL_KEY); } catch (_) {}
+  }
 
   function setCoverImage(img, images) {
     var list = (images || []).map(function (i) { return i && i.url; })
@@ -4386,9 +4391,18 @@
     if (riskTs && Date.now() - riskTs < IMG_FAIL_RETRY) risky = "";
 
     var idx = 0, curSrc = "", fallbackSrc = "";
+    // 负缓存整张读一次：每次重建卡片会进来一次，循环里再逐条解析就白花 JSON.parse
+    var failMap = imgFailMap(), now = Date.now();
     function next() {
-      // 已判定失败的候选直接跳过：切页重建卡片时不再重演「先空白再静态」
-      while (idx < rest.length && imgFailed(rest[idx])) idx++;
+      // 10 分钟内确认失败的候选跳过（抖动期不反复重演空白）；更早的失败仍试一次。
+      // 原来这里只看 12h TTL，一次网络波动就把封面钉死到会话结束 ——
+      // 详情弹窗那边一直是 10 分钟窗口（probeModalGallery），两边语义现在对齐
+      //（用户 2026-10-31：换节点后弹窗能显示、列表一直空）。
+      while (idx < rest.length) {
+        var ts = failMap[rest[idx]];
+        if (ts && now - ts < IMG_FAIL_RETRY) { idx++; continue; }
+        break;
+      }
       if (idx >= rest.length) { img.style.visibility = "hidden"; return; }
       curSrc = rest[idx++];
       fallbackSrc = curSrc;
@@ -8028,6 +8042,8 @@
     buildSourceRow: buildSourceRow,
     // events
     SCENE_SAVED_EVENT: SCENE_SAVED_EVENT,
+    // 图片失败负缓存（发现页刷新按钮清空：换节点 / 网络恢复后封面要能回来）
+    clearAllImgFail: clearAllImgFail,
     // ignore records (§3) + undo toast
     dpIgnore: dpIgnore,
     toast: dpToast,

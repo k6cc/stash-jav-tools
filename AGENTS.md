@@ -42,7 +42,7 @@
 
 | 插件类型 | 界面文案 | 设置项 displayName / description | yml 顶层 description |
 |---|---|---|---|
-| 有 UI 的公开插件 | 跟随 Stash 界面语言：中文环境中文、其余英文（`tc()` + 语言包 key，无对应 key 时按此兜底） | 英文 | 英文 |
+| 有 UI 的公开插件 | 中英双语、跟随 Stash 界面语言（实现见 `docs/ui-guidelines.md`「多语言」节） | 英文 | 英文 |
 | 纯后台（`interface: raw`，无 UI 注入） | — | 英文 | 英文 |
 | 翻译插件 sceneTranslate / sceneTranslateAuto | 中英 | `中文 / English` 并列 | 英文 |
 | 第三方汉化插件（*I18n） | 全中文 | 全中文 | 中文 |

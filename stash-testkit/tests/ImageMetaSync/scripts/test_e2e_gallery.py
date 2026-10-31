@@ -103,6 +103,36 @@ def wait_log(gid, timeout=90):
     return "(超时无日志)"
 
 
+def clear_pending():
+    """清掉上次运行残留的锁与队列：持锁进程会把新事件只登记入队由自己代跑，
+    新事件就不会写自己的日志文件，导致本脚本误判「钩子没跑」。"""
+    removed = []
+    for name in ("run.lock", "queue.jsonl", "queue.jsonl.proc"):
+        p = os.path.join(PENDING, name)
+        if os.path.exists(p):
+            try:
+                os.unlink(p)
+                removed.append(name)
+            except OSError:
+                pass
+    if removed:
+        print("清理残留：%s" % removed)
+
+
+def wait_synced(s, timeout=90):
+    """只按数据判定建库钩子是否生效：事件可能被持锁进程代跑，日志会落到别的文件里。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        imgs = images_in_dir(s)
+        if len(imgs) >= 6 and all(
+                [p["id"] for p in i.get("performers") or []] == [PERFORMER]
+                and sorted(t["id"] for t in i.get("tags") or []) == sorted([TAG_A, TAG_B])
+                and i.get("title") for i in imgs[:6]):
+            return True, int(time.time() - t0)
+        time.sleep(3)
+    return False, timeout
+
+
 def trigger_hook(s, gid, fresh=True):
     """galleryUpdate 触发 Gallery.Update.Post；fresh=True 时先清空该图库图片元数据。"""
     if fresh:
@@ -167,6 +197,7 @@ def stage_setup(s):
         print("图库已存在 %s，复用（不测竞态）" % g["id"])
         gid = g["id"]
     else:
+        reset_images(s, imgs)          # 先清空，确保元数据只能由建库钩子填入
         g = s.call("mutation($i:GalleryCreateInput!){galleryCreate(input:$i){id}}",
                    {"i": {"title": GALLERY_TITLE, "scene_ids": [sid]}})["galleryCreate"]
         gid = g["id"]
@@ -176,11 +207,13 @@ def stage_setup(s):
                {"i": {"gallery_id": gid, "image_ids": [i["id"] for i in imgs]}})
         print("已挂 %d 张图" % len(imgs))
 
-    log = wait_log(gid)
-    print("--- 建库钩子后台日志 ---\n%s" % log)
+    ready, waited = wait_synced(s, 90)
+    log = wait_log(gid, timeout=5)
+    print("--- 建库钩子后台日志（%ds%s）---\n%s"
+          % (waited, "内完成" if ready else " 仍未完成", log))
     fails = []
-    if not log or "updated" not in log:
-        fails.append("建库钩子未完成写入：%s" % log)
+    if not ready:
+        fails.append("建库钩子未在 90s 内写入图片元数据")
     g = find_gallery(s, sid)
     if not g.get("cover"):
         fails.append("图库无封面（编号方案 A 分支未覆盖）")
@@ -332,6 +365,7 @@ def main():
     base_title = SCENE_TITLE
 
     if cmd == "setup":
+        clear_pending()
         ctx, fails = stage_setup(s)
         print("\nsetup fails: %s" % fails)
     elif cmd == "check":
@@ -353,6 +387,7 @@ def main():
             print("已删图库 %s" % ctx["gid"])
     else:  # full
         results = []
+        clear_pending()
         if ctx["gid"]:  # 每次都从干净图库开始，保证竞态用例真实
             s.call("mutation($i:GalleryDestroyInput!){galleryDestroy(input:$i)}",
                    {"i": {"ids": [ctx["gid"]], "delete_file": False, "delete_generated": False,

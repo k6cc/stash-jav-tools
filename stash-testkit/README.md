@@ -63,7 +63,10 @@ stash-testkit/
 - **封面内容验证**：`fetch_scene_image()` 抓 screenshot 端点字节，与本地封面文件比对即可判定"封面被谁写了"。
 - **Stash `logs` 查询返回新→旧**：Python 任务写 marker → 前端轮询日志的协议，正序扫描第一个匹配 marker 即最新一条（倒序恰好取到最旧）。
 - **`findImages(image_filter:{path})` 按存储原样字符串匹配**：Windows 库里存反斜杠，传 `E:/temp/x` 静默返回 0 条（不是没图）。手工探针一律用 Stash 返回的原样路径拼参数。
+- **钩子事件会被「持锁进程」代跑，日志落在别人文件里**：`.ims_pending/<gid>.log` 为 0 字节不代表没处理；断言异步副作用一律看数据，不看日志。
 - **`imageUpdate` 与 `addGalleryImages` 都不触发 `Gallery.Update.Post`**：图库钩子只在 `galleryCreate` / `galleryUpdate` 出现。插件回写图片不会自激；反过来，建库后**延迟挂图**也没有钩子，只能靠建库钩子自身的等待窗口兜。
+- **update 里带一个已删除的关联 id 会让整条 mutation 回滚**：`imageUpdate(tag_ids:[已被 tagsMerge 删掉的 id])` 返回 `FOREIGN KEY constraint failed`，同批的 title/performer/studio 一个都不写。凡「先查 id 再写关联」的插件（ImageMetaSync 写 tags、批量写 performer）都要考虑读取与写入之间 id 被删的窗口，写入前过滤一遍现存 id。另外 `stash_client` 会抛 `RuntimeError`，但**插件里的 `__gql` 只记日志、返回空**——插件侧要自己判返回值，否则会出现「日志报 N updated、实际一张没写」。
+- **`tagsMerge` 会原子替换所有实体上的引用**：source tag 被删前，scene/image 上的引用已转成 destination；但**读到快照再写回**的插件会把死 id 带回来。
 
 ### GraphQL schema（v0.31.1 实测）
 

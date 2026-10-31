@@ -18,10 +18,16 @@ from stash_client import Stash  # noqa: E402
 
 PLUGIN_ID = "ImageMetaSync"
 TASK = "Sync Image Metadata"
-GID = "95"
+SCENE_ID = "273"          # IMS-TEST-001 测试场景
+GID = None                # 运行时按场景解析，避免图库重建后 id 失效
 FALLBACK_IDS = ["936", "937"]
 SETTINGS = {"fillTagsTitleCode": True, "fillUrlsDetails": False, "overwrite": False,
             "includeScenesWithoutGallery": False, "excludeTags": ""}
+
+
+def gallery_of_scene(s):
+    sc = s.call('query($id:ID!){findScene(id:$id){galleries{id}}}', {"id": SCENE_ID})["findScene"]
+    return sc["galleries"][0]["id"] if sc and sc.get("galleries") else None
 
 
 def cfg(s, **kw):
@@ -40,7 +46,11 @@ def titles(s, gid):
 
 
 def main():
+    global GID
     s = Stash()
+    GID = gallery_of_scene(s)
+    if not GID:
+        raise SystemExit("场景 %s 没有图库，先跑 test_e2e_gallery.py full" % SCENE_ID)
     print("== 图库路径：fillTagsTitleCode=OFF（先清空该图库图片元数据）==")
     cfg(s, fillTagsTitleCode=False)
     imgs = s.call("""query($f:ImageFilterType){findImages(image_filter:$f,filter:{per_page:-1}){images{id}}}""",

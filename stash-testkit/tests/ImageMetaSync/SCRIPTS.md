@@ -14,6 +14,9 @@
 | `probe_schema.py` | 插件用到的 GraphQL 字段/参数在当前 Stash 版本是否可用 | 否 | `python probe_schema.py` |
 | `probe_hook_trigger.py` | `imageUpdate` / `addGalleryImages` 是否会触发 `Gallery.Update.Post` | 是（改图/挂图再撤回） | `python probe_hook_trigger.py <image_id> <gallery_id>` |
 | `probe_shared_images.py` | 统计多图库共享图片、未入图库图片、图库↔场景演员关系 | 否 | `python probe_shared_images.py` |
+| `test_tag_race.py` | tag 被 tagMergeAuto 合并删除后，用旧 id 写 image 的后果（FOREIGN KEY 回滚 vs 静默丢弃 vs 自动替换） | 是（建/删 `IMS-RACE-*` tag，挂到场景 273，改 1 张图后还原） | `python test_tag_race.py probe`；异常中断后用 `restore` 清理 |
+| `test_tag_partial.py` | tags 只同步一半、场景后来补 tag 时能否自愈（`overwrite=OFF` 下） | 是（改场景 273 tags、清空图库 96 图片 tags，结束还原） | `python test_tag_partial.py run`（约 70s）/ `show` |
+| `test_tag_guard.py` | 离线验证 tag 写入防护：死 id 过滤、tag 列表不可用不过滤、并集补缺与幂等、overwrite 整体替换、单图被拒去 tags 重试（假 stash，不连库） | 否 | `python test_tag_guard.py`，秒级，退出码 0 = 全通过 |
 
 ## 复用注意
 

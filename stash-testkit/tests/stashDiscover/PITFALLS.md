@@ -203,6 +203,12 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   6s 后 remove。进度条消失到 toast 出现只差一帧，轮询容易两头空 —— 用
   `MutationObserver(document.body, {childList:true})` 记 addedNodes 最稳。（第四轮）
 
+- **节流的间隔要挂在「上次发起时间」上，不是「下次可发时间」**：写成
+  `nextAt = max(now, nextAt) + gap` 时，第一次请求把 `nextAt` 置成 `now`，第二次读到的
+  `wait = nextAt - now ≈ 0` —— gap 只被推到了将来、没被任何人等过。改成 `lastAt` 后
+  `wait = max(0, lastAt + gap - now)` 才对：平时 `gap=0` → `wait` 恒 0（零开销），惩罚期才真排队。
+  这个错五条功能用例全绿，只有耗时断言（同源间隔 1s）抓得到。（2026-10-31，429 退避）
+
 ## 测试方法
 
 - **测 sticky 必须先把内容撑过一屏**：否则 `position: sticky` 一直是生效的，只是滚到底也碰不到

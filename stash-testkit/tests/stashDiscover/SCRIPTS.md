@@ -20,6 +20,12 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 - 断言前必须等元素出现（异步渲染/预载/回填），点击后立刻读 DOM 拿到的是中间态。
 - `shot --js` 要包成 `(async()=>{...})()`；`console` 子命令不支持 `--settle`。细节见 [PITFALLS.md](PITFALLS.md)「测试方法」。
 
+## 网络层
+
+| 脚本 | 验什么 | 会写数据吗 |
+|---|---|---|
+| `probe_429_backoff.js` | 429 退避：两次 429 后成功（2s+4s）／`Retry-After` 超上限直接报错不重试／重试耗尽带 `retried 2x`／500 不重试／被限流的源下一次至少隔 1s／没被打过的源零排队（< 200ms） | 否，全程 mock `fetch`。用 `--path /`（任何加载了 `SSD` 的页面都行，不需要进插件页） |
+
 ## 发现页
 
 | 脚本 | 验什么 | 会写数据吗 |

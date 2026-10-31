@@ -1720,6 +1720,7 @@
     timeout: ["请求超时：源响应太慢或被中断", "Timed out — the source did not respond in time"],
     network: ["无法连接：网络错误或源不可达", "Unreachable — network error"],
     auth: ["鉴权失败：请检查该源的 API Key", "Auth failed — check this source's API key"],
+    ratelimit: ["源正在限流：已自动重试仍被拒绝，请稍后再试", "Rate limited — retried, try again shortly"],
     blocked: ["请求被源拒绝", "Rejected by the source"],
     graphql: ["源接口返回错误", "The source API returned an error"],
     parse: ["源返回了无法解析的响应", "Bad response from the source"],

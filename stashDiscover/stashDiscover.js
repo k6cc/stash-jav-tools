@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.2";
+  var PLUGIN_VERSION = "2.6.3";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -83,10 +83,77 @@
   // forum report) — every call is aborted after this timeout.
   var BOX_TIMEOUT_MS = 15000;
 
+  // ─── 429 限流：退避重试 + 按源节流 ───────────────────────────────────────
+  // 源被限流时回 429 + Retry-After。以前这档被归进 blocked（「请求被拒绝」），
+  // 既不重试也不说明原因，整批数据就这么丢了。
+  // 只重试 429：超时已经烧掉 15s 预算，再叠一次就会撞反代的 60s 硬切断
+  //（见 README「注意事项」），而 429 是秒回的，不占超时预算。
+  var BOX_MAX_RETRIES = 2;          // 最多重试 2 次 = 单次调用最多 3 个请求
+  var BOX_BACKOFF_BASE = 2000;      // 源没给 Retry-After 时：2s、4s
+  var RETRY_AFTER_CAP = 15000;      // 源要求的等待再长也不等，直接报错让用户手动重试
+  var BOX_RETRY_BUDGET = 45000;     // 单次调用总预算（含等待），到点即放弃
+  var BOX_PENALTY_MS = 5 * 60 * 1000;  // 被限流后该源降速持续多久
+  var BOX_PENALTY_DELAY = 1000;     // 降速期间的请求间隔
+
+  // Retry-After 有两种格式：秒数，或 HTTP-date。解析不出返回 null。
+  function parseRetryAfter(v) {
+    if (!v) return null;
+    var s = String(v).trim();
+    if (/^\d+$/.test(s)) return parseInt(s, 10) * 1000;
+    var t = Date.parse(s);
+    if (isNaN(t)) return null;
+    return Math.max(0, t - Date.now());
+  }
+
+  function sleepMs(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  function boxHostOf(endpoint) {
+    try { return new URL(endpoint).host; } catch (e) { return String(endpoint || ""); }
+  }
+
+  // 按源排队：同一 source 的请求串行，且被限流过的那段时间里彼此间隔 1s。
+  // 默认零延迟 —— 没被打过就完全不付代价，首屏耗时不受影响。
+  // 注意与 _boxRateLimiter(3, 300) 的分工：那个是常驻的「3 并发 + 300ms」全局频率，
+  // 这里只在被 429 打过之后额外加间隔，两者叠加取更慢的那个，不重复做事。
+  var _boxGate = {};
+
+  function boxGateTake(endpoint) {
+    var g = _boxGate[endpoint] || (_boxGate[endpoint] = { lastAt: 0, penalizeUntil: 0 });
+    var now = Date.now();
+    // 间隔挂在「上一次发起时间」上：平时 gap=0 → 永远不用等；惩罚期才排队
+    var gap = now < g.penalizeUntil ? BOX_PENALTY_DELAY : 0;
+    var wait = Math.max(0, g.lastAt + gap - now);
+    g.lastAt = now + wait;
+    return wait;
+  }
+
+  function boxPenalize(endpoint) {
+    var g = _boxGate[endpoint] || (_boxGate[endpoint] = { lastAt: 0, penalizeUntil: 0 });
+    g.penalizeUntil = Date.now() + BOX_PENALTY_MS;
+  }
+
+  // 重试判定：返回要等的毫秒数，null = 现在放弃。只认 ratelimit。
+  function retryWaitFor(err, ctx) {
+    if (!err || err.ssdKind !== "ratelimit") return null;
+    if (ctx.attempt >= BOX_MAX_RETRIES) return null;
+    var now = Date.now();
+    if (now >= ctx.deadline) return null;
+    var ra = err.retryAfterMs;
+    // 源要求的等待超过上限：报错让用户自己决定，别把请求挂在这里
+    if (ra != null && ra > RETRY_AFTER_CAP) return null;
+    var want = (ra != null ? ra : BOX_BACKOFF_BASE * Math.pow(2, ctx.attempt));
+    var wait = Math.min(want, RETRY_AFTER_CAP);
+    if (now + wait >= ctx.deadline) return null;
+    return wait;
+  }
+
   var BOX_ERR_TEXT = {
     timeout: ["请求超时", "Timed out"],
     network: ["无法连接", "Unreachable"],
     auth: ["鉴权失败", "Auth failed"],
+    ratelimit: ["源正在限流", "Rate limited"],
     blocked: ["请求被拒绝", "Rejected"],
     graphql: ["接口报错", "API error"],
     parse: ["响应异常", "Bad response"],
@@ -140,51 +207,87 @@
       });
   }
 
-  function callBoxGQL(endpoint, apiKey, query, variables, timeoutMs) {
+  function callBoxGQL(endpoint, apiKey, query, variables, timeoutMs, _ctx) {
+    var ctx = _ctx || { attempt: 0, deadline: Date.now() + BOX_RETRY_BUDGET };
     var payload = { query: query };
     if (variables) payload.variables = variables;
     var headers = { "Content-Type": "application/json" };
     if (apiKey) headers["ApiKey"] = apiKey;
 
-    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timedOut = false;
-    var timer = setTimeout(function () {
-      timedOut = true;
-      if (controller) controller.abort();
-    }, timeoutMs || BOX_TIMEOUT_MS);
-    function done() { clearTimeout(timer); }
+    // 单次尝试：排队 → 请求 → 错误分类
+    function once() {
+      var wait = boxGateTake(endpoint);
+      var start = wait > 0 ? sleepMs(wait) : Promise.resolve();
+      return start.then(function () {
+        var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        var timedOut = false;
+        var timer = setTimeout(function () {
+          timedOut = true;
+          if (controller) controller.abort();
+        }, timeoutMs || BOX_TIMEOUT_MS);
+        function done() { clearTimeout(timer); }
 
-    function fetchError(e) {
-      if (timedOut || (e && e.name === "AbortError")) return ssdError("timeout", "timeout");
-      return ssdError("network", (e && e.message) || "network error");
+        function fetchError(e) {
+          if (timedOut || (e && e.name === "AbortError")) return ssdError("timeout", "timeout");
+          return ssdError("network", (e && e.message) || "network error");
+        }
+
+        return fetch(endpoint, {
+          method: "POST",
+          headers: headers,
+          body: JSON.stringify(payload),
+          redirect: "error",
+          signal: controller ? controller.signal : undefined,
+        }).catch(function (e) {
+          throw fetchError(e);
+        }).then(function (r) {
+          if (!r.ok) {
+            if (r.status === 429) {
+              // 429 的 body 通常是 Cloudflare 的 HTML，走不到 json() 解析
+              boxPenalize(endpoint);
+              var e429 = ssdError("ratelimit", "HTTP 429");
+              e429.retryAfterMs = parseRetryAfter(
+                (r.headers && r.headers.get) ? r.headers.get("Retry-After") : null);
+              throw e429;
+            }
+            var kind = (r.status === 401 || r.status === 403) ? "auth" : "blocked";
+            throw ssdError(kind, "HTTP " + r.status);
+          }
+          return r.json().catch(function (e) {
+            if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
+            throw ssdError("parse", "non-JSON response");
+          });
+        }).then(function (data) {
+          done();
+          if (data && data.errors) throw ssdError("graphql", JSON.stringify(data.errors));
+          return data.data;
+        }).catch(function (e) {
+          done();
+          if (e && e.ssdKind) throw e;
+          throw ssdError("unknown", (e && e.message) || String(e));
+        });
+      });
     }
 
-    return fetch(endpoint, {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(payload),
-      redirect: "error",
-      signal: controller ? controller.signal : undefined,
-    }).catch(function (e) {
-      throw fetchError(e);
-    }).then(function (r) {
-      if (!r.ok) {
-        var kind = (r.status === 401 || r.status === 403) ? "auth" : "blocked";
-        throw ssdError(kind, "HTTP " + r.status);
-      }
-      return r.json().catch(function (e) {
-        if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
-        throw ssdError("parse", "non-JSON response");
+    // 只有 ratelimit 会回到 loop 重试（见 retryWaitFor）
+    function loop() {
+      return once().catch(function (e) {
+        var wait = retryWaitFor(e, ctx);
+        if (wait == null) {
+          // 重试过才把次数写进明细，便于日志和用户判断是不是没缓过来
+          if (e && e.ssdKind === "ratelimit" && ctx.attempt > 0) {
+            e.message = (e.message || "HTTP 429") + ", retried " + ctx.attempt + "x";
+          }
+          throw e;
+        }
+        ctx.attempt++;
+        console.warn("[ssd] 429 " + boxHostOf(endpoint) + " retry " + ctx.attempt +
+          "/" + BOX_MAX_RETRIES + " in " + wait + "ms");
+        return sleepMs(wait).then(loop);
       });
-    }).then(function (data) {
-      done();
-      if (data && data.errors) throw ssdError("graphql", JSON.stringify(data.errors));
-      return data.data;
-    }).catch(function (e) {
-      done();
-      if (e && e.ssdKind) throw e;
-      throw ssdError("unknown", (e && e.message) || String(e));
-    });
+    }
+
+    return loop();
   }
 
   // ─── ThePornDB REST adapter ──────────────────────────────────────────────
@@ -242,46 +345,82 @@
     return box.api_key != null ? box.api_key : (box.apiKey || "");
   }
 
-  function tpdbGet(box, path, timeoutMs, isRetry) {
-    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timedOut = false;
-    var timer = setTimeout(function () {
-      timedOut = true;
-      if (controller) controller.abort();
-    }, timeoutMs || BOX_TIMEOUT_MS);
-    var headers = { "Accept": "application/json" };
-    if (boxKey(box)) headers["Authorization"] = "Bearer " + boxKey(box);
-    return fetch("https://api.theporndb.net" + path, {
-      headers: headers,
-      signal: controller ? controller.signal : undefined,
-    }).catch(function (e) {
-      clearTimeout(timer);
-      if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
-      throw ssdError("network", (e && e.message) || "network error");
-    }).then(function (r) {
-      if (!r.ok) {
-        // 401 偶尔是瞬时鉴权失败，重发一次就恢复；连着重试仍 401 基本是 key 配错源
-        // 或没权限（403 直接不重试）。只兜一次，不做退避重试链。
-        if (r.status === 401 && !isRetry) {
+  // TPDB 所有 REST 调用共用一个节流键（源只有一个）
+  var TPDB_GATE_KEY = "https://api.theporndb.net";
+
+  function tpdbGet(box, path, timeoutMs, isRetry, _ctx) {
+    var ctx = _ctx || { attempt: 0, deadline: Date.now() + BOX_RETRY_BUDGET };
+
+    function once() {
+      var wait = boxGateTake(TPDB_GATE_KEY);
+      var start = wait > 0 ? sleepMs(wait) : Promise.resolve();
+      return start.then(function () {
+        var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        var timedOut = false;
+        var timer = setTimeout(function () {
+          timedOut = true;
+          if (controller) controller.abort();
+        }, timeoutMs || BOX_TIMEOUT_MS);
+        var headers = { "Accept": "application/json" };
+        if (boxKey(box)) headers["Authorization"] = "Bearer " + boxKey(box);
+        return fetch("https://api.theporndb.net" + path, {
+          headers: headers,
+          signal: controller ? controller.signal : undefined,
+        }).catch(function (e) {
           clearTimeout(timer);
-          return new Promise(function (res) { setTimeout(res, 600); }).then(function () {
-            return tpdbGet(box, path, timeoutMs, true);
-          });
+          if (timedOut || (e && e.name === "AbortError")) throw ssdError("timeout", "timeout");
+          throw ssdError("network", (e && e.message) || "network error");
+        }).then(function (r) {
+          if (!r.ok) {
+            if (r.status === 429) {
+              boxPenalize(TPDB_GATE_KEY);
+              var e429 = ssdError("ratelimit", "HTTP 429");
+              e429.retryAfterMs = parseRetryAfter(
+                (r.headers && r.headers.get) ? r.headers.get("Retry-After") : null);
+              throw e429;
+            }
+            // 401 偶尔是瞬时鉴权失败，重发一次就恢复；连着重试仍 401 基本是 key 配错源
+            // 或没权限（403 直接不重试）。只兜一次，不做退避重试链。
+            if (r.status === 401 && !isRetry) {
+              clearTimeout(timer);
+              return new Promise(function (res) { setTimeout(res, 600); }).then(function () {
+                return tpdbGet(box, path, timeoutMs, true, ctx);
+              });
+            }
+            var httpErr = ssdError((r.status === 401 || r.status === 403) ? "auth" : "blocked", "HTTP " + r.status);
+            // 调用方要区分「记录不存在」(404) 和「网络/鉴权失败」，前者才值得记坏缓存
+            httpErr.status = r.status;
+            throw httpErr;
+          }
+          return r.json().catch(function () { throw ssdError("parse", "non-JSON response"); });
+        }).then(function (data) {
+          clearTimeout(timer);
+          return data;
+        }).catch(function (e) {
+          clearTimeout(timer);
+          if (e && e.ssdKind) throw e;
+          throw ssdError("unknown", (e && e.message) || String(e));
+        });
+      });
+    }
+
+    function loop() {
+      return once().catch(function (e) {
+        var waitMs = retryWaitFor(e, ctx);
+        if (waitMs == null) {
+          if (e && e.ssdKind === "ratelimit" && ctx.attempt > 0) {
+            e.message = (e.message || "HTTP 429") + ", retried " + ctx.attempt + "x";
+          }
+          throw e;
         }
-        var httpErr = ssdError((r.status === 401 || r.status === 403) ? "auth" : "blocked", "HTTP " + r.status);
-        // 调用方要区分「记录不存在」(404) 和「网络/鉴权失败」，前者才值得记坏缓存
-        httpErr.status = r.status;
-        throw httpErr;
-      }
-      return r.json().catch(function () { throw ssdError("parse", "non-JSON response"); });
-    }).then(function (data) {
-      clearTimeout(timer);
-      return data;
-    }).catch(function (e) {
-      clearTimeout(timer);
-      if (e && e.ssdKind) throw e;
-      throw ssdError("unknown", (e && e.message) || String(e));
-    });
+        ctx.attempt++;
+        console.warn("[ssd] 429 " + boxHostOf(TPDB_GATE_KEY) + " retry " + ctx.attempt +
+          "/" + BOX_MAX_RETRIES + " in " + waitMs + "ms");
+        return sleepMs(waitMs).then(loop);
+      });
+    }
+
+    return loop();
   }
 
   // 单条解析 uuid → 整数 id。

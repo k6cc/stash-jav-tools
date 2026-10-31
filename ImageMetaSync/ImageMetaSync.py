@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Image Meta Sync v1.0.0: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
+Image Meta Sync v1.0.1: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
 
 - 钩子 Gallery.Create.Post / Gallery.Update.Post：派生 detached 子进程处理该图库，不阻塞扫描队列。
 - 任务 "Sync Image Metadata"：批量处理全部图库；开启 includeScenesWithoutGallery 时兜底处理无图库场景。
@@ -99,7 +99,8 @@ class ImageMetaSync:
                 return
             now = time.time()
             for f in os.listdir(self.PENDING_DIR):
-                if not (f.endswith('.json') or f.endswith('.log')):
+                if not (f.endswith('.json') or f.endswith('.log')
+                        or f.startswith(os.path.basename(self.QUEUE_FILE))):
                     continue
                 fp = os.path.join(self.PENDING_DIR, f)
                 if os.path.isfile(fp) and now - os.path.getmtime(fp) > config.get_stale_file_max_age():
@@ -178,27 +179,35 @@ class ImageMetaSync:
             return
         self.__cleanup_stale_tasks()
 
-        if not self.__acquire_lock():
-            # 已有后台运行中：只登记本次变更，由运行中的进程代跑，避免并发重入
-            self.__enqueue(gallery_id)
-            log.LogInfo(f"Gallery {gallery_id}: another run in progress, queued")
-            return
+        head = str(gallery_id)
+        while True:
+            if not self.__acquire_lock():
+                if head:
+                    # 已有后台运行中：只登记本次变更，由运行中的进程代跑，避免并发重入
+                    self.__enqueue(head)
+                    log.LogInfo(f"Gallery {head}: another run in progress, queued")
+                return
 
-        try:
-            seen = set()
-            pending = [str(gallery_id)]
-            while pending:
-                gid = pending.pop(0)
-                if gid in seen:
-                    continue
-                seen.add(gid)
-                try:
-                    self.__process_gallery(gid, wait_for_images=True)
-                except Exception as e:
-                    log.LogError(f"Gallery {gid} failed: {repr(e)}")
-                pending.extend(self.__drain_queue())
-        finally:
-            self.__release_lock()
+            try:
+                seen = set()
+                pending = [head] if head else []
+                while pending:
+                    gid = pending.pop(0)
+                    if not gid or gid in seen:
+                        continue
+                    seen.add(gid)
+                    try:
+                        self.__process_gallery(gid, wait_for_images=True)
+                    except Exception as e:
+                        log.LogError(f"Gallery {gid} failed: {repr(e)}")
+                    pending.extend(self.__drain_queue())
+            finally:
+                self.__release_lock()
+
+            # 上一轮收尾窗口内入队的变更没人处理：抢到锁就再跑一轮，抢不到说明已被别的进程接手
+            if not self.__has_queue():
+                return
+            head = ""
 
     def __acquire_lock(self):
         os.makedirs(self.PENDING_DIR, exist_ok=True)
@@ -236,6 +245,12 @@ class ImageMetaSync:
                 f.write(json.dumps({"gallery_id": str(gallery_id)}) + "\n")
         except OSError as e:
             log.LogError(f"Queue write failed: {repr(e)}")
+
+    def __has_queue(self):
+        try:
+            return os.path.getsize(self.QUEUE_FILE) > 0
+        except OSError:
+            return False
 
     def __drain_queue(self):
         # 先改名再读，避免与并发追加写者互相覆盖
@@ -362,6 +377,7 @@ class ImageMetaSync:
 
         return {
             "overwrite": s.get("overwrite") is True,
+            "fill_title": fill_title,
             "performer_id": performer_id,
             "title": title if fill_title else None,
             "code": self.__pick(scenes, "code") if fill_title else None,
@@ -557,7 +573,8 @@ class ImageMetaSync:
             return "no_images", 0
 
         meta = self.__resolve_meta([scene], None, performers[0]["id"])
-        if not meta.get("title"):
+        # 兜底路径只有「场景无标题」时才回退到文件名，且受 fillTagsTitleCode 开关约束
+        if meta.get("fill_title") and not meta.get("title"):
             meta["title"] = scene_filename
         updated = self.__apply_to_images(images, poster_id, meta)
         if verbose and updated:

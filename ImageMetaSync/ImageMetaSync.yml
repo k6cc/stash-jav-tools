@@ -1,6 +1,6 @@
 name: ImageMetaSync
 description: "Backfills metadata (performers, studio, date, tags, title, code, urls, details) onto the images of a scene's gallery (cover/fanart/stills) from the linked scene. Galleries and scenes whose performers are ambiguous (0 or 2+) are skipped. Optional fallback for scenes without a gallery. Requires Python and requests."
-version: 1.0.0
+version: 1.0.1
 url: https://discourse.stashapp.cc/t/image-meta-sync/18956
 errLog: info
 exec:

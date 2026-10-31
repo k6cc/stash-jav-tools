@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Image Meta Sync v1.0.3: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
+Image Meta Sync v1.0.4: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
 
 - 钩子 Gallery.Create.Post / Gallery.Update.Post：派生 detached 子进程处理该图库，不阻塞扫描队列。
 - 任务 "Sync Image Metadata"：批量处理全部图库；开启 includeScenesWithoutGallery 时兜底处理无图库场景。
@@ -10,11 +10,12 @@ Image Meta Sync v1.0.3: 把场景级元数据回填到场景图库的图片记�
 - 以图库为处理单元，演员取该图库所有关联场景的并集；并集 != 1（0 个或 2 个以上）时整库跳过并记录日志。
 - 字段只补空（overwrite 例外），逐图 imageUpdate 写入；不碰 rating100 / photographer / organized。
 - 标题方案 B：封面用纯标题，剧照用「标题 #N」，N 优先取文件名尾部数字，冲突顺延到空号。
-- 轻量单实例运行锁 + 变更队列，合并短时间内的重复图库变更事件。
+- 单实例运行锁（OS 字节锁，进程消失即自动释放）+ 变更队列，合并短时间内的重复图库变更事件。
 """
 
 import sys
 import json
+import errno
 import os
 import re
 import time
@@ -46,6 +47,12 @@ READY_EMPTY_BREAK_AFTER = 3
 # 现存 tag id 集合的缓存时长：tagMergeAuto 合并删 tag 会持续发生，太长则过滤失效
 TAG_CACHE_TTL = 60
 
+# 锁已被别的进程持有时的 errno：Windows 字节锁给 EACCES，POSIX flock 给 EAGAIN/EACCES
+LOCK_BUSY_ERRNOS = {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+
+# 字节锁加在锁文件的这个大偏移处（见 __os_lock），开头留给排查用的 pid 元信息
+LOCK_BYTE_OFFSET = 1 << 20
+
 
 class ImageMetaSync:
 
@@ -59,6 +66,9 @@ class ImageMetaSync:
         self._excluded_tag_names = None
         self._tag_ids = None
         self._tag_ids_at = 0.0
+        self._lock_fh = None
+        self._lock_mode = None
+        self._lock_backend_name = None
 
     # ============================================================
     # 入口
@@ -105,7 +115,8 @@ class ImageMetaSync:
             now = time.time()
             for f in os.listdir(self.PENDING_DIR):
                 if not (f.endswith('.json') or f.endswith('.log')
-                        or f.startswith(os.path.basename(self.QUEUE_FILE))):
+                        or f.startswith(os.path.basename(self.QUEUE_FILE))
+                        or f.startswith(os.path.basename(self.LOCK_FILE) + ".probe")):
                     continue
                 fp = os.path.join(self.PENDING_DIR, f)
                 if os.path.isfile(fp) and now - os.path.getmtime(fp) > config.get_stale_file_max_age():
@@ -215,12 +226,125 @@ class ImageMetaSync:
             head = ""
 
     def __acquire_lock(self):
+        # 锁由内核持有（Windows 字节锁 / POSIX flock）：进程被硬杀、崩溃、关机后锁自动消失，
+        # 不需要靠 pid 猜存活、也不需要等超时。锁文件本身不删（见 __release_lock），只用来承载锁。
+        os.makedirs(self.PENDING_DIR, exist_ok=True)
+        if self.__lock_backend() == "mtime":
+            return self.__acquire_lock_by_mtime()
+
+        existed = os.path.exists(self.LOCK_FILE)
+        try:
+            fh = open(self.LOCK_FILE, "a+", encoding="utf-8")
+        except OSError as e:
+            log.LogError(f"Lock open failed: {repr(e)}")
+            return False
+
+        try:
+            self.__os_lock(fh)
+        except OSError as e:
+            fh.close()
+            if e.errno in LOCK_BUSY_ERRNOS:
+                return False
+            # 探针说能加锁、实际却失败（极少见）：退回 mtime 判定。
+            # 只有文件是本进程刚建出来的空文件才能删，否则会删掉别人正持有的 mtime 锁
+            log.LogWarning(f"OS lock failed at runtime (errno={e.errno}), fallback to mtime lock")
+            if not existed:
+                try:
+                    os.unlink(self.LOCK_FILE)
+                except OSError:
+                    pass
+            return self.__acquire_lock_by_mtime()
+
+        self._lock_fh = fh
+        self._lock_mode = "os"
+        self.__write_lock_meta(fh)
+        return True
+
+    def __lock_backend(self):
+        # 文件系统是否支持字节锁，每个进程探一次：少数 FUSE/网络盘不支持，
+        # 那种情况直接走 mtime 判定，避免「先建文件再发现不能加锁」把锁文件搅浑。
+        # 探针文件名带 pid：两个进程同时启动时各锁各的，不会因为互相抢锁被误判成"不支持"
+        if self._lock_backend_name:
+            return self._lock_backend_name
+        probe = f"{self.LOCK_FILE}.probe.{os.getpid()}"
+        try:
+            fh = open(probe, "a+", encoding="utf-8")
+        except OSError:
+            self._lock_backend_name = "mtime"
+            return "mtime"
+        try:
+            self.__os_lock(fh)
+            self._lock_backend_name = "os"
+        except OSError as e:
+            if e.errno in LOCK_BUSY_ERRNOS:
+                # 能被别人的锁挡住，说明该文件系统支持锁（pid 被复用时才会走到这里）
+                self._lock_backend_name = "os"
+            else:
+                log.LogWarning(f"OS lock unavailable (errno={e.errno}), fallback to mtime lock")
+                self._lock_backend_name = "mtime"
+        except Exception as e:  # 平台没这 API
+            log.LogWarning(f"OS lock unsupported ({repr(e)}), fallback to mtime lock")
+            self._lock_backend_name = "mtime"
+        finally:
+            try:
+                fh.close()
+            except OSError:
+                pass
+            try:
+                os.unlink(probe)
+            except OSError:
+                pass
+        return self._lock_backend_name
+
+    @staticmethod
+    def __os_lock(fh):
+        # Windows 的字节锁对「读」同样生效，锁在文件开头会让持锁期间连 pid 都读不出来，
+        # 所以锁加在 1 MiB 处（Windows 允许锁 EOF 之外的区域），开头留给排查用的元信息
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(LOCK_BYTE_OFFSET)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def __write_lock_meta(self, fh):
+        # 仅供排查「谁在持锁」：pid 会被复用，不可作为存活判定依据
+        try:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() > 4096:
+                fh.seek(0)
+                fh.truncate()
+            fh.write(json.dumps({"pid": os.getpid(), "t": int(time.time())}) + "\n")
+            fh.flush()
+        except (OSError, ValueError):
+            pass
+
+    def __release_lock(self):
+        if self._lock_mode == "os":
+            fh, self._lock_fh = self._lock_fh, None
+            self._lock_mode = None
+            if fh is not None:
+                try:
+                    fh.close()  # 关闭句柄即释放字节锁
+                except OSError:
+                    pass
+            # 此处不能 unlink：删文件会让后来者锁到新 inode，与新进程的锁互相看不见（双持锁）
+            return
+        try:
+            os.unlink(self.LOCK_FILE)
+        except OSError:
+            pass
+
+    def __acquire_lock_by_mtime(self):
+        # 兜底：不支持 OS 锁时按「锁文件创建时长」判过期
         os.makedirs(self.PENDING_DIR, exist_ok=True)
         for _ in range(2):
             try:
                 fd = os.open(self.LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(fd, json.dumps({"pid": os.getpid(), "t": time.time()}).encode("utf-8"))
                 os.close(fd)
+                self._lock_mode = "mtime"
                 return True
             except FileExistsError:
                 if self.__lock_stale():
@@ -237,12 +361,6 @@ class ImageMetaSync:
             return time.time() - os.path.getmtime(self.LOCK_FILE) > config.get_lock_stale_max_age()
         except OSError:
             return True
-
-    def __release_lock(self):
-        try:
-            os.unlink(self.LOCK_FILE)
-        except OSError:
-            pass
 
     def __enqueue(self, gallery_id):
         try:

@@ -1,6 +1,6 @@
 name: ImageMetaSync
 description: "Copies scene metadata (performers, studio, date, tags, title, code, urls) onto that scene's gallery images. Galleries without exactly one performer are skipped. Requires Python and requests."
-version: 1.0.3
+version: 1.0.4
 url: https://discourse.stashapp.cc/t/image-meta-sync/18956
 errLog: info
 exec:

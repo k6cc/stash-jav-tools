@@ -23,7 +23,7 @@ fanart_filenames = "{filename}-fanart.jpg,landscape.jpg"
 # 过期任务文件清理时间（秒）
 stale_file_max_age = 3600
 
-# 运行锁过期时间（秒）：超过此时间的锁视为持有进程已崩溃，可抢占
+# 运行锁过期时间（秒）：仅在文件系统不支持系统级锁时生效（退化判定：锁文件创建超过此秒数视为可抢占）
 lock_stale_max_age = 900
 
 

@@ -50,7 +50,9 @@ class Stash:
         req.add_header("Authorization", "Bearer " + self.key)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
+                # Stash 日志里会混入历史 GBK 输出（非 UTF-8 字节），严格解码会抛
+                # UnicodeDecodeError；replace 不丢结构，只坏个别字符
+                return json.loads(r.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             raise RuntimeError("GraphQL HTTP %s: %s" % (e.code, e.read().decode("utf-8", "replace")[:500]))
 

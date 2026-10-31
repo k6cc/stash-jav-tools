@@ -39,7 +39,7 @@ docs/stashdiscover-*.md
 stash-testkit/config.json
 
 # ImageMetaSync 验证脚本的基线快照（生成物，不提交）
-stash-testkit/tests/ImageMetaSync/image_state.json
+stash-testkit/tests/ImageMetaSync/**/image_state.json
 
 # 探针运行配置（生成物，内嵌明文 API key，不提交）
 stash-testkit/tests/**/_cfg.js

@@ -21,6 +21,7 @@ stash-testkit/
 │   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
 │   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
 │   ├── stashDiscover/       # 发现页/弹窗/Jackett/TPDB 链路验证（文档分层 + scripts/ 放全部脚本，入口 NOTES.md）
+│   ├── ImageMetaSync/       # 图库图片元数据回填：E2E/兜底/锁队列/全库审计（入口 NOTES.md）
 │   └── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
@@ -61,6 +62,8 @@ stash-testkit/
 - **封面"是否仍为自动帧"判别**：`screenshot?t=` 是场景 `updated_at` 的 epoch；`?t= == created_at` ⇔ 场景创建后无人写过任何元数据。
 - **封面内容验证**：`fetch_scene_image()` 抓 screenshot 端点字节，与本地封面文件比对即可判定"封面被谁写了"。
 - **Stash `logs` 查询返回新→旧**：Python 任务写 marker → 前端轮询日志的协议，正序扫描第一个匹配 marker 即最新一条（倒序恰好取到最旧）。
+- **`findImages(image_filter:{path})` 按存储原样字符串匹配**：Windows 库里存反斜杠，传 `E:/temp/x` 静默返回 0 条（不是没图）。手工探针一律用 Stash 返回的原样路径拼参数。
+- **`imageUpdate` 与 `addGalleryImages` 都不触发 `Gallery.Update.Post`**：图库钩子只在 `galleryCreate` / `galleryUpdate` 出现。插件回写图片不会自激；反过来，建库后**延迟挂图**也没有钩子，只能靠建库钩子自身的等待窗口兜。
 
 ### GraphQL schema（v0.31.1 实测）
 
@@ -90,6 +93,7 @@ stash-testkit/
 
 - **Node 的 fetch 默认不读 `HTTPS_PROXY`**：脚本要过代理得自己起 CONNECT 隧道（`tests/stashDiscover/scripts/node_tpdb_harness.js` 已内置这套做法）。
 - **GraphQL 查询写 `.py` 脚本文件**，别在 PowerShell 命令行内联（`$id`/`!` 被插值导致 422）。
+- **`logs` 响应可能夹带历史非 UTF-8 字节**（GBK 输出混在 UTF-8 流里）：严格解码会让整条轮询崩，一律用 `errors="replace"`（`stash_client.py` 已内置）。
 - **破坏性测试前备份**：实例数据目录或 `stash-go.sqlite`。
 - **测流媒体/播放别用 `--virtual-time-budget`**：headless Chrome 加该参数时媒体时钟不推进、`currentTime` 恒为 0，验证播放与 seek 恢复必须跑真实时间。
 - **用 CDP 驱动 Chrome 必须带 `--remote-allow-origins=*`**，否则 WebSocket 握手 403；`browser-automation-cdp` 技能的 `start_chrome.py` 已内建该参数，手动启动浏览器时别漏。额外 flag 用它的 `--extra` 透传。
@@ -112,7 +116,7 @@ stash-testkit/
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
 | `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
-| `tests/ImageMetaSync/` | 图库图片元数据回填端到端验证（`verify_image_meta_sync.py`：快照/清空/任务/钩子/差异对比） |
+| `tests/ImageMetaSync/` | 图库图片元数据回填：全库口径审计、受控 E2E（建库钩子/竞态等待/编号/开关）、无图库兜底、锁与队列、schema 探针；**脚本逐个用途与副作用见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 
 ## 清理规范
 

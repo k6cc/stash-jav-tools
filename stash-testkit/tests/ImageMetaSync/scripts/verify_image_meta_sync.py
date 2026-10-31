@@ -21,7 +21,7 @@ import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(_HERE), ".."))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", ".."))
 from stash_client import Stash  # noqa: E402
 
 STATE_FILE = os.path.join(_HERE, "image_state.json")

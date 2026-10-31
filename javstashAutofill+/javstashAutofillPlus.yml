@@ -1,5 +1,5 @@
 name: Javstash Autofill+
-description: Autofill new performers from JAVStash (empty fields only, stash_id written); new scenes are looked up by file hash (oshash) and empty fields are filled, with stash_id appended. A manual task backfills existing scenes.
+description: Autofills new scenes and performers from JAVStash, matching scenes by file hash. A manual task backfills existing scenes.
 version: 1.3.1
 url: https://discourse.stashapp.cc/t/javstash-autofill/17003
 errLog: info
@@ -10,71 +10,71 @@ interface: raw
 settings:
   scraper:
     displayName: Scraper
-    description: 统一抓取器（场景与演员公用），stash-box 端点 URL；空 = javstash。
+    description: Shared stash-box endpoint URL for scenes and performers. Empty = javstash.
     type: STRING
   performerFill:
     displayName: Fill performer details
-    description: 补全演员详情（stash_id 反查 / 0.9 名称匹配 / 详情填充）；OFF = 仅复用/新建并关联，详情交给其他插件。默认 ON。
+    description: Fill performer details (stash_id lookup, then name match above the threshold). OFF = only reuse/create and link, details left to other plugins. Default ON.
     type: BOOLEAN
   sceneFillDelay:
     displayName: Scene fill delay (s)
-    description: 场景填充延迟（秒），等待 NFO 插件先写入。默认 20。
+    description: Delay (s) before filling a new scene, so NFO plugins write first. Default 20.
     type: NUMBER
   performerFillDelay:
     displayName: Performer fill delay (s)
-    description: 表演者填充延迟（秒）。默认 2。
+    description: Delay (s) before filling a new performer. Default 2.
     type: NUMBER
   threshold:
     displayName: Name-match threshold (0-1)
-    description: 名称匹配阈值（0-1），仅无 stash_id 的名称匹配路径。默认 0.9。
+    description: Name-match threshold (0-1) for lookups without a stash_id. Default 0.9.
     type: STRING
   owSceneTitle:
     displayName: Overwrite scene title
-    description: 覆盖场景标题；OFF = 仅补空。
+    description: Overwrite scene title. OFF = fill empty only.
     type: BOOLEAN
   owSceneDetails:
     displayName: Overwrite scene details
-    description: 覆盖场景简介；OFF = 仅补空。
+    description: Overwrite scene details. OFF = fill empty only.
     type: BOOLEAN
   owSceneTags:
     displayName: Overwrite scene tags
-    description: 覆盖场景 tag；OFF = 仅追加缺失。
+    description: Overwrite scene tags. OFF = append missing only.
     type: BOOLEAN
   owSceneUrls:
     displayName: Overwrite scene URLs
-    description: 覆盖场景 url；OFF = 仅追加缺失。
+    description: Overwrite scene URLs. OFF = append missing only.
     type: BOOLEAN
   owSceneImage:
     displayName: Overwrite scene image
-    description: 覆盖场景图像；OFF = 仅无图时写入。
+    description: Overwrite scene image. OFF = write only when missing.
     type: BOOLEAN
   owSceneOther:
     displayName: Overwrite scene other details
-    description: 覆盖场景其他详情（code/date/director/studio/performers 关联）；OFF = 仅补空；源字段为空不覆盖本地已有值。
+    description: Overwrite code/date/director/studio/performers. OFF = fill empty only. Empty source values never overwrite local ones.
     type: BOOLEAN
   owPerformerName:
     displayName: Overwrite performer name
-    description: 用抓取规范名作演员主名；OFF = 保持创建名。
+    description: Use the scraped canonical name as performer name. OFF = keep the created name.
     type: BOOLEAN
   owAliasList:
     displayName: Overwrite performer aliases
-    description: 覆盖演员别名；OFF = 保留并追加缺失。
+    description: Overwrite performer aliases. OFF = keep and append missing.
     type: BOOLEAN
   owUrls:
     displayName: Overwrite performer URLs
-    description: 覆盖演员 url；OFF = 仅追加缺失。
+    description: Overwrite performer URLs. OFF = append missing only.
     type: BOOLEAN
   owImage:
     displayName: Overwrite performer image
-    description: 覆盖演员图像；OFF = 仅无图时写入。
+    description: Overwrite performer image. OFF = write only when missing.
     type: BOOLEAN
   owPerformerOther:
     displayName: Overwrite performer other details
-    description: 覆盖演员其他详情（gender/birthdate/death_date/ethnicity/country/hair/eyes/height/weight/measurements/fake_tits/career/tattoos/piercings/details）；OFF = 仅补空；源字段为空不覆盖本地已有值。
+    description: Overwrite gender/birthdate/ethnicity/country/hair/eyes/height/weight/measurements/tattoos/details. OFF = fill empty only. Empty source values never overwrite local ones.
     type: BOOLEAN
 tasks:
   - name: "Backfill scenes stash-box ID"
-    description: "For every scene without the configured stash-box ID, look it up by file hash and fill empty fields (title/code/details/director/date, studio, performers, tags, urls) and the stash_id."
+    description: "For every scene without the stash-box ID, look it up by file hash and fill empty fields plus the stash_id."
     defaultArgs:
       mode: scene_backfill
 
@@ -84,6 +84,6 @@ hooks:
     triggeredBy:
       - Performer.Create.Post
   - name: scene_create_autofill
-    description: Look up a newly scanned scene by file hash and fill empty fields (title/code/details/director/date, studio, performers, tags, urls, cover) and stash_id
+    description: Look up a newly scanned scene by file hash and fill empty fields plus stash_id
     triggeredBy:
       - Scene.Create.Post

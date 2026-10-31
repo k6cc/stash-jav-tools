@@ -38,6 +38,19 @@
 - 多处修改完成后用 `rg` 逐点核对关键改动确已在盘，再报完成
 - **Edit 工具偶发「File has not been read yet」卡死**（即使刚 Read 过）：改用 PowerShell `[IO.File]::ReadAllText($path)` + `[IO.File]::WriteAllText($path, $content, (New-Object Text.UTF8Encoding $false))` 做字符串替换绕过；写回用 UTF-8 无 BOM、LF 结尾，与仓库现有文件一致
 
+## 多语言约定（社区公开插件）
+
+| 插件类型 | 界面文案 | 设置项 displayName / description | yml 顶层 description |
+|---|---|---|---|
+| 有 UI 的公开插件 | 跟随 Stash 界面语言：中文环境中文、其余英文（`tc()` + 语言包 key，无对应 key 时按此兜底） | 英文 | 英文 |
+| 纯后台（`interface: raw`，无 UI 注入） | — | 英文 | 英文 |
+| 翻译插件 sceneTranslate / sceneTranslateAuto | 中英 | `中文 / English` 并列 | 英文 |
+| 第三方汉化插件（*I18n） | 全中文 | 全中文 | 中文 |
+
+- yml 说明求短：顶层 `description` 一句话讲清「做什么 + 依赖」，不堆字段清单与跳过规则；设置项 description 讲清「开/关各做什么」即可。
+- `tasks` / `hooks` 的 description 同为英文（Stash 任务页、日志可见）。
+- yml 里的中文注释只有维护者看得到，不受此限。
+
 ## 专题规范（按需 Read，不每次必读）
 
 - **改带 UI 的插件 `.js` 前**：读 `docs/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。

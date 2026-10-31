@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Image Meta Sync v1.0.1: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
+Image Meta Sync v1.0.2: 把场景级元数据回填到场景图库的图片记录（封面 + fanart + 剧照）。
 
 - 钩子 Gallery.Create.Post / Gallery.Update.Post：派生 detached 子进程处理该图库，不阻塞扫描队列。
 - 任务 "Sync Image Metadata"：批量处理全部图库；开启 includeScenesWithoutGallery 时兜底处理无图库场景。

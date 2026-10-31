@@ -16,6 +16,7 @@
 本地 clone `E:\Temp\stash-plugins`（远程 `k6cc/stash-plugins`）常落后，先 `git fetch; git reset --hard origin/main`：
 
 - 在 `plugins/main/index.yml` 末尾追加占位条目：`version: 0.0.0`、`sha256:` 全 0、`path:` 按 release URL 约定 `https://github.com/k6cc/stash-jav-tools/releases/download/<插件>-v0.0.0/<插件>-v0.0.0.zip`、`date:` 当前时间
+- 同一条目的 `metadata.description` 写**英文**（仅第三方汉化插件用中文）。这是唯一一次手写机会：release workflow 只更新 `version`/`date`/`path`/`sha256`，description 不会被自动带过来
 - `README.md` 插件表与依赖清单**手动加行**（`scripts/sync_readme.py` 只更新已有行、不插入新行）
 - commit 后**必须 push**——release workflow 是 clone 远程版再 awk 更新，占位符不在远程则 awk 找不到 `- id:` 静默跳过、链接推不上（tagMerge 曾长期停留在全 0 sha256 占位）
 

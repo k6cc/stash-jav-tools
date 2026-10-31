@@ -48,6 +48,7 @@
 | 第三方汉化插件（*I18n） | 全中文 | 全中文 | 中文 |
 
 - yml 说明求短：顶层 `description` 一句话讲清「做什么 + 依赖」，不堆字段清单与跳过规则；设置项 description 讲清「开/关各做什么」即可。
+- **索引仓库 `stash-plugins` 的 `plugins/main/index.yml` description 同属默认英文**（仅第三方汉化插件用中文）。该字段只在**新建插件**时手写一次——release workflow 的 awk 只覆盖 `version`/`date`/`path`/`sha256`，不碰 description，所以后续改了 yml 顶层 description 要手动同步过去一次。
 - `tasks` / `hooks` 的 description 同为英文（Stash 任务页、日志可见）。
 - yml 里的中文注释只有维护者看得到，不受此限。
 

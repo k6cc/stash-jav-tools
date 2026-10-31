@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.3.1：番号提取正则新增 FC2-<数字> 形态（如 FC2-4817186，可从标题/文件名提取）；FC2PPV / FC2-PPV 原形态不变。
+> v1.3.2：设置项与插件说明改为英文并精简（无功能变更）
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 

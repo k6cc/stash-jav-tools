@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Javstash Autofill+ v1.3.1
+Javstash Autofill+ v1.3.2
 Stash plugin: Performer.Create.Post hook + Scene.Create.Post hook.
 Unified performer resolution (scene fill, backfill task and manual creation share it):
   - stash-id first: reverse-lookup the local performer carrying (endpoint, stash_id);

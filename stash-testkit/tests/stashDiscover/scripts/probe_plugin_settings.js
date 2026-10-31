@@ -41,6 +41,24 @@
       (k) => typeof cfg[k] === "number" && cfg[k] === 0
     );
     check("配置里没有旧 NUMBER 留下的 0", bad.length === 0, bad);
+
+    // ── 用户手填 "0" 的语义（STRING 类型下存的是字符串，不会被迁移删掉）──
+    // 语义：recentDays 0 = 不限；previewDays -1 = 隐藏 / 0 = 不限；jackettTimeout 0 = 默认
+    const rc = SSD.recentCutoffDate, pc = SSD.previewCutoffDate;
+    out.zero = {
+      recent0: rc(0), recent30: rc(30), recentNeg: rc(-1),
+      preview0: pc(0), previewM1: pc(-1), preview7: pc(7),
+      // 演员 tab 走 parseInt(settings.recentDays)：字符串 "0" 必须是 0 而不是 NaN→180
+      parseInt0: parseInt("0", 10),
+      parseIntEmpty: String(parseInt("", 10)),
+    };
+    check("recentDays 填 0 → 不限（无截止日期）", rc(0) === null, out.zero.recent0);
+    check("recentDays 填 -1 也按不限兜底", rc(-1) === null, out.zero.recentNeg);
+    check("recentDays 填 30 → 生成截止日期", typeof rc(30) === "string" && rc(30).length === 10, out.zero.recent30);
+    check("previewDays 填 0 → 不限", pc(0) === null, out.zero.preview0);    check("previewDays 填 -1 → 截止到今天（隐藏全部）", typeof pc(-1) === "string" && pc(-1) < pc(7), out.zero.previewM1);
+    check("previewDays 填 7 → 今天+7", typeof pc(7) === "string" && pc(7) > pc(-1), out.zero.preview7);
+    check('字符串 "0" 被 parseInt 成 0（不是 NaN→默认 180）', parseInt("0", 10) === 0, out.zero.parseInt0);
+    check("留空才走默认（parseInt('') 是 NaN）", isNaN(parseInt("", 10)), out.zero.parseIntEmpty);
   } catch (e) {
     out.fatal = String((e && e.message) || e);
   }

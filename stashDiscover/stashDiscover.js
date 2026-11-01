@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.7";
+  var PLUGIN_VERSION = "2.6.8";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -5193,7 +5193,7 @@
     bindModalKeys();
     bindModalNavLayout();
     placeModalNav(overlay);
-    guardModalWheel(overlay, body);
+    guardScrollChain(overlay);
   }
 
   // 翻条箭头停位（用户 2026-11-01）：封面里已经有一套圆形图集箭头，翻条再压在
@@ -5227,19 +5227,22 @@
     navs[1].style.left = Math.round(mr.right + gap) + "px";
   }
 
-  // 滚轮透传（用户 2026-11-01）：.ssd-modal-body 滚到头、或内容短到压根不是滚动
-  // 容器时，wheel 会继续冒泡给文档，把底下的发现页滚走 —— 关掉弹窗后位置已经变了；
-  // 手机在详情顶部继续下拉还会触发 Chrome 的下拉刷新（整页重载）。
+  // 滚轮透传（用户 2026-11-01）：滚动容器滚到头、或内容短到压根不是滚动容器时，
+  // wheel 会继续冒泡给文档，把底下的发现页滚走 —— 关掉弹窗后位置已经变了；手机在
+  // 顶部继续下拉还会触发 Chrome 的下拉刷新（整页重载）。
   // CSS 的 overscroll-behavior: contain 只挡"可滚容器到边界"这一种，内容短时
-  // body 不构成滚动容器，得在这里兜。注意不能无脑拦：详情长的时候弹窗自己的
+  // 容器不构成滚动容器，得在这里兜。注意不能无脑拦：详情长的时候弹窗自己的
   // 滚动必须保留，只在"这个方向已经滚不动"时才 preventDefault。
-  function guardModalWheel(overlay, body) {
-    if (!overlay || !body) return;
+  // 滚动容器在事件时才查（场景弹窗 .ssd-modal-body / 演员弹层 .ssd-dp-modal-body）：
+  // 有的弹层会整块重画内容，闭包里抓住旧节点就会拿 0 高度误判成"不能滚"。
+  function guardScrollChain(overlay) {
+    if (!overlay) return;
     overlay.addEventListener("wheel", function (e) {
       if (e.ctrlKey) return;              // 触控板捏合缩放，不归这里管
       var d = e.deltaY;
       if (!d) return;
-      var range = body.scrollHeight - body.clientHeight;
+      var body = overlay.querySelector(".ssd-modal-body, .ssd-dp-modal-body, .ssd-imp-body");
+      var range = body ? body.scrollHeight - body.clientHeight : 0;
       if (range <= 1) { e.preventDefault(); return; }
       if (d < 0 ? body.scrollTop <= 0 : body.scrollTop >= range - 1) e.preventDefault();
     }, { passive: false });
@@ -6362,6 +6365,7 @@
     var body = document.createElement("div");
     body.className = "ssd-imp-body";
     panel.appendChild(body);
+    guardScrollChain(overlay);
 
     // 必要字段：置顶、灰显、勾着且不可取消
     var req = document.createElement("div");
@@ -7023,6 +7027,7 @@
     var body = document.createElement("div");
     body.className = "ssd-imp-body";
     panel.appendChild(body);
+    guardScrollChain(overlay);
 
     var foot = document.createElement("div");
     foot.className = "ssd-imp-foot";
@@ -8542,6 +8547,8 @@
     pollFollowed: dpPollFollowed,
     // 返回键先关弹窗（discover.js 的四个弹窗复用同一套垫片）
     modalBack: modalBack,
+    // 弹层滚到边界别把背后页面带走（场景详情弹窗与 discover.js 的弹层共用）
+    guardScrollChain: guardScrollChain,
   };
 
   // ─── Discover nav entry + route shell (synchronous top-level registration) ─

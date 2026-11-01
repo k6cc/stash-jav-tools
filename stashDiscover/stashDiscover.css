@@ -3287,7 +3287,9 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   display: flex;
   flex-direction: column;
   width: min(760px, 100%);
+  /* 86vh 在 Android Chrome 是「地址栏隐藏时」的高度，地址栏可见时底部会露到屏幕外 */
   max-height: min(86vh, 900px);
+  max-height: min(86dvh, 900px);
   border: 1px solid var(--sx-ui3);
   border-radius: 14px;
   background: var(--sx-bg2);
@@ -3296,6 +3298,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 /* 内容内层滚动：关闭按钮悬浮在 modal 右上角，不随内容滚出视野（用户 2026-10-25 第五轮）*/
 .ssd-dp-modal-body {
   overflow-y: auto;
+  /* 滚到边界别外溢给文档（内容短时的兜底在 guardScrollChain） */
+  overscroll-behavior: contain;
   padding: 18px;
   flex: 1 1 auto;
   min-height: 0;
@@ -3800,6 +3804,7 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   flex-direction: column;
   width: min(560px, 100%);
   max-height: min(86vh, 820px);
+  max-height: min(86dvh, 820px);
   border: 1px solid var(--ssd-modal-border);
   border-radius: 10px;
   background: var(--ssd-modal-bg);
@@ -3842,6 +3847,7 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px 16px;
 }
 

@@ -2942,6 +2942,12 @@
     else c.appendChild(grid);
   }
 
+  // 弹层滚到边界别把背后的发现页带走（手机在顶部继续下拉还会触发下拉刷新）。
+  // 滚动容器由 stashDiscover.js 在事件时自己查，所以每个弹层只需把 overlay 交过去。
+  function guardDpScroll(overlay) {
+    if (SSD.guardScrollChain) SSD.guardScrollChain(overlay);
+  }
+
   // ── 演员详情弹层（§3.5 详情 + 入库 + 在源打开 + 相关场景）───────────────
   var _dpModal = null;
   var _dpModalBackId = 0;
@@ -3000,6 +3006,7 @@
     // （用户 2026-10-25 第五轮：弹窗内容一滚关闭按钮就消失）
     var body = el("div", "ssd-dp-modal-body");
     m.appendChild(body);
+    guardDpScroll(overlay);
 
     // 头部：共享演员详情模块（与演员过滤视图同构 — 用户 2026-10-25）
     // 统计行走详情区 info 列（第四轮：不放按钮区下面）
@@ -3896,6 +3903,7 @@
     body.appendChild(acts);
 
     m.appendChild(body);
+    guardDpScroll(overlay);
     overlay.appendChild(m);
     document.body.appendChild(overlay);
     backId = SSD.modalBack.hold(shutdown);   // 返回键＝关闭（移动端）
@@ -3940,6 +3948,7 @@
     acts.appendChild(no);
     body.appendChild(acts);
     m.appendChild(body);
+    guardDpScroll(overlay);
     overlay.appendChild(m);
     document.body.appendChild(overlay);
     backId = SSD.modalBack.hold(shutdown);   // 返回键＝取消（移动端）
@@ -4286,6 +4295,7 @@
     m.appendChild(closeBtn);
     var body = el("div", "ssd-dp-modal-body");
     m.appendChild(body);
+    guardDpScroll(overlay);
 
     body.appendChild(el("h3", "ssd-dp-set-h", isScene
       ? tc("场景入库字段", "Scene import fields")

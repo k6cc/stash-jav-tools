@@ -22,10 +22,13 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.6";
+  var PLUGIN_VERSION = "2.6.7";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
+  // 弹窗里翻到某条场景（不是点卡片打开的）时派发：发现页据此标已读、摘红框。
+  // 与 SCENE_SAVED 分开 —— 只是看过，不该让本地查询缓存失效。
+  var SCENE_VIEWED_EVENT = "ssd:scene-viewed";
 
   // Brand display names for known stash-box hosts (simplified badges)
   var BRAND_MAP = {
@@ -1326,7 +1329,15 @@
     "tags { id name } " +
     "images { url }";
 
+  // 弹窗详情缓存（用户 2026-11-01 加翻页后必需）：来回翻同一条不该反复打源站。
+  // 场景元数据基本不变，只做会话级 LRU，不落盘；条数小，因为用户翻过就忘。
+  var _detailCache = {};
+  var _detailCacheKeys = [];
+  var DETAIL_CACHE_MAX = 60;
+
   function fetchBoxSceneDetail(box, sceneId) {
+    var ck = String(box.endpoint || "").toLowerCase() + "|" + String(sceneId);
+    if (Object.prototype.hasOwnProperty.call(_detailCache, ck)) return Promise.resolve(_detailCache[ck]);
     return _boxRateLimiter.submit(function () {
       return callBoxGQL(
         box.endpoint, boxKey(box),
@@ -1336,10 +1347,14 @@
     }).then(function (data) {
       var sc = data && data.findScene;
       if (!sc) return null;
-      return {
+      var out = {
         scene: sc,
         images: (sc.images || []).map(function (img) { return { url: img.url, type: "image" }; }),
       };
+      _detailCache[ck] = out;
+      _detailCacheKeys.push(ck);
+      if (_detailCacheKeys.length > DETAIL_CACHE_MAX) delete _detailCache[_detailCacheKeys.shift()];
+      return out;
     });
   }
 
@@ -4444,7 +4459,7 @@
     coverTd.className = "cover_image-data";
     var coverLink = document.createElement("a");
     coverLink.href = "javascript:void(0)";
-    coverLink.onclick = function () { openModal(item); };
+    coverLink.onclick = function () { openModal(item, tr); };
     if (item.images.length > 0) {
       var img = document.createElement("img");
       img.loading = "lazy";
@@ -4704,7 +4719,7 @@
 
     card.appendChild(cardSection);
 
-    card.onclick = function () { openModal(item); };
+    card.onclick = function () { openModal(item, card); };
     return card;
   }
 
@@ -4850,6 +4865,10 @@
   var _carouselIdx = 0;
   var _modalImages = []; // current open modal's image URL list (cover + DMM shots)
   var _modalGalleryDone = false;
+  var _gallerySeq = 0;          // 当前弹窗的打开序号，DMM 探测回调凭它判断是否过期
+  // 剧照按钮状态（用户 2026-11-01）：自动路径只探 r18 的 json，逐张枚举改成用户
+  // 主动点按钮才跑。cid 为空表示这条解析不出版号（欧美片等），按钮永不出现。
+  var _gallery = { cid: null, loading: false, tried: false, empty: false, found: 0, jumpTo: "" };
   var _modalListProbed = null;  // Promise<list 中实际可加载的 URL>
   var _modalKeep = [];          // 探测通过的列表图（动图优先）
   var _modalExtra = [];         // 详情图 + DMM 截图
@@ -4858,15 +4877,63 @@
   var _searchResults = [];
   var _searchLow = [];          // 标题匹配度低、默认折叠的结果
 
-  function openModal(item) {
+  // 翻页的目标序列：不从调用方传列表，而是从触发卡片反查同一容器里的兄弟节点 ——
+  // .ssd-scene-card 与 .ssd-scene-table 的 tr 都挂了 __ssdItem，所以演员页 / 工作室页 /
+  // 发现页 / 演员弹层四个入口自动都支持，不用各改一遍。演员卡（__kind:"performer"）
+  // 没有 .scene，按 scene 是否存在过滤掉。
+  var _modalNav = { list: [], idx: -1 };
+  // 打开序号：连翻时用它丢弃过期回调（详情请求与图片探测都可能晚到）
+  var _modalSeq = 0;
+
+  function collectModalNav(anchor) {
+    _modalNav = { list: [], idx: -1 };
+    var host = null;
+    if (anchor && anchor.closest) {
+      host = anchor.closest(".ssd-card-grid") || anchor.closest(".ssd-scene-table") || anchor.closest("tbody");
+    }
+    if (!host) return;
+    var nodes = host.querySelectorAll(".ssd-scene-card, tr");
+    var list = [], idx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var it = nodes[i].__ssdItem;
+      if (!it || !it.scene) continue;
+      if (nodes[i] === anchor || (nodes[i].contains && nodes[i].contains(anchor))) idx = list.length;
+      list.push({ item: it, el: nodes[i] });
+    }
+    _modalNav = { list: list, idx: idx };
+  }
+
+  function modalNavStep(delta) {
+    var nav = _modalNav;
+    if (!nav.list.length || nav.idx < 0) return false;
+    var target = nav.idx + delta;
+    // 第一版到头就停：跨页/跨分组要接分页与筛选状态，牵扯面太大（用户 2026-11-01）
+    if (target < 0 || target >= nav.list.length) return false;
+    var entry = nav.list[target];
+    openModal(entry.item, entry.el);
+    // 翻过去的也算看过。点卡片那条路径的标已读挂在 click 上，这里走事件，
+    // 发现页自己接（主 JS 不认识 readMark，也不能反向依赖 discover.js）
+    try {
+      document.dispatchEvent(new CustomEvent(SCENE_VIEWED_EVENT, {
+        detail: { item: entry.item, el: entry.el }, bubbles: true,
+      }));
+    } catch (e) {}
+    return true;
+  }
+
+  function openModal(item, anchor) {
+    var seq = ++_modalSeq;
     _state.modal = item;
     _state.modalDetail = null;
     _state.modalLoading = true;
     hidePerformerCard();
+    collectModalNav(anchor);
     _carouselIdx = 0;
     var list = (item.images || []).map(function (i) { return i && i.url; })
       .filter(function (u) { return typeof u === "string" && u; });
     _modalGalleryDone = false;
+    _gallerySeq = seq;
+    _gallery = { cid: null, loading: false, tried: false, empty: false, found: 0, jumpTo: "" };
     _modalKeep = [];
     _modalExtra = [];
     _searchPage = 1;
@@ -4881,6 +4948,7 @@
     buildModal(item);
 
     var addKeep = function (u) {
+      if (seq !== _modalSeq) return;
       if (_modalKeep.indexOf(u) >= 0) return;
       _modalKeep = list.filter(function (x) { return x === u || _modalKeep.indexOf(x) >= 0; });
       recomputeModalImages();
@@ -4893,7 +4961,7 @@
       return probeUrl(u, 15000).then(function (st) {
         if (st === "ok") {
           clearImgFail(u);
-          if (_state.modal === item) addKeep(u);
+          if (seq === _modalSeq) addKeep(u);
         } else if (st === "error") {
           markImgFailed(u);
         }
@@ -4908,6 +4976,8 @@
 
     // Fetch full detail in background
     fetchBoxSceneDetail(item.box, item.scene.id).then(function (detail) {
+      // 连翻时旧场景的详情会晚到：不拦的话它会画到现在这条的弹窗上
+      if (seq !== _modalSeq) return;
       if (detail) {
         _state.modalDetail = detail;
         _state.modalLoading = false;
@@ -4918,23 +4988,32 @@
         _state.modalLoading = false;
       }
     }).catch(function (e) {
+      if (seq !== _modalSeq) return;
       console.warn("[SSD] scene detail fetch failed:", e);
       _state.modalLoading = false;
     });
   }
 
-  function closeModal() {
+  // 只拆 DOM，不动 history 垫层也不清 _state —— 翻到隔壁场景时垫层要复用，
+  // 否则每翻一条就 pushState + back() 一次，返回键会退成一串历史。
+  function destroyModalDom() {
     hidePerformerCard();
     if (_modalEl) { _modalEl.remove(); _modalEl = null; }
+  }
+
+  function closeModal() {
+    destroyModalDom();
     // 把自己压的那条 history 记录退掉（返回键关的这次会跳过，见 modalBack）
     if (_modalBackId) { modalBack.release(_modalBackId); _modalBackId = 0; }
     _state.modal = null;
     _state.modalDetail = null;
     _state.modalLoading = false;
+    _modalNav = { list: [], idx: -1 };
   }
 
   function buildModal(item) {
-    if (_modalEl) closeModal();   // 走 closeModal 而不是直接 remove：旧的 history 垫层要一起退掉
+    // 翻到隔壁场景时只拆旧 DOM：history 垫层留着复用（见 destroyModalDom 注释）
+    if (_modalEl) destroyModalDom();
 
     var overlay = document.createElement("div");
     overlay.className = "ssd-modal-overlay";
@@ -4950,11 +5029,64 @@
     closeBtn.onclick = closeModal;
     modal.appendChild(closeBtn);
 
+    // 上一条 / 下一条（用户 2026-11-01）：序列来自 collectModalNav，只在能翻的时候出现。
+    // 到头禁用而不是循环 —— 循环会让人以为"怎么又回到开头"，也判断不出还剩几条。
+    // 挂到 overlay 上而不是 modal：贴在弹窗外侧时不能被 modal 的 overflow:hidden 裁掉。
+    var nav = _modalNav;
+    var canPrev = nav.idx > 0;
+    var canNext = nav.idx >= 0 && nav.idx < nav.list.length - 1;
+    if (nav.idx >= 0 && nav.list.length > 1) {
+      var navPrev = document.createElement("button");
+      navPrev.type = "button";
+      navPrev.className = "ssd-modal-nav ssd-modal-nav-prev";
+      navPrev.innerHTML = "&#10094;";
+      navPrev.title = tc("上一条场景", "Previous scene");
+      navPrev.setAttribute("aria-label", tc("上一条场景", "Previous scene"));
+      navPrev.disabled = !canPrev;
+      navPrev.onclick = function (e) { e.stopPropagation(); modalNavStep(-1); };
+      overlay.appendChild(navPrev);
+
+      var navNext = document.createElement("button");
+      navNext.type = "button";
+      navNext.className = "ssd-modal-nav ssd-modal-nav-next";
+      navNext.innerHTML = "&#10095;";
+      navNext.title = tc("下一条场景", "Next scene");
+      navNext.setAttribute("aria-label", tc("下一条场景", "Next scene"));
+      navNext.disabled = !canNext;
+      navNext.onclick = function (e) { e.stopPropagation(); modalNavStep(1); };
+      overlay.appendChild(navNext);
+    }
+
     // 内容装进内层滚动容器：关闭按钮悬浮在弹窗右上角，不随内容滚动
     // （与演员弹窗 .ssd-dp-modal-body 同构 — 用户 2026-10-27）
     var body = document.createElement("div");
     body.className = "ssd-modal-body";
     modal.appendChild(body);
+
+    // 移动端横滑切场景（用户 2026-11-01）：封面上的横滑归图集轮播，所以起点
+    // 落在 .ssd-carousel-hero 里的手势不接；其余区域横滑才是翻场景。
+    // 阈值 50px 且横向位移要两倍于纵向，避免斜着滚动时误翻。
+    if (nav.idx >= 0 && nav.list.length > 1) {
+      var tsx = 0, tsy = 0, tracking = false;
+      body.addEventListener("touchstart", function (e) {
+        tracking = false;
+        if (e.touches.length !== 1) return;
+        if (e.target.closest && e.target.closest("[data-ssd-carousel-hero]")) return;
+        tsx = e.touches[0].clientX;
+        tsy = e.touches[0].clientY;
+        tracking = true;
+      }, { passive: true });
+      body.addEventListener("touchend", function (e) {
+        if (!tracking) return;
+        tracking = false;
+        var t = e.changedTouches && e.changedTouches[0];
+        if (!t) return;
+        var dx = t.clientX - tsx, dy = t.clientY - tsy;
+        if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 2) return;
+        // 右滑＝上一条，与"往回翻"的方向感一致
+        modalNavStep(dx > 0 ? -1 : 1);
+      }, { passive: true });
+    }
 
     // Section 1: Carousel (cover + screenshots)
     var carouselSection = document.createElement("div");
@@ -5017,6 +5149,29 @@
     renderDetailsInto(details, item.scene, item);
     body.appendChild(details);
 
+    // URL 下方的一行提示（用户 2026-11-01）：桌面讲按键、移动端讲手势。两段都渲染，
+    // 用媒体查询切换 —— 比读 UA 稳，也省得在 resize 时重算。
+    // 末尾挂「当前位置 / 总数」：手机端箭头是隐藏的，这是那边唯一的位置参照；
+    // 数字单独一个 span 用等宽数字，翻条时不会左右抖。翻条会整块重建弹窗，
+    // 所以这里取 _modalNav 的当前值就够，不用额外刷新。
+    if (nav.idx >= 0 && nav.list.length > 1) {
+      var navHint = document.createElement("div");
+      navHint.className = "ssd-modal-navhint";
+      var hintKey = document.createElement("span");
+      hintKey.className = "ssd-navhint-desktop";
+      hintKey.textContent = tc("按 ← → 切换", "Press ← → to switch");
+      var hintSwipe = document.createElement("span");
+      hintSwipe.className = "ssd-navhint-mobile";
+      hintSwipe.textContent = tc("左右滑动切换", "Swipe to switch");
+      var hintPos = document.createElement("span");
+      hintPos.className = "ssd-navhint-pos";
+      hintPos.textContent = (nav.idx + 1) + " / " + nav.list.length;
+      navHint.appendChild(hintKey);
+      navHint.appendChild(hintSwipe);
+      navHint.appendChild(hintPos);
+      body.appendChild(navHint);
+    }
+
     // Section 4: Search results
     var searchSection = document.createElement("div");
     searchSection.className = "ssd-modal-section";
@@ -5027,12 +5182,101 @@
     document.body.appendChild(overlay);
     _modalEl = overlay;
     // 返回键＝关闭（论坛 p0rnb0x 2026-10-29）：手机上没有 Esc，右上角 × 太小
-    _modalBackId = modalBack.hold(closeModal);
+    // 翻页时复用同一条垫层，只换 close 回调（否则每翻一条都 pushState + back 一次）
+    if (_modalBackId) {
+      if (!modalBack.rebind(_modalBackId, closeModal)) _modalBackId = modalBack.hold(closeModal);
+    } else {
+      _modalBackId = modalBack.hold(closeModal);
+    }
 
     updateOpenButtonLabel(item);
+    bindModalKeys();
+    bindModalNavLayout();
+    placeModalNav(overlay);
+    guardModalWheel(overlay, body);
+  }
 
-    document.addEventListener("keydown", function onEsc(e) {
-      if (e.key === "Escape") { closeModal(); document.removeEventListener("keydown", onEsc); }
+  // 翻条箭头停位（用户 2026-11-01）：封面里已经有一套圆形图集箭头，翻条再压在
+  // 封面上两种箭头就分不清了。弹窗两侧有余量时把箭头放到弹窗外面 —— 既不压封面，
+  // 也不会像"贴着封面下沿"那样压住「加入库」那一行按钮（手机上实测重叠 13×43px）。
+  // 窄屏弹窗占满宽度、外侧没有位置，那里就不显示箭头：横滑和底部提示已经够用。
+  function placeModalNav(overlay) {
+    if (!overlay) return;
+    var modal = overlay.querySelector(".ssd-modal");
+    var navs = overlay.querySelectorAll(".ssd-modal-nav");
+    if (!modal || navs.length < 2) return;
+    var mr = modal.getBoundingClientRect();
+    var navW = navs[0].offsetWidth || 34;
+    var navH = navs[0].offsetHeight || 56;
+    var gap = 10;
+    if (mr.left < navW + gap * 2 || (window.innerWidth - mr.right) < navW + gap * 2) {
+      navs[0].style.display = "none";
+      navs[1].style.display = "none";
+      return;
+    }
+    var hero = overlay.querySelector("[data-ssd-carousel-hero]");
+    var top = mr.top + (hero ? hero.offsetHeight + 8 : 14);
+    // 弹窗很矮（横屏）时别跑出视口
+    top = Math.min(top, window.innerHeight - navH - 12);
+    top = Math.max(top, mr.top + 8);
+    navs[0].style.display = "";
+    navs[1].style.display = "";
+    navs[0].style.top = Math.round(top) + "px";
+    navs[0].style.left = Math.round(mr.left - navW - gap) + "px";
+    navs[1].style.top = Math.round(top) + "px";
+    navs[1].style.left = Math.round(mr.right + gap) + "px";
+  }
+
+  // 滚轮透传（用户 2026-11-01）：.ssd-modal-body 滚到头、或内容短到压根不是滚动
+  // 容器时，wheel 会继续冒泡给文档，把底下的发现页滚走 —— 关掉弹窗后位置已经变了；
+  // 手机在详情顶部继续下拉还会触发 Chrome 的下拉刷新（整页重载）。
+  // CSS 的 overscroll-behavior: contain 只挡"可滚容器到边界"这一种，内容短时
+  // body 不构成滚动容器，得在这里兜。注意不能无脑拦：详情长的时候弹窗自己的
+  // 滚动必须保留，只在"这个方向已经滚不动"时才 preventDefault。
+  function guardModalWheel(overlay, body) {
+    if (!overlay || !body) return;
+    overlay.addEventListener("wheel", function (e) {
+      if (e.ctrlKey) return;              // 触控板捏合缩放，不归这里管
+      var d = e.deltaY;
+      if (!d) return;
+      var range = body.scrollHeight - body.clientHeight;
+      if (range <= 1) { e.preventDefault(); return; }
+      if (d < 0 ? body.scrollTop <= 0 : body.scrollTop >= range - 1) e.preventDefault();
+    }, { passive: false });
+  }
+
+  // 转屏 / 改窗口才需要重算（地址栏伸缩只改高度，封面靠 aspect-ratio，位置不变，
+  // 重算也无害）。只绑一次，翻页重建弹窗不重复绑。
+  var _navLayoutBound = false;
+  function bindModalNavLayout() {
+    if (_navLayoutBound) return;
+    _navLayoutBound = true;
+    window.addEventListener("resize", function () {
+      if (_modalEl) placeModalNav(_modalEl);
+    });
+    // iOS 转屏不一定派发 resize
+    window.addEventListener("orientationchange", function () {
+      setTimeout(function () { if (_modalEl) placeModalNav(_modalEl); }, 250);
+    });
+  }
+
+  // Esc 关闭 + ←/→ 翻场景。只绑一次：以前每次开弹窗都 add 一个监听，只在按 Esc
+  // 时才移除，翻页一多就积一串（旧实现遗留的泄漏，顺手修掉）。
+  var _modalKeysBound = false;
+  function bindModalKeys() {
+    if (_modalKeysBound) return;
+    _modalKeysBound = true;
+    document.addEventListener("keydown", function (e) {
+      if (!_modalEl || !_state.modal) return;
+      if (_impEl) return;                       // 入库字段弹窗在上层，方向键归它
+      var t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "Escape") { closeModal(); return; }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      // 选中了文字多半是在复制番号，别抢方向键
+      var sel = window.getSelection && window.getSelection();
+      if (sel && String(sel).length) return;
+      if (modalNavStep(e.key === "ArrowLeft" ? -1 : 1)) e.preventDefault();
     });
   }
 
@@ -5049,10 +5293,18 @@
   // source — some labels can't be derived from the code).
   var DMM_GALLERY_BASE = "https://awsimgsrc.dmm.com/dig/digital/video";
   var R18_JSON_BASE = "https://r18.dev/videos/vod/movies/detail/-/combined";
-  var DMM_MAX_IMAGES = 60;
+  var DMM_MAX_IMAGES = 30;
   var DMM_PROBE_BATCH = 6;
   var DMM_CONFIRM_BATCH = 3;
-  var _dmmGalleryCache = {}; // contentId -> Promise<string[]>
+  // 枚举是「真的把每张图下下来看尺寸」，单张卡太久会把整轮拖成分钟级；DMM 的图
+  // 正常 1 秒内出，5 秒已经是异常了（用户 2026-11-01）
+  var DMM_IMG_TIMEOUT = 5000;
+  // 自动路径只给 json 3 秒：再久用户就盯着只有封面的弹窗干等了
+  var DMM_JSON_TIMEOUT = 3000;
+  // contentId -> { json: Promise<string[]|null>, enum: Promise<string[]>, enumDone, enumUrls }
+  // json 与 enum 必须分开缓存：自动路径可能已经把 json 记成"空"，若共用一格，
+  // 用户点「查找剧照」时就会直接拿到那个空结果，枚举永远跑不起来
+  var _dmmGalleryCache = {};
 
   function contentIdFromR18Url(url) {
     var m = String(url || "").match(
@@ -5097,7 +5349,7 @@
   // Primary: r18.dev JSON returns gallery[] in one request (CORS *).
   function fetchDmmGalleryJson(contentId) {
     var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, DMM_JSON_TIMEOUT) : null;
     return fetch(R18_JSON_BASE + "=" + contentId + "/json",
       ctrl ? { signal: ctrl.signal } : {})
       .then(function (res) { if (!res.ok) return null; return res.json(); })
@@ -5125,7 +5377,7 @@
       var timer = setTimeout(function () {
         if (done) return; done = true;
         img.src = ""; resolve(false);
-      }, 10000);
+      }, DMM_IMG_TIMEOUT);
       img.onload = function () {
         if (done) return; done = true;
         clearTimeout(timer);
@@ -5173,19 +5425,38 @@
     return step();
   }
 
-  // Two-channel probe with session cache.
-  function probeDmmGallery(contentId, onImage) {
-    if (_dmmGalleryCache[contentId]) return _dmmGalleryCache[contentId];
-    // The enumeration fallback hits the CDN path directly, which keeps the zero
-    // padding r18 dropped. It size-filters every candidate, so a wrong padding
-    // guess can only lose shots — it can never add placeholder slides.
-    var dmmId = padDmmContentId(contentId);
-    var p = fetchDmmGalleryJson(contentId).then(function (viaJson) {
-      if (viaJson && viaJson.length) return viaJson;
-      return probeDmmByEnumeration(dmmId, onImage);
-    });
-    _dmmGalleryCache[contentId] = p;
-    return p;
+  // 两条通道分开走（用户 2026-11-01）。json 一次请求就拿到全部 URL、图片本身
+  // 仍按需加载；逐张枚举则真的把图下下来量尺寸，翻条时每条都自动跑一遍太贵
+  // （r18 打不通的网络上一条片就是十几个图片请求）。所以自动路径只走 json，
+  // 枚举交给用户点「查找剧照」。
+  function dmmCacheEntry(contentId) {
+    var c = _dmmGalleryCache[contentId];
+    if (!c) c = _dmmGalleryCache[contentId] = { json: null, enum: null, enumDone: false, enumUrls: null };
+    return c;
+  }
+
+  function dmmJsonUrls(contentId) {
+    var c = dmmCacheEntry(contentId);
+    if (!c.json) c.json = fetchDmmGalleryJson(contentId);
+    return c.json;
+  }
+
+  function dmmEnumerated(contentId, onImage) {
+    var c = dmmCacheEntry(contentId);
+    if (!c.enum) {
+      // The enumeration fallback hits the CDN path directly, which keeps the zero
+      // padding r18 dropped. It size-filters every candidate, so a wrong padding
+      // guess can only lose shots — it can never add placeholder slides.
+      var dmmId = padDmmContentId(contentId);
+      c.enum = probeDmmByEnumeration(dmmId, function (url) {
+        if (onImage) onImage(url);
+      }).then(function (found) {
+        c.enumDone = true;
+        c.enumUrls = found || [];
+        return c.enumUrls;
+      });
+    }
+    return c.enum;
   }
 
   // images: array of URL strings (lazy-loaded, only the current one is fetched)
@@ -5231,11 +5502,33 @@
       };
       hero.appendChild(nextBtn);
 
-      var counter = document.createElement("span");
-      counter.className = "ssd-carousel-counter";
-      counter.setAttribute("data-ssd-counter", "");
-      counter.textContent = (startIdx + 1) + " / " + images.length;
-      hero.appendChild(counter);
+      // 右下角一块：平时是页码；能解析出版号、但 r18 没给出剧照时，变成一枚
+      // 「查找剧照」按钮（用户 2026-11-01）—— 逐张枚举很贵，得让用户自己决定
+      hero.appendChild(buildGalleryBadge(startIdx, images.length));
+
+      // 移动端左右滑动手势（用户 2026-11-01）：手机上 44px 的箭头不好点准，
+      // 手势与箭头共用同一套索引。阈值 40px，且横向位移要明显大于纵向，否则
+      // 纵向翻页会误伤页面滚动（touch-action: pan-y 已把横向留给这里）。
+      if (images.length > 1) {
+        var tsx = 0, tsy = 0, tracking = false;
+        hero.addEventListener("touchstart", function (e) {
+          if (e.touches.length !== 1) { tracking = false; return; }
+          tsx = e.touches[0].clientX;
+          tsy = e.touches[0].clientY;
+          tracking = true;
+        }, { passive: true });
+        hero.addEventListener("touchcancel", function () { tracking = false; });
+        hero.addEventListener("touchend", function (e) {
+          if (!tracking) return;
+          tracking = false;
+          var t = e.changedTouches && e.changedTouches[0];
+          if (!t) return;
+          var dx = t.clientX - tsx, dy = t.clientY - tsy;
+          if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+          _carouselIdx = (_carouselIdx + (dx < 0 ? 1 : -1) + images.length) % images.length;
+          updateCarouselImage(images);
+        }, { passive: true });
+      }
 
       carousel.appendChild(hero);
     } else {
@@ -5257,6 +5550,141 @@
     if (counter) counter.textContent = (_carouselIdx + 1) + " / " + images.length;
   }
 
+  // ─── 剧照角标：页码 ⇄「查找剧照」按钮 ──────────────────────────────────────
+  // 位置就是原来的页码（封面右下角），用户已经习惯那儿有东西。图标用 discover.js
+  // 同款线条风格（24×24 / stroke 2 / currentColor），两处观感才一致。
+  var SHOT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
+    + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<rect x="3" y="3" width="18" height="18" rx="2"/>'
+    + '<circle cx="8.5" cy="8.5" r="1.5"/>'
+    + '<path d="M21 15l-5-5L5 21"/></svg>';
+
+  function buildGalleryBadge(startIdx, total) {
+    var box = document.createElement("div");
+    box.className = "ssd-carousel-badge";
+    box.setAttribute("data-ssd-badge", "");
+    box.appendChild(makeGalleryBadgeContent(startIdx, total));
+    return box;
+  }
+
+  function makeGalleryBadgeContent(startIdx, total) {
+    // 顺序要紧：empty 期间 tried 已经是 true，所以 empty 必须单独判一次
+    var withBtn = (!!_gallery.cid && !_gallery.tried) || _gallery.empty;
+    if (withBtn) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ssd-carousel-shots";
+      var label = _gallery.empty
+        ? tc("暂无剧照", "No screenshots")
+        : _gallery.loading
+          ? tc("查找中 " + _gallery.found + "/" + DMM_MAX_IMAGES,
+               "Finding " + _gallery.found + "/" + DMM_MAX_IMAGES)
+          : tc("查找剧照", "Find screenshots");
+      btn.innerHTML = SHOT_ICON + "<span>" + label + "</span>";
+      btn.disabled = _gallery.empty || _gallery.loading;
+      btn.setAttribute("aria-label", label);
+      if (_gallery.empty) {
+        btn.title = tc("这部片在 DMM 上没有剧照", "No screenshots for this title on DMM");
+      } else {
+        btn.title = tc("向 DMM 逐张查找这部片的剧照", "Probe DMM for this title's screenshots");
+        btn.onclick = function (e) { e.stopPropagation(); startGalleryProbe(); };
+      }
+      return btn;
+    }
+    var counter = document.createElement("span");
+    counter.className = "ssd-carousel-counter";
+    counter.setAttribute("data-ssd-counter", "");
+    counter.textContent = (startIdx + 1) + " / " + total;
+    return counter;
+  }
+
+  // 只换角标内容、不重建轮播：进度更新每来一张图就调一次，重建整块会闪
+  function paintGalleryBadge() {
+    var box = document.querySelector("[data-ssd-badge]");
+    if (!box) return;
+    var total = _modalImages.length || 1;
+    if (_carouselIdx >= total) _carouselIdx = total - 1;   // 防御：状态不同步时别印出 2 / 1
+    box.innerHTML = "";
+    // 传 0 基索引：makeGalleryBadgeContent 内部才做 +1
+    box.appendChild(makeGalleryBadgeContent(_carouselIdx, total));
+  }
+
+  function firstShotIndex() {
+    for (var i = 0; i < _modalImages.length; i++) {
+      if (String(_modalImages[i]).indexOf("awsimgsrc.dmm.com") >= 0) return i;
+    }
+    return -1;
+  }
+
+  function startGalleryProbe() {
+    var g = _gallery;
+    if (!g.cid || g.loading || g.tried) return;
+    g.loading = true;
+    g.found = 0;
+    paintGalleryBadge();
+    // 用户点完立刻翻下一条的情况：这条链上的回调一律凭 seq 作废，否则旧场景的
+    // "暂无剧照 / 页码" 会写到新场景的角标上（上次 DMM 截图串台的老毛病）
+    var mySeq = _gallerySeq;
+
+    var onImage = function (url) {
+      if (mySeq !== _gallerySeq) return;
+      g.found++;
+      _modalExtra = dedupeUrls(_modalExtra.concat([url]));
+      if (!g.jumpTo) g.jumpTo = url;
+      paintGalleryBadge();
+      (_modalListProbed || Promise.resolve()).then(function () {
+        if (mySeq !== _gallerySeq) return;
+        recomputeModalImages();
+        // 第一张一到就先跳过去，不必等 30 张全部试完
+        if (g.jumpTo && !g.jumped) {
+          var i = _modalImages.indexOf(g.jumpTo);
+          if (i >= 0) { g.jumped = true; _carouselIdx = i; remountCarousel(); }
+        }
+      });
+    };
+
+    dmmEnumerated(g.cid, onImage).then(function (all) {
+      if (mySeq !== _gallerySeq) return;
+      g.loading = false;
+      g.tried = true;
+      g.found = (all || []).length;
+      if (!g.found) {
+        g.empty = true;
+        paintGalleryBadge();
+        // 2.5 秒后归位成页码（归位取当前真实页码，不硬编码 1/1）
+        setTimeout(function () {
+          if (mySeq !== _gallerySeq || _gallery !== g) return;
+          g.empty = false;
+          paintGalleryBadge();
+        }, 2500);
+        return;
+      }
+      _modalExtra = dedupeUrls(_modalExtra.concat(all || []));
+      (_modalListProbed || Promise.resolve()).then(function () {
+        if (mySeq !== _gallerySeq) return;
+        recomputeModalImages();
+        // 缓存命中时没走 onImage，所以这里补一次跳转
+        if (!g.jumped) {
+          var i = firstShotIndex();
+          if (i >= 0) { g.jumped = true; _carouselIdx = i; remountCarousel(); }
+        }
+        paintGalleryBadge();
+      });
+    }).catch(function (e) {
+      console.warn("[SSD] gallery enumeration failed:", e);
+      if (mySeq !== _gallerySeq) return;
+      g.loading = false;
+      g.tried = true;
+      g.empty = true;
+      paintGalleryBadge();
+      setTimeout(function () {
+        if (mySeq !== _gallerySeq || _gallery !== g) return;
+        g.empty = false;
+        paintGalleryBadge();
+      }, 2500);
+    });
+  }
+
   // Replace the mounted carousel with one built from _modalImages, preserving
   // the viewed index (clamped). Used after detail load and gallery probing.
   function remountCarousel() {
@@ -5265,6 +5693,8 @@
     if (_carouselIdx >= _modalImages.length) _carouselIdx = 0;
     var fresh = buildCarousel(_modalImages, _state.modal && _state.modal.scene);
     oldCarousel.parentNode.replaceChild(fresh, oldCarousel);
+    // 封面从「无图」变「有图」时高度会变，翻条箭头得跟着挪
+    if (_modalEl) placeModalNav(_modalEl);
   }
 
   // 探测图片可加载性：resolve "ok" | "error" | "timeout"。
@@ -5310,6 +5740,9 @@
   function probeModalGallery(detail, item) {
     if (_modalGalleryDone) return;
     _modalGalleryDone = true;
+    // DMM 探测是异步的，翻到别的场景后它的回调还会回来（往 _modalExtra 里塞
+    // 上一条的截图 → 新轮播里混进别的片）。用打开序号把它拦在门外。
+    var mySeq = _gallerySeq;
 
     // 已确认加载失败的外站图不进轮播，避免左右切换时出现空白（用户 2026-10-26）
     var boxUrls = (detail.images || []).map(function (i) { return i.url; })
@@ -5321,26 +5754,48 @@
     (sc.urls || []).forEach(function (u) {
       if (!contentId && u.url) contentId = contentIdFromR18Url(u.url);
     });
+    // 没有 R18 链接也照样能挖：番号 ABC-123 能推成 abc00123。所以「能不能挖」
+    // 的判据是能否解析出 contentId，不是这条有没有挂 R18 链接（用户 2026-11-01）
     if (!contentId) contentId = deriveContentId(sc.code);
 
     var flush = function () {
-      (_modalListProbed || Promise.resolve()).then(function () { recomputeModalImages(); });
-    };
-
-    // Progressive merge (enumeration path reports each shot as found)
-    var onImage = function (url) {
-      _modalExtra = dedupeUrls(_modalExtra.concat([url]));
-      flush();
+      if (mySeq !== _gallerySeq) return;
+      (_modalListProbed || Promise.resolve()).then(function () {
+        if (mySeq !== _gallerySeq) return;
+        recomputeModalImages();
+      });
     };
 
     if (!contentId) { flush(); return; } // non-DMM scene: covers are all we have
 
-    probeDmmGallery(contentId, onImage).then(function (galleryUrls) {
-      _modalExtra = dedupeUrls(_modalExtra.concat(galleryUrls || []));
+    // 之前点过按钮（枚举跑完了，哪怕是 0 张）→ 直接回放，一个请求都不发
+    var c = dmmCacheEntry(contentId);
+    if (c.enumDone) {
+      _gallery.cid = contentId;
+      _gallery.tried = true;
+      _gallery.found = (c.enumUrls || []).length;
+      _modalExtra = dedupeUrls(_modalExtra.concat(c.enumUrls || []));
       flush();
+      return;
+    }
+
+    _gallery.cid = contentId;
+    // 自动路径只走 json（一次请求拿全部 URL，图片仍按需加载）。拿不到就把决定权
+    // 交给用户 —— 逐张枚举会真的把图下下来，翻条时不该默认跑
+    dmmJsonUrls(contentId).then(function (galleryUrls) {
+      if (mySeq !== _gallerySeq) return;
+      if (galleryUrls && galleryUrls.length) {
+        _gallery.tried = true;
+        _modalExtra = dedupeUrls(_modalExtra.concat(galleryUrls));
+        flush();
+      } else {
+        // 角标换成「查找剧照」；轮播本身不动，所以单独刷一次角标
+        paintGalleryBadge();
+      }
     }).catch(function (e) {
+      if (mySeq !== _gallerySeq) return;
       console.warn("[SSD] DMM gallery probe failed:", e);
-      flush();
+      paintGalleryBadge();
     });
   }
 

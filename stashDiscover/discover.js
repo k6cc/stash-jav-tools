@@ -1375,12 +1375,18 @@
   }
 
   // ── 已读 store（§6.4 场景级：点开/加入库即消）────────────────────────────
+  // 会话内缓存：readIs 会被列表渲染和未读计数按条调用，每次都 getItem + parse
+  // 几百次纯属白费（就地刷新计数后调用量还会涨）。写入一律走 readMark，改的是
+  // 同一个对象，不会读到旧值。
+  var _readCache = null;
   function readStore() {
+    if (_readCache) return _readCache;
     try {
       var raw = localStorage.getItem(READ_KEY);
       var o = raw ? JSON.parse(raw) : null;
-      return (o && typeof o === "object" && o.marks) ? o : { marks: {} };
-    } catch (_) { return { marks: {} }; }
+      _readCache = (o && typeof o === "object" && o.marks) ? o : { marks: {} };
+    } catch (_) { _readCache = { marks: {} }; }
+    return _readCache;
   }
   function sceneKey(endpoint, sceneId) { return String(endpoint).toLowerCase() + ":" + String(sceneId).toLowerCase(); }
   function readIs(endpoint, sceneId) { return !!readStore().marks[sceneKey(endpoint, sceneId)]; }
@@ -1414,6 +1420,45 @@
     // 持久化轮询同款缓存（unread.v1）：主 JS 导航角标硬刷新后用它恢复初值
     try { localStorage.setItem("SSD:dp:unread.v1", JSON.stringify({ n: n, at: Date.now() })); } catch (_) {}
     try { window.dispatchEvent(new CustomEvent("ssd:unread-changed", { detail: n })); } catch (_) {}
+  }
+
+  // 关注页两处未读数字就地刷新（用户 2026-11-01）：顶部「N 位关注 · N 部未读」和
+  // 每个分组头的「N 部新作品 · N 部未读」。只在弹窗里翻条时用 —— 那时不能 render()，
+  // 重建会把箭头/手势脚下的卡片节点换掉。
+  // 只改文本、不重排分组：读完一组本该往下沉，但那要移动 DOM，且会让翻条序列的
+  // 顺序在翻页中途变掉。用户明确表示不需要实时重排，等下次完整渲染自然对齐。
+  function paintFollowCounts() {
+    var host = _dp.refs.content;
+    if (!host || _dp.view !== "follow") return;
+    var d = _dp.d.latest;
+    if (!d) return;
+    var byStash = {};
+    (d.actorsWithNew || []).forEach(function (g) { byStash[String(g.performer.stashId)] = g; });
+    var grps = host.querySelectorAll(".ssd-dp-fgrp");
+    if (!grps.length) return;
+    var unreadTotal = 0;
+    for (var i = 0; i < grps.length; i++) {
+      var g = byStash[grps[i].getAttribute("data-stash-id")];
+      if (!g) continue;
+      var items = notifyItems(g), unread = 0;
+      for (var j = 0; j < items.length; j++) {
+        if (!readIs(items[j].endpoint, items[j].scene.id)) unread++;
+      }
+      unreadTotal += unread;
+      var sub = grps[i].querySelector(".ssd-dp-mini-sub");
+      if (!sub) continue;
+      // 全是预告（不提醒）时是另一套文案，别覆盖
+      if (!items.length && g.items && g.items.length) continue;
+      sub.textContent = tc(g.items.length + " 部新作品 · " + (unread ? unread + " 部未读" : "已读"),
+        g.items.length + " new · " + (unread ? unread + " unread" : "all read"));
+      if (unread) sub.classList.add("has-unread"); else sub.classList.remove("has-unread");
+    }
+    // 每个关注演员都有一个分组（没有新作品也会建），所以分组数就是顶部的「位关注」
+    var pcount = host.querySelector(".ssd-dp-pcount");
+    if (pcount) {
+      pcount.textContent = tc(grps.length + " 位关注 · " + unreadTotal + " 部未读",
+        grps.length + " followed · " + unreadTotal + " unread");
+    }
   }
 
   // §6.2 收藏(❤)一键导入：库内 favorite 演员 → 关注列表。
@@ -1844,6 +1889,8 @@
           readMark(it.endpoint, sc.id);
           row.classList.remove("ssd-row-new");
           emitUnread();
+          // 列表模式点开一条也不 render，顶部数字得就地改（用户 2026-11-01）
+          paintFollowCounts();
         });
       })(rows[i], items[i]);
     }
@@ -3541,6 +3588,8 @@
     fl.forEach(function (f) {
       var g = byStash[String(f.stashId)];
       var grp = el("div", "ssd-dp-fgrp");
+      // 就地刷未读数时靠它把 DOM 分组对回数据（paintFollowCounts）
+      grp.setAttribute("data-stash-id", String(f.stashId));
       var head = el("div", "ssd-dp-fgrp-head");
       var img = document.createElement("img");
       img.loading = "lazy";
@@ -5068,14 +5117,21 @@
 
   // 窗口宽度变化 → 总览模块行数重算（trimRows 依赖实际布局宽度）。
   // 只绑一次；页面卸载后（content 脱离文档）监听自动变空操作。
+  // 高度变化一律忽略：移动端浏览器地址栏的隐藏/显示只改视口高度，列数不会变，
+  // 但重渲染会把内容清空、滚动位置归零 —— 表现就是「上划时页面突然跳回顶部」
+  // （用户 2026-11-01 手机 Chrome 实测，触发条件正是地址栏收起/展开）。
   var _resizeBound = false;
   function bindResize() {
     if (_resizeBound) return;
     _resizeBound = true;
     var t = 0;
+    var lastW = window.innerWidth;
     window.addEventListener("resize", function () {
       var c = _dp.refs.content;
       if (!c || !c.isConnected) return;
+      var w = window.innerWidth;
+      if (Math.abs(w - lastW) < 2) return;   // 纯高度变化（地址栏）→ 不动
+      lastW = w;
       clearTimeout(t);
       t = setTimeout(function () {
         // 先定筛选行状态（可能改变工具栏高度），再按新布局重排模块
@@ -5485,6 +5541,25 @@
       _dp.d.latest = null; _dp.d.studios = null;
       ensureData(["latest", "studios"]);
     }, 400);
+  });
+
+  // 弹窗里翻到某条场景（箭头 / 横滑 / 方向键，用户 2026-11-01）：标已读并摘红框。
+  // 点卡片那条路径本来就挂在 click 上，这里只补"翻过去"的情况。
+  // 不 render()：翻页期间重建整组卡片会把手势/箭头脚下的节点换掉（主 JS 的
+  // 序列指向旧节点），所以就地摘类，分组头的"N 部未读"等下次重渲染再对齐。
+  window.addEventListener("ssd:scene-viewed", function (e) {
+    var d = (e && e.detail) || {};
+    var item = d.item;
+    if (!item || !item.endpoint || !item.scene) return;
+    readMark(item.endpoint, item.scene.id);
+    var el = d.el;
+    if (el && el.classList) {
+      el.classList.remove("ssd-card-new");
+      el.classList.remove("ssd-row-new");
+    }
+    emitUnread();
+    // 顶部与分组头的数字就地刷新；分组排序留到下次完整渲染
+    paintFollowCounts();
   });
 
   // P4.7/P5 控制台验证出口

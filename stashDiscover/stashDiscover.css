@@ -870,7 +870,11 @@
   flex-direction: column;
   max-width: 820px !important;
   width: 100% !important;
+  /* 100vh 在 Android Chrome 里是「地址栏隐藏时」的大视口高度：地址栏可见时弹窗
+     底部会伸到可见区域外面，最后那行链接和底部提示整块被切掉。dvh 跟着地址栏
+     实时变，旧浏览器不认 dvh 会退回上面那行（用户 2026-11-01 实机测出）。 */
   max-height: calc(100vh - 60px) !important;
+  max-height: calc(100dvh - 60px) !important;
   overflow: hidden !important;
   margin: auto 0 !important;
   background: var(--ssd-modal-bg) !important;
@@ -903,6 +907,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 滚到边界别再往外溢给文档（body 被滚走 / 手机下拉刷新）。
+     内容短到不能滚时这条不生效，由 guardModalWheel 兜 — 用户 2026-11-01 */
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
   border-radius: inherit;
 }
@@ -927,6 +934,66 @@
 }
 .ssd-modal-close:hover { background: var(--ssd-danger); color: #fff; }
 
+/* ─── 场景翻页：两侧悬浮箭头 + 底部一行提示（用户 2026-11-01）─────────────
+   箭头挂在 .ssd-modal 上（不是滚动容器），滚详情时不跟着跑；半透明是为了
+   压住封面边缘时不抢视线，到头（disabled）进一步淡出到几乎看不见。 */
+.ssd-modal-nav {
+  /* 挂在 overlay 上、贴在弹窗外侧（位置由 placeModalNav 写入，用 fixed 才不受
+     弹窗 overflow:hidden 影响）。窄屏没有外侧空间时 JS 会直接隐藏。 */
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  width: 34px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  /* 封面可能是接近纯白的图，只靠半透明底会彻底看不见 —— 加一圈描边兜底 */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 2px 8px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  /* 现在贴在弹窗外侧的深色遮罩上，要比压在封面里时更亮一点才看得见 */
+  opacity: 0.8;
+  transition: opacity 0.15s, background 0.15s;
+}
+.ssd-modal-nav:hover:not(:disabled) { opacity: 1; background: rgba(0, 0, 0, 0.7); }
+.ssd-modal-nav:disabled { opacity: 0.12; cursor: default; }
+
+/* 提示行：桌面讲按键、移动端讲手势，两段都渲染，靠媒体查询切。
+   下方留白压到 10px：紧跟其后的「搜索资源」section 在点按钮前是空的，
+   靠 :empty 规则（见 .ssd-modal-section）整块收掉，不再白送 32px。 */
+.ssd-modal-navhint {
+  padding: 0 16px 10px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ssd-modal-muted);
+  user-select: none;
+}
+.ssd-navhint-mobile { display: none; }
+/* 当前位置 / 总数：手机端箭头是隐藏的，这里是唯一的位置参照。等宽数字，
+   9→10 换位数时不会左右跳。 */
+.ssd-navhint-pos {
+  font-variant-numeric: tabular-nums;
+  color: var(--ssd-modal-text);
+  opacity: 0.75;
+}
+.ssd-navhint-pos::before { content: "·"; margin: 0 6px; opacity: 0.6; }
+
+@media (max-width: 480px) {
+  .ssd-navhint-desktop { display: none; }
+  .ssd-navhint-mobile { display: inline; }
+  /* 拇指点得到的宽度，同时别把封面压掉太多 */
+  .ssd-modal-nav { width: 30px; height: 52px; font-size: 15px; opacity: 0.45; }
+}
+
 /* ─── Carousel (lazy load: backgroundImage on current only) ──────────────── */
 
 .ssd-carousel {
@@ -944,6 +1011,8 @@
   background-position: center;
   background-repeat: no-repeat;
   background-color: #000;
+  /* 横向手势留给轮播翻页（JS 里判 40px 位移），纵向仍交给页面滚动 */
+  touch-action: pan-y;
 }
 .ssd-carousel-hero-empty {
   display: flex;
@@ -987,17 +1056,41 @@
 }
 .ssd-carousel-prev { left: 14px; }
 .ssd-carousel-next { right: 14px; }
-.ssd-carousel-counter {
+/* 封面右下角角标：平时是页码；能解析出版号但 r18 没给剧照时，换成「查找剧照」。
+   定位放在容器上，两种内容共用同一个落点（用户 2026-11-01）。 */
+.ssd-carousel-badge {
   position: absolute;
   bottom: 10px;
   right: 12px;
+  z-index: 5;
+  display: flex;
+}
+.ssd-carousel-counter {
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 12px;
-  z-index: 5;
 }
+/* 只在「点一下才去挖剧照」时出现：不加重措辞，靠图标让它在封面暗部能被认出来 */
+.ssd-carousel-shots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.ssd-carousel-shots svg { width: 13px; height: 13px; flex: none; }
+.ssd-carousel-shots:hover:not(:disabled) { background: rgba(0, 0, 0, 0.85); }
+.ssd-carousel-shots:disabled { cursor: default; opacity: 0.72; }
 
 /* ─── Modal sections (dividers — performerMerge pattern) ─────────────────── */
 
@@ -1006,6 +1099,9 @@
   border-bottom: 1px solid var(--ssd-modal-border);
 }
 .ssd-modal-section:last-child { border-bottom: none; }
+/* 搜索区在点「搜索资源」之前是空的，别让它白占 16+16 的上下内边距
+   （底部提示下面那坨空白就是它 — 用户 2026-11-01） */
+.ssd-modal-section:empty { display: none; }
 
 .ssd-modal-title {
   font-size: 17px;
@@ -1368,7 +1464,9 @@
   .ssd-modal {
     border-radius: 0 !important;
     max-width: 100% !important;
+    /* 同 .ssd-modal：地址栏可见时 100vh 比可见高度大，底部会被切掉 */
     max-height: 100vh !important;
+    max-height: 100dvh !important;
   }
   .ssd-carousel-hero { max-height: 280px; }
   /* 窄屏：四颗按 2×2 铺开。挤成一行会短到「搜索资源」贴边，放开又会
@@ -3532,18 +3630,23 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
     padding-right: max(8px, env(safe-area-inset-right));
   }
 
-  /* 三档在窄屏重新映射为 3 列 / 2 列 / 1 列（100 / 155 / 265），语义与桌面三档
-     一一对应；155 在 390 视口（内容宽 329）仍是实测的 2 列 @161，默认观感不变。
-     原先把 grid-template-columns 写死 repeat(2, …) 会无条件盖掉档位，已删
-     （用户 2026-10-28）。 */
+  /* 三档在窄屏直接映射成列数 3 / 2 / 1，语义与桌面三档一一对应。
+     原先靠 --ssd-card-min = 100/155/265 的 px 阈值：容器落在 312~315px 这个
+     临界宽度时，小档（100）排得下 3 列、中档（155）却只剩 1 列 —— 一行一张
+     大卡，档位落差完全不合理（用户 2026-11-01 安卓 Chrome 实测：外部演员
+     弹窗的场景网格中档只显示一个，小档 3 个正常）。窄屏上「档位」本来就等于
+     列数，交给 auto-fill 猜反而会在临界宽度掉列。 */
+  .ssd-dp-page[data-csize="0"] .ssd-card-grid:not(.ssd-dp-iggrid),
+  .ssd-dp-modal-scenes[data-csize="0"] .ssd-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .ssd-dp-page[data-csize="2"] .ssd-card-grid:not(.ssd-dp-iggrid),
+  .ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 变量仍留一份窄屏值：duo 的 min() 兜底、以及别处读它时不至于拿到桌面值 */
   .ssd-dp-page { --ssd-card-min: 155px; }
-  .ssd-dp-page[data-csize="0"] { --ssd-card-min: 100px; }
-  .ssd-dp-page[data-csize="2"] { --ssd-card-min: 265px; }
-  /* 演员弹窗同样跟档位（用户 2026-10-28）：窄屏与发现页用同一套 3 / 2 / 1 列映射，
-     变量要写在容器上而不是 .ssd-card-grid 上，否则子级声明会盖掉档位 */
   .ssd-dp-modal-scenes { --ssd-card-min: 155px; }
-  .ssd-dp-modal-scenes[data-csize="0"] { --ssd-card-min: 100px; }
-  .ssd-dp-modal-scenes[data-csize="2"] { --ssd-card-min: 265px; }
 
   /* 发现页 + 演员弹窗内的场景网格：列间距收紧。
      已忽略管理页的网格（.ssd-dp-iggrid）要排除：它自己那套是 6px 定宽 flex，
@@ -3552,6 +3655,7 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   .ssd-dp-page .ssd-card-grid:not(.ssd-dp-iggrid),
   .ssd-dp-modal-scenes .ssd-card-grid {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));   /* 中档 = 2 列 */
     column-gap: 6px;
     row-gap: 10px;
   }

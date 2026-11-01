@@ -335,4 +335,17 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   被切的是弹窗自身不是内容）。用 `max-height: 100dvh`（前面留一行 `100vh` 给老浏览器
   兜底）。**桌面/仿真测不出来** —— `--vsize` 下 vh 和 dvh 恒等，只能实机验。
 
+## 弹层滚动透传（第十三轮）
+
+- **守卫必须在事件时才查滚动容器**：`overlay.querySelector(".ssd-modal-body, .ssd-dp-modal-body,
+  .ssd-imp-body")`。闭包里抓节点的话，discover.js 的弹层整块重画后拿到的是脱离文档的旧
+  body（宽高 0 → `range = 0` → 一律 `preventDefault`），长内容从此滚不动，而且不报错。
+- **只加 `overscroll-behavior: contain` 不够**：内容装得下时容器根本不是滚动容器，chaining
+  照常发生。实测演员弹层 `range = 0`，CSS 完全拦不住，得靠 JS 兜。验收三档：顶部再往上
+  → prevented，到底再往下 → prevented，**中段 → false**（漏测这档就会把详情锁死）。
+- 一套守卫覆盖 6 个弹层：场景详情、discover.js 的四个（演员详情 / 忽略详情 / 恢复全部 /
+  入库字段）、stashDiscover.js 的两个入库预览（`.ssd-imp-body`）。新加弹层别忘挂。
+- **`86vh` 同属 dvh 那一类**：`.ssd-dp-modal` / `.ssd-imp` 的 `max-height: min(86vh, N)` 在
+  Android 地址栏可见时同样会露到底部外面，一并换成 `86dvh`。
+
 

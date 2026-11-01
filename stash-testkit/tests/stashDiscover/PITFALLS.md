@@ -263,3 +263,76 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **本地 Jackett 只接了 JAV 索引器**，英文长句返回 0 条，所以「低匹配折叠」的 UI 只能用假数据
   验证（把 `renderSearchResults` 导出后直接喂 `{query,count,results}`）；纯逻辑
   `rankSearchResults` 可以就地跑单测。（第五轮）
+- **窄屏卡片档位必须落在「列数」上，不能靠 px 阈值 + auto-fill**：容器 312~315px 这个区间里
+  小档（100）排得下 3 列、中档（155）却只剩 1 列 —— 一行一张大卡，档位落差完全不合理
+  （用户安卓实测：演员弹窗中档只显示 1 个，小档 3 个正常）。≤480 改成
+  `repeat(3/2/1, minmax(0,1fr))`，桌面仍走 auto-fill。（第九轮）
+
+## 探针陷阱
+
+- **验证「重渲染」时标记必须打在 content 的**子元素**上**：`.ssd-dp-content` 元素本身
+  不会被替换（`render()` 只清 `innerHTML`），把 `data-probe-mark` 加在它身上，任何情况下
+  都「活着」，测出来永远是假通过（本轮差点据此宣布地址栏问题已修好）。
+- **移动端地址栏收起/展开只会改视口高度**：用 `Emulation.setDeviceMetricsOverride` 只改
+  height 即可复现，`resize` 事件照常触发、`innerWidth` 不变。（第九轮）
+
+## 弹窗翻页（第十轮）
+
+- **序列别另存一份，从 DOM 反查**：`.ssd-scene-card` 与表格行都挂了 `__ssdItem`，打开时
+  `closest(".ssd-card-grid / .ssd-scene-table / tbody")` 就能拿到「这一页的序列」。四个入口
+  （演员页 / 工作室页 / 发现页 / 演员弹层）因此零改动。**演员卡要按 `it.scene` 过滤** ——
+  发现页总览的网格里混着 `{__kind:"performer"}` 的条目。
+- **翻页不能走 `closeModal()`**：它会 `modalBack.release()` → `history.back()`，每翻一条就
+  退一条历史。要拆成 `destroyModalDom()`（只拆 DOM）+ `modalBack.rebind()` 复用垫层。
+  验收口径是**翻十次 `history.length` 一个数都不变**，光看"返回键能关"是测不出来的。
+- **异步回调必须用打开序号守卫，`_state.modal === item` 挡不住 A→B→A**：列表里同一条是
+  同一个对象引用，切回去时旧回调又会通过。详情请求、DMM 截图探测、封面探测三处都会晚到；
+  DMM 那条漏了会往新轮播里塞上一条的截图（页面不报错，只是图不对）。
+- **手势要分区**：封面上的横滑归图集，起点落在 `[data-ssd-carousel-hero]` 里的 touch 不接，
+  否则一次横滑同时翻图又翻场景。验证方式：封面横滑后标题不变、计数 +1。
+- **到头禁用能靠 DOM 断言**：第一条 `prev.disabled === true`，连按到末尾 `next.disabled`
+  翻成 true，比"看着挺顺"可靠。
+
+## 翻条箭头 / 剧照按钮 / 未读计数（第十一轮）
+
+- **悬浮箭头贴着封面下沿会压住「加入库」**：手机 390 视口实测重叠 13×43 CSS px，按钮
+  左侧图标被盖住、点击也被拦。别按"量出封面高度就放下面"这条直觉做，`getBoundingClientRect`
+  对比 `.ssd-modal-acts` 直接算重叠面积，一眼就否掉。
+  → 最终做法：弹窗两侧余量 ≥ `箭头宽 + 20` 时放**弹窗外侧**（挂 overlay、`position: fixed`
+  才不被 `.ssd-modal` 的 `overflow: hidden` 裁掉），否则隐藏，靠横滑与键盘。
+- **角标页码只有一个地方做 +1**：`makeGalleryBadgeContent(startIdx, total)` 内部已经
+  `startIdx + 1`，外部 `paintGalleryBadge` 再传 `_carouselIdx + 1` 就会印出 `2 / 1`。
+  这种 off-by-one 不会报错，只会让页码看着"怪"，最好在函数签名上写清楚是 0 基。
+- **剧照缓存必须按通道分层**：`{json, enum}` 各存一份。共用一个 slot 时，自动路径（只走
+  r18 json）会把结果写成空，用户再点「查找剧照」拿到的就是那个空 promise，枚举永远不跑。
+- **「暂无剧照」的归位定时器要带 seq 守卫**：2.5 秒后把角标换回页码，如果用户点了按钮就
+  翻到下一条，旧定时器会把新场景的角标改掉 —— 又是"不报错只是数不对"那一类。
+- **`readStore()` 加缓存后，只有 `readMark` 写的才算数**：直接往 `localStorage` 塞值不会
+  生效（页面内已有 `_readCache`）。本插件所有写入都走 `readMark`，所以安全；改别处要同步。
+- **关注页就地刷数字要能对回数据**：分组 div 挂 `data-stash-id`，靠它对 `actorsWithNew`；
+  顶部的「N 位关注」用分组数（每个关注演员都会建分组，没有新作品的也建），不用重算 `fl`。
+  验收口径：清空 `SSD:dp:read.v1` → 翻一条 → 顶部与对应分组同时 −1，且**分组顺序不变**。
+- **列表模式下"点开一条"也算看过**：`decorateUnreadRows` 只在封面链接上绑 `readMark`，
+  就地刷新要一起补，否则表格模式点开一条顶部数字不动（网格模式因为走了 `render()` 才没暴露）。
+
+## 底部留白 / 滚轮透传（第十二轮）
+
+- **「底部空白太多」多半是空 section 的内边距**：`[data-ssd-search]` 在点「搜索资源」前
+  是真空的，`.ssd-modal-section` 的 `padding: 16px 20px` 就是白送的 32px。
+  `.ssd-modal-section:empty { display: none }` 一行解决（section 里是直接 append 的，
+  没有空白文本节点，`:empty` 成立；点了按钮自动回到 block）。别为这个加 JS 判断。
+- **`overscroll-behavior: contain` 挡不住内容短的情况**：它只对"滚动容器到边界"生效，
+  内容装得下时 `.ssd-modal-body` 根本不是滚动容器，wheel 照样冒泡给文档。要 JS 兜，
+  但**只在「这个方向已经滚不动」时 `preventDefault`** —— 一律拦会把长详情的滚动锁死。
+- **验证滚轮拦截别看"页面有没有动"，看 `defaultPrevented`**：CDP `Runtime.evaluate` 里的
+  合成 `WheelEvent` 不会产生默认滚动动作，"页面没动"是必然结果，测不出任何东西。
+  正确断言：body 在顶部再往上滚 → true；中段往下滚 → false；到底再往下 → true。
+- **别用 `body { overflow: hidden }` 锁背景滚动**：滚动条消失会让视口宽度变化约 15px，
+  越过 `bindResize` 的 2px 阈值 → 直接 `render()` 重建列表 → 文档高度瞬间归零、滚动位置
+  回到顶部。为一个看不见的背景位移换来一个看得见的跳顶，不划算。
+- **`100vh` 在 Android Chrome 等于"地址栏隐藏时"的大视口**：地址栏可见时打开弹窗，弹窗
+  底部伸到可见区域外面，「链接」那行和底部提示整块看不到（页面不报错、也滚不出来，因为
+  被切的是弹窗自身不是内容）。用 `max-height: 100dvh`（前面留一行 `100vh` 给老浏览器
+  兜底）。**桌面/仿真测不出来** —— `--vsize` 下 vh 和 dvh 恒等，只能实机验。
+
+

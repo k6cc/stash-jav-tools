@@ -347,5 +347,26 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   入库字段）、stashDiscover.js 的两个入库预览（`.ssd-imp-body`）。新加弹层别忘挂。
 - **`86vh` 同属 dvh 那一类**：`.ssd-dp-modal` / `.ssd-imp` 的 `max-height: min(86vh, N)` 在
   Android 地址栏可见时同样会露到底部外面，一并换成 `86dvh`。
+- **角标和关注页是两套数据源，口径必须一致**：导航角标走主 JS 的轻量轮询（每 6h），
+  它当初「故意不查本地是否已拥有」；关注页走完整管线，会剔除已拥有、未链接演员的场景。
+  结果就是「角标 2、关注页全是已读」（用户 2026-11-02）。修法是轮询读发现页写的
+  `SSD:dp:<host>:local.v1`（ownedKeys + linked，无 TTL），按同口径过滤；快照缺失才退回旧行为。
+  实测判据：同一条场景，未拥有时轮询计 1，把它的 stash_id 键塞进 ownedKeys 后计 0。
+- **插件设置页注入按钮，别用 `<button>`**：`PluginApi.components` 里没有 Button
+  （External Player Launcher 取的就是这个位置，拿到 undefined 后按钮静默消失），
+  按钮在 `PluginApi.libraries.Bootstrap.Button`。更要紧的是 Collapsable Plugin Settings
+  把插件卡片头部「最后一个 button」当成启用开关改造（压成 39px 滑块 + 换掉点击行为），
+  所以注入的触发控件要用 `<a class="btn btn-secondary">` 而不是 `<button>`。
+- **设置卡片头部的 `props.topLevel` 就是右侧按钮组本身**：children 依次是
+  〔带 href 的论坛链接 Button〕〔启用/禁用 Button〕，不是整行（标题在兄弟节点里）。
+  想排到论坛链接左边，用 `injectIntoTree(topLevel, n => n.type.displayName === "Button"
+  && n.props.href, "before", el)`；别按位置盲插，也别找 `ButtonGroup`（本版没有）。
+- **注入按钮的配色由 `btn-primary` / `btn-secondary` 决定，跟 `a` 还是 `button` 无关**：
+  `btn-secondary` 是不跟主题的灰（`rgba(255,255,255,.08)`），要跟主题走就用 `btn-primary`
+  （External Player Launcher 的「设置」就是 `Button variant="primary"`）。同一个 class 在
+  `a` 上渲染结果与 `button` 完全一致，所以可以「用 `<a>` 躲 CSP + 用 `btn-primary` 拿主题色」两全。
+- **图标库是拆开的**：`PluginApi.libraries` 里没有 `FontAwesome`，只有
+  `ReactFontAwesome`（组件 `FontAwesomeIcon`）+ `FontAwesomeSolid` / `Regular` / `Brands`
+  （图标定义，如 `faFlask`）。缺任一半就别画图标，按钮要照常可用。
 
 

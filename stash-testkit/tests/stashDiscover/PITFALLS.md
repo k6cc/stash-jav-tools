@@ -368,5 +368,11 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **图标库是拆开的**：`PluginApi.libraries` 里没有 `FontAwesome`，只有
   `ReactFontAwesome`（组件 `FontAwesomeIcon`）+ `FontAwesomeSolid` / `Regular` / `Brands`
   （图标定义，如 `faFlask`）。缺任一半就别画图标，按钮要照常可用。
+- **后端出给用户看的文案，前端必须把语言带过去**：`tc()` 只在 JS 里生效，Python 拼出来的
+  `detail` / `hint` / `error` 会原样显示 —— 于是英文界面里冒出「默认保存路径」。做法是在
+  `runPluginOp()` 里统一塞 `args.lang = isZh() ? "zh" : "en"`（一处覆盖 search / push_download /
+  test），Python 侧 `want_zh(stash)` + `_t(zh, 中文, English)`。缺省中文，兼容旧前端。
+  判据：直接 `runPluginOperation(args:{mode:"test", lang:"en"})` 看返回，再拦 `window.fetch`
+  确认页面真的把 `lang` 发出去了（GraphQL 后端收不到就等于没做）。
 
 

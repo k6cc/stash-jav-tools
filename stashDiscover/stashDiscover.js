@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.9";
+  var PLUGIN_VERSION = "2.6.10";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -7476,9 +7476,15 @@
   // （也试过写文件走 assets 静态路由，但那个目录匿名可列可读，搜索结果会公开。）
   // 代价是请求会挂住整个 Jackett 搜索时长，最长到后端 jackettTimeout。
   function runPluginOp(args) {
+    // 后端要按界面语言出文案（isZh 读的是 Stash 的语言设置），统一在这里带上
+    // lang，省得每个调用点各传一次。浅拷贝：不污染调用方传进来的对象。
+    var a = {};
+    var src = args || {};
+    Object.keys(src).forEach(function (k) { a[k] = src[k]; });
+    a.lang = isZh() ? "zh" : "en";
     return callGQL(
       "mutation($id:ID!,$a:Map!){runPluginOperation(plugin_id:$id,args:$a)}",
-      { id: PLUGIN_ID, a: args || {} }
+      { id: PLUGIN_ID, a: a }
     ).then(function (r) { return r && r.runPluginOperation; })
       .catch(function (e) { throw new Error(gqlErrorMessage(e)); });
   }
@@ -8185,8 +8191,8 @@
     importJSON: function (text) {
       var o;
       try { o = JSON.parse(String(text || "")); }
-      catch (e) { return { ok: false, error: "JSON 解析失败", added: 0, skipped: 0, invalid: 0, fileVersion: 0 }; }
-      if (!o || typeof o !== "object") return { ok: false, error: "不是忽略记录文件", added: 0, skipped: 0, invalid: 0, fileVersion: 0 };
+      catch (e) { return { ok: false, error: tc("JSON 解析失败", "not valid JSON"), added: 0, skipped: 0, invalid: 0, fileVersion: 0 }; }
+      if (!o || typeof o !== "object") return { ok: false, error: tc("不是忽略记录文件", "not an ignore-list file"), added: 0, skipped: 0, invalid: 0, fileVersion: 0 };
       var st = ignoreStore();
       var added = 0, skipped = 0, invalid = 0;
       // 版本握手（用户 2026-10-30 审计定稿）：v1 = 当前结构，字段见 exportJSON。
@@ -8230,7 +8236,7 @@
       var w = ignoreWrite();
       return { ok: w.ok, added: added, skipped: skipped, invalid: invalid,
                fileVersion: fileVersion, dropped: w.dropped || 0,
-               error: w.ok ? "" : "浏览器存储写不进去（可能已满）" };
+               error: w.ok ? "" : tc("浏览器存储写不进去（可能已满）", "browser storage rejected the write (probably full)") };
     },
     // 存储被外部改动（另一个页面 / 手动清过）后重新读盘
     reload: function () { _ignoreMemo = null; return ignoreStore(); },

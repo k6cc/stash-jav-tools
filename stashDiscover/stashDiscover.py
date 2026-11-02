@@ -124,6 +124,19 @@ def emit_error(msg):
     log_warn(f"error → {msg[:200]}")
     print(json.dumps({"error": msg}, ensure_ascii=False), flush=True)
 
+
+# ─── 界面语言 ────────────────────────────────────────────────────────────
+# 前端把 isZh() 的结果作为 args.lang 传进来。只影响**给人看的**文案；
+# 日志与 HTTP 明细保持英文（用户看日志的多，第三方报错也原样保留更好搜索）。
+# 缺省中文：未升级的前端不带 lang，行为跟以前一致。
+def want_zh(stash):
+    lang = str(stash.get_arg("lang", "") or "").strip().lower()
+    return not lang.startswith("en")
+
+
+def _t(zh, zh_text, en_text):
+    return zh_text if zh else en_text
+
 def http_request(url, method="GET", data=None, headers=None, timeout=30):
     req_headers = headers or {}
     req_data = None
@@ -261,7 +274,7 @@ def _int_setting(cfg, key, default, lo, hi):
     return max(lo, min(hi, v))
 
 
-def do_search(stash, query):
+def do_search(stash, query, zh=True):
     cfg = stash.get_plugin_config()
     jackett_url = _normalize_torznab_url(cfg.get("jackettUrl") or "")
     jackett_key = (cfg.get("jackettApiKey") or "").strip()
@@ -270,7 +283,9 @@ def do_search(stash, query):
     jackett_timeout = _int_setting(cfg, "jackettTimeout", 120, 10, 600)
 
     if not jackett_url or not jackett_key:
-        emit_error("Jackett not configured. Set Jackett API URL and API Key in plugin settings.")
+        emit_error(_t(zh,
+                      "Jackett 未配置：请在插件设置里填写 Jackett 的 API 地址与 API Key。",
+                      "Jackett not configured. Set Jackett API URL and API Key in plugin settings."))
         return
 
     log_info(f"Jackett endpoint: {jackett_url}")
@@ -282,7 +297,9 @@ def do_search(stash, query):
     status, body, _ = http_request(url, timeout=jackett_timeout)
 
     if status != 200:
-        emit_error(f"Jackett request failed (HTTP {status}): {body[:200]}")
+        emit_error(_t(zh,
+                      f"Jackett 请求失败（HTTP {status}）：{body[:200]}",
+                      f"Jackett request failed (HTTP {status}): {body[:200]}"))
         return
 
     results = _parse_torznab(body)
@@ -299,7 +316,7 @@ def do_search(stash, query):
     })
 
 
-def do_push_download(stash, magnet, savepath=""):
+def do_push_download(stash, magnet, savepath="", zh=True):
     cfg = stash.get_plugin_config()
     dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
     dl_url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
@@ -307,16 +324,18 @@ def do_push_download(stash, magnet, savepath=""):
     dl_pass = (cfg.get("downloaderPassword") or "").strip()
 
     if not dl_url:
-        emit_error("Downloader URL not configured.")
+        emit_error(_t(zh, "下载器地址未填写。", "Downloader URL not configured."))
         return
     if not magnet:
-        emit_error("No magnet link provided.")
+        emit_error(_t(zh, "没有拿到磁力链接。", "No magnet link provided."))
         return
 
     if dl_type == "qbittorrent":
-        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, savepath)
+        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, savepath, zh)
     else:
-        emit_error(f"Unsupported downloader type: {dl_type}. Currently only qbittorrent is supported.")
+        emit_error(_t(zh,
+                      f"暂不支持下载器类型 {dl_type}，目前只支持 qBittorrent。",
+                      f"Unsupported downloader type: {dl_type}. Currently only qbittorrent is supported."))
 
 
 def _session_cookie(headers):
@@ -342,7 +361,7 @@ def _session_cookie(headers):
     return "; ".join(pairs)
 
 
-def _push_qbittorrent(base_url, username, password, magnet, savepath):
+def _push_qbittorrent(base_url, username, password, magnet, savepath, zh=True):
     login_url = f"{base_url}/api/v2/auth/login"
     status, body, headers = http_request(
         login_url, method="POST",
@@ -355,13 +374,17 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath):
     if status == 204 or (status == 200 and body.strip() == "Ok."):
         pass
     else:
-        emit_error(f"qBittorrent login failed (HTTP {status}): {body[:100]}")
+        emit_error(_t(zh,
+                      f"qBittorrent 登录失败（HTTP {status}）：{body[:100]}",
+                      f"qBittorrent login failed (HTTP {status}): {body[:100]}"))
         return
 
     cookie = _session_cookie(headers)
 
     if not cookie:
-        emit_error("qBittorrent login did not return a session cookie.")
+        emit_error(_t(zh,
+                      "qBittorrent 登录成功但没有返回会话 cookie。",
+                      "qBittorrent login did not return a session cookie."))
         return
 
     add_url = f"{base_url}/api/v2/torrents/add"
@@ -378,7 +401,9 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath):
         log_info(f"Pushed magnet to qBittorrent: {magnet[:60]}...")
         emit_result({"mode": "push_download", "ok": True, "message": "Pushed to downloader"})
     else:
-        emit_error(f"qBittorrent add failed (HTTP {status}): {body[:200]}")
+        emit_error(_t(zh,
+                      f"qBittorrent 添加任务失败（HTTP {status}）：{body[:200]}",
+                      f"qBittorrent add failed (HTTP {status}): {body[:200]}"))
 
 
 # ─── 连接测试（设置页「测试」按钮，用户 2026-11-02）─────────────────────
@@ -393,12 +418,12 @@ def _host_of(url):
         return url
 
 
-def _test_jackett(cfg):
+def _test_jackett(cfg, zh=True):
     item = {"key": "jackett", "label": "Jackett", "ok": False, "detail": "", "hint": ""}
     url = _normalize_torznab_url(cfg.get("jackettUrl") or "")
     key = (cfg.get("jackettApiKey") or "").strip()
     if not url or not key:
-        item["detail"] = "URL 或 API Key 未填写"
+        item["detail"] = _t(zh, "URL 或 API Key 未填写", "URL or API key is missing")
         return item
     sep = "&" if "?" in url else "?"
     caps = f"{url}{sep}t=caps&apikey={urllib.parse.quote(key)}"
@@ -407,7 +432,7 @@ def _test_jackett(cfg):
     if status == 200:
         # caps 解析不出 indexer 列表（Jackett 的 caps 不含），只确认可达 + key 通过
         item["ok"] = True
-        item["detail"] = f"{host} 可达"
+        item["detail"] = _t(zh, f"{host} 可达", f"{host} reachable")
         title = ""
         try:
             root = ET.fromstring(body)
@@ -415,14 +440,18 @@ def _test_jackett(cfg):
             if srv is not None:
                 title = srv.get("title") or ""
         except ET.ParseError:
-            item["hint"] = "返回内容不是 Torznab XML，确认地址指向 Jackett 的 Torznab 接口"
+            item["hint"] = _t(zh,
+                              "返回内容不是 Torznab XML，确认地址指向 Jackett 的 Torznab 接口",
+                              "The response is not Torznab XML — check that the URL points at Jackett's Torznab endpoint")
         if title:
             item["detail"] = f"{host} · {title}"
     elif status in (401, 403):
-        item["detail"] = f"API Key 无效（HTTP {status}）"
-        item["hint"] = "用 Jackett 仪表盘右上角的 API Key；Prowlarr 的 key 不通用"
+        item["detail"] = _t(zh, f"API Key 无效（HTTP {status}）", f"API key rejected (HTTP {status})")
+        item["hint"] = _t(zh,
+                          "用 Jackett 仪表盘右上角的 API Key；Prowlarr 的 key 不通用",
+                          "Use the API key from the top-right of the Jackett dashboard; a Prowlarr key will not work")
     elif status == 0:
-        item["detail"] = f"连不上 {host}"
+        item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
         item["hint"] = body[:150]
     else:
         item["detail"] = f"HTTP {status}"
@@ -430,17 +459,17 @@ def _test_jackett(cfg):
     return item
 
 
-def _test_downloader(cfg):
+def _test_downloader(cfg, zh=True):
     item = {"key": "qbittorrent", "label": "qBittorrent", "ok": False, "detail": "", "hint": ""}
     url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
     user = (cfg.get("downloaderUsername") or "").strip()
     pwd = (cfg.get("downloaderPassword") or "").strip()
     dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
     if dl_type and dl_type != "qbittorrent":
-        item["detail"] = f"暂不支持 {dl_type}"
+        item["detail"] = _t(zh, f"暂不支持 {dl_type}", f"{dl_type} is not supported yet")
         return item
     if not url:
-        item["detail"] = "URL 未填写"
+        item["detail"] = _t(zh, "URL 未填写", "URL is missing")
         return item
     host = _host_of(url)
     status, body, headers = http_request(
@@ -448,28 +477,35 @@ def _test_downloader(cfg):
         data={"username": user, "password": pwd}, timeout=15,
     )
     if status == 403:
-        item["detail"] = "登录被拒（HTTP 403）"
-        item["hint"] = "连续登录失败后 qB 会临时封 IP，先在 Web UI 里登录一次解除"
+        item["detail"] = _t(zh, "登录被拒（HTTP 403）", "Login refused (HTTP 403)")
+        item["hint"] = _t(zh,
+                          "连续登录失败后 qB 会临时封 IP，先在 Web UI 里登录一次解除",
+                          "qB temporarily bans the IP after repeated failed logins — log in once in the Web UI to clear it")
         return item
     if status == 0:
-        item["detail"] = f"连不上 {host}"
+        item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
         item["hint"] = body[:150]
         return item
     # ≤5.2 → 200 "Ok."；5.3.0 → 204 空 body（会话 cookie 仍在）
     if not (status == 204 or (status == 200 and body.strip() == "Ok.")):
-        item["detail"] = f"登录失败（HTTP {status}）"
-        item["hint"] = (body[:150] or "检查用户名与密码")
+        item["detail"] = _t(zh, f"登录失败（HTTP {status}）", f"Login failed (HTTP {status})")
+        item["hint"] = (body[:150] or _t(zh, "检查用户名与密码", "Check the username and password"))
         return item
     cookie = _session_cookie(headers)
     if not cookie:
-        item["detail"] = "登录成功但没有拿到会话 cookie"
-        item["hint"] = "确认 Web UI 地址完整（含端口），且没有被反向代理吞掉 Set-Cookie"
+        item["detail"] = _t(zh, "登录成功但没有拿到会话 cookie",
+                            "Logged in but no session cookie came back")
+        item["hint"] = _t(zh,
+                          "确认 Web UI 地址完整（含端口），且没有被反向代理吞掉 Set-Cookie",
+                          "Check that the Web UI URL is complete (including the port) and that no reverse proxy is dropping Set-Cookie")
         return item
     hdr = {"Cookie": cookie}
     status, body, _ = http_request(f"{url}/api/v2/app/version", headers=hdr, timeout=10)
     if status != 200:
-        item["detail"] = f"会话无效（HTTP {status}）"
-        item["hint"] = "登录成功了但后续请求被拒，通常是反代没转发 cookie"
+        item["detail"] = _t(zh, f"会话无效（HTTP {status}）", f"Session rejected (HTTP {status})")
+        item["hint"] = _t(zh,
+                          "登录成功了但后续请求被拒，通常是反代没转发 cookie",
+                          "Login worked but later requests were refused — usually a reverse proxy not passing cookies through")
         return item
     version = body.strip() or "?"
     save_path = ""
@@ -482,21 +518,24 @@ def _test_downloader(cfg):
     item["ok"] = True
     item["detail"] = f"{host} · qBittorrent {version}"
     if save_path:
-        item["hint"] = f"默认保存路径 {save_path}"
+        item["hint"] = _t(zh, f"默认保存路径 {save_path}", f"Default save path {save_path}")
     return item
 
 
-def _test_stashboxes(stash):
+def _test_stashboxes(stash, zh=True):
     """只读配置 + 本地库统计：不发任何 stash-box 请求（用户 2026-11-02）。"""
     try:
         data = stash._gql("{configuration{general{stashBoxes{name endpoint api_key}}}}")
         boxes = ((data.get("configuration") or {}).get("general") or {}).get("stashBoxes") or []
     except Exception as e:
         return [{"key": "stashbox", "label": "stash-box", "ok": False,
-                 "detail": f"读取 Stash 配置失败：{e}", "hint": ""}]
+                 "detail": _t(zh, f"读取 Stash 配置失败：{e}",
+                              f"Could not read the Stash configuration: {e}"), "hint": ""}]
     if not boxes:
         return [{"key": "stashbox", "label": "stash-box", "ok": False,
-                 "detail": "Stash 里没有配置 stash-box", "hint": "设置 → 元数据提供者 → stash-box 添加并认证"}]
+                 "detail": _t(zh, "Stash 里没有配置 stash-box", "No stash-box is configured in Stash"),
+                 "hint": _t(zh, "设置 → 元数据提供者 → stash-box 添加并认证",
+                            "Settings → Metadata Providers → add and authenticate a stash-box")}]
     # 本地演员的 stash_id（一次查完，避免每个 box 查一遍）
     counts = {}
     try:
@@ -508,27 +547,34 @@ def _test_stashboxes(stash):
                     counts[ep] = counts.get(ep, 0) + 1
     except Exception as e:
         return [{"key": "stashbox", "label": "stash-box", "ok": False,
-                 "detail": f"统计本地演员失败：{e}", "hint": ""}]
+                 "detail": _t(zh, f"统计本地演员失败：{e}",
+                              f"Could not count local performers: {e}"), "hint": ""}]
     out = []
     for b in boxes:
         ep = (b.get("endpoint") or "").lower()
         n = counts.get(ep, 0)
         has_key = bool((b.get("api_key") or "").strip())
+        key_state = _t(zh, "已配置 Key" if has_key else "缺少 API Key",
+                       "API key set" if has_key else "API key missing")
+        count_part = _t(zh, f"本地 {n} 位演员带该 box 的 ID",
+                        f"{n} performers in your library carry this box's ID")
         item = {
             "key": "stashbox:" + ep,
             "label": b.get("name") or _host_of(ep),
             "ok": has_key and n > 0,
-            "detail": ("已配置 Key" if has_key else "缺少 API Key") + f" · 本地 {n} 位演员带该 box 的 ID",
-            "hint": "" if n else "本地还没有演员链接到这个 box，发现页会看不到它的数据",
+            "detail": key_state + " · " + count_part,
+            "hint": "" if n else _t(zh,
+                                    "本地还没有演员链接到这个 box，发现页会看不到它的数据",
+                                    "No performer in your library is linked to this box yet, so the Discover page won't see its data"),
         }
         out.append(item)
     return out
 
 
-def do_test(stash):
+def do_test(stash, zh=True):
     cfg = stash.get_plugin_config()
-    items = [_test_jackett(cfg), _test_downloader(cfg)]
-    items.extend(_test_stashboxes(stash))
+    items = [_test_jackett(cfg, zh), _test_downloader(cfg, zh)]
+    items.extend(_test_stashboxes(stash, zh))
     log_info("connection test → " + ", ".join(
         f"{i['label']}={'ok' if i['ok'] else 'fail'}" for i in items))
     emit_result({"mode": "test", "ok": all(i["ok"] for i in items), "items": items})
@@ -552,19 +598,20 @@ def main():
 
         stash = StashInterface(fragment)
         mode = stash.get_mode()
+        zh = want_zh(stash)
 
         if mode == "search":
             query = stash.get_arg("query", "")
             if not query:
-                emit_error("No search query provided.")
+                emit_error(_t(zh, "没有搜索关键词。", "No search query provided."))
             else:
-                do_search(stash, query)
+                do_search(stash, query, zh)
         elif mode == "push_download":
             magnet = stash.get_arg("magnet", "")
             savepath = stash.get_arg("savepath", "")
-            do_push_download(stash, magnet, savepath)
+            do_push_download(stash, magnet, savepath, zh)
         elif mode == "test":
-            do_test(stash)
+            do_test(stash, zh)
         else:
             emit_error(f"Unknown mode: {mode or '(empty)'}")
 

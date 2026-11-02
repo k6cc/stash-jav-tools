@@ -4344,3 +4344,74 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   border-radius: inherit;
 }
 .ssd-tab-pane.is-selecting .ssd-scene-table tbody tr { cursor: pointer; }
+
+/* ─── 插件设置页「测试连接」弹窗（用户 2026-11-02）───────────────────────── */
+/* 卡片头部的触发按钮：跟着「禁用 / 编辑」那一排，别被 flex 压扁 */
+.ssd-test-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.ssd-test-ico { font-size: 0.92em; }
+.ssd-test-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.ssd-test-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, 100%);
+  max-height: min(80vh, 640px);
+  max-height: min(80dvh, 640px);
+  padding: 16px;
+  border: 1px solid var(--ssd-modal-border);
+  border-radius: 12px;
+  background: var(--ssd-modal-bg);
+  color: var(--ssd-modal-text);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.ssd-test-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ssd-test-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ssd-test-row {
+  display: flex;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--ssd-modal-border);
+  border-radius: 8px;
+}
+.ssd-test-mark { font-weight: 700; line-height: 1.5; }
+.ssd-test-row.is-ok .ssd-test-mark { color: var(--ssd-success); }
+.ssd-test-row.is-bad .ssd-test-mark { color: var(--ssd-danger); }
+.ssd-test-body { min-width: 0; }
+.ssd-test-name { font-size: 13px; font-weight: 600; }
+.ssd-test-detail { font-size: 12px; color: var(--ssd-modal-muted); word-break: break-word; }
+.ssd-test-hint { margin-top: 2px; font-size: 11px; color: var(--ssd-modal-muted); opacity: 0.85; }
+.ssd-test-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  font-size: 13px;
+  color: var(--ssd-modal-muted);
+}
+.ssd-test-err { font-size: 12px; color: var(--ssd-danger); word-break: break-word; }
+.ssd-test-foot { display: flex; justify-content: flex-end; gap: 8px; }

@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, and look for download sources.
-version: 2.6.8
+version: 2.6.9
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 

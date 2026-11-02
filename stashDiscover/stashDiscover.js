@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.8";
+  var PLUGIN_VERSION = "2.6.9";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -8592,6 +8592,23 @@
     } catch (_) { return 0; }
   }
 
+  // 角标要和关注页同口径，就得知道「本地已拥有」和「本地演员有没有链到这个源」。
+  // 发现页把这两份数据写在 local.v1（无 TTL，打开发现页即刷新），轮询直接读它，
+  // 比现场扫全库便宜得多。快照缺失 → 返回 null，不加过滤（退回旧行为），
+  // 宁可多报也不要在没数据时把角标压成 0。
+  function pollLocalSnap(endpoint) {
+    try {
+      var host = new URL(endpoint).host;
+      var raw = localStorage.getItem("SSD:dp:" + host + ":local.v1");
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || !o.ownedKeys || typeof o.ownedKeys !== "object") return null;
+      var linked = {};
+      (o.linked || []).forEach(function (p) { if (p && p.stashId) linked[String(p.stashId)] = true; });
+      return { owned: o.ownedKeys, linked: linked };
+    } catch (_) { return null; }
+  }
+
   function dpWriteUnread(n) {
     try { localStorage.setItem(DP_UNREAD_KEY, JSON.stringify({ n: n, at: Date.now() })); } catch (_) {}
     try { window.dispatchEvent(new CustomEvent("ssd:unread-changed", { detail: n })); } catch (_) {}
@@ -8696,14 +8713,23 @@
         if (!r) return;
         var set = {};
         r.ids.forEach(function (id) { set[String(id)] = true; });
+        var snap = pollLocalSnap(r.ep);
         (r.scenes || []).forEach(function (sc) {
           if (skipPrev && sc.release_date && sc.release_date > today) return;
           var sceneKey = r.ep + ":" + String(sc.id || "").toLowerCase();
           if (ignScenes[sceneKey]) return;
           if (marks[sceneKey]) return;
+          // 关注页的管线会剔除「本地已拥有」的场景（stash_id 键 + code 键）。
+          // 角标不剔除的话就是「角标 2、关注页一片空白」（用户 2026-11-02）。
+          if (snap) {
+            if (snap.owned[sceneKey]) return;
+            if (sc.code && snap.owned["code:" + String(sc.code).trim().toLowerCase()]) return;
+          }
           ((sc.performers || [])).forEach(function (pf2) {
             var pid = pf2 && pf2.performer && pf2.performer.id;
             if (!pid || !set[String(pid)]) return;
+            // 同上：本地演员没链到这个源，关注页那个分组根本不会出现
+            if (snap && !snap.linked[String(pid)]) return;
             if (ignPerfs[r.ep + ":" + String(pid).toLowerCase()]) return;
             n++;
           });
@@ -9076,6 +9102,180 @@
     document.documentElement.style.setProperty(
       "--ssd-stick-top", (pinnedTop ? Math.round(r.height) : 0) + "px");
   }
+
+  // ─── 插件设置页「测试」按钮（用户 2026-11-02）─────────────────────────────
+  // 注入照 External Player Launcher 1.2.0 的路子：patch SettingGroup，只对
+  // pluginID 是自己那张卡片动手，把按钮插到卡片头部「插件论坛链接」按钮的左边。
+  // 不走 yml settings：那里只能出 STRING/BOOLEAN 输入框，出不了按钮。
+  // 本块不受 enableDiscoverPage 影响 —— 关掉发现页的人照样要能测连接。
+  (function mountSettingsTestButton() {
+    var Api = window.PluginApi;
+    if (!Api || !Api.patch || !Api.React) return;
+    var React = Api.React;
+    var ReactDOM = Api.ReactDOM;
+    // Stash 的 PluginApi.components 里没有 Button（External Player Launcher 取的是
+    // 这个位置，在本版本拿到 undefined，按钮就静默不出现）—— 按钮在 Bootstrap 里。
+    var Bootstrap = (Api.libraries || {}).Bootstrap || {};
+    var Button = Bootstrap.Button || (Api.components || {}).Button;
+    if (!Button || !ReactDOM || typeof ReactDOM.createPortal !== "function") return;
+    // 图标：Stash 暴露的是 ReactFontAwesome（组件）+ FontAwesomeSolid（图标定义），
+    // 不是 FontAwesome 一个包。缺了就不画图标，按钮照常可用。
+    var FAComp = (Api.libraries || {}).ReactFontAwesome || {};
+    var FASolid = (Api.libraries || {}).FontAwesomeSolid || {};
+    var FaIcon = FAComp.FontAwesomeIcon;
+    var faFlask = FASolid.faFlask;
+
+    // 在 React 元素树里找第一个满足 predicate 的节点，按 position 插入。
+    // 跟 External Player Launcher 同一套写法：Stash 的设置卡片没有可用的
+    // 插槽，只能在 render 结果上就地改 children。
+    function injectIntoTree(node, predicate, position, newEl) {
+      if (!node || !node.props) return false;
+      if (predicate(node) && (position === "appendChild" || position === "prependChild")) {
+        var c = node.props.children;
+        var arr = !c ? [] : (Array.isArray(c) ? c : [c]);
+        if (position === "appendChild") arr.push(newEl); else arr.unshift(newEl);
+        node.props.children = arr;
+        return true;
+      }
+      var children = node.props.children;
+      if (!children) return false;
+      if (!Array.isArray(children) && predicate(children)) {
+        children = node.props.children = [children];
+      }
+      if (Array.isArray(children)) {
+        for (var i = 0; i < children.length; i++) {
+          if (!children[i]) continue;
+          if (predicate(children[i])) {
+            if (position === "before") { children.splice(i, 0, newEl); return true; }
+            if (position === "after") { children.splice(i + 1, 0, newEl); return true; }
+            return injectIntoTree(children[i], function () { return true; }, position, newEl);
+          }
+          if (injectIntoTree(children[i], predicate, position, newEl)) return true;
+        }
+      } else {
+        return injectIntoTree(children, predicate, position, newEl);
+      }
+      return false;
+    }
+
+    function TestRow(props) {
+      var it = props.item || {};
+      return React.createElement("div", { className: "ssd-test-row " + (it.ok ? "is-ok" : "is-bad") },
+        React.createElement("span", { className: "ssd-test-mark" }, it.ok ? "✓" : "✗"),
+        React.createElement("div", { className: "ssd-test-body" },
+          React.createElement("div", { className: "ssd-test-name" }, String(it.label || "")),
+          React.createElement("div", { className: "ssd-test-detail" }, String(it.detail || "")),
+          it.hint ? React.createElement("div", { className: "ssd-test-hint" }, String(it.hint)) : null
+        )
+      );
+    }
+
+    function TestDialog(props) {
+      var st = props.state;
+      function close(e) { if (e && e.target !== e.currentTarget) return; props.onClose(); }
+      var body;
+      if (st.loading) {
+        body = React.createElement("div", { className: "ssd-test-wait" },
+          React.createElement("span", { className: "ssd-dp-loading-dots" },
+            React.createElement("i"), React.createElement("i"), React.createElement("i")),
+          React.createElement("span", null, tc("测试中…", "Testing…")));
+      } else if (st.error) {
+        body = React.createElement("div", { className: "ssd-test-err" }, st.error);
+      } else {
+        body = (st.items || []).map(function (it, i) {
+          return React.createElement(TestRow, { key: i, item: it });
+        });
+      }
+      var foot = React.createElement("div", { className: "ssd-test-foot" },
+        React.createElement(Button, { variant: "secondary", onClick: props.onRun, disabled: st.loading },
+          tc("重新测试", "Test again")),
+        React.createElement(Button, { variant: "primary", onClick: props.onClose },
+          tc("关闭", "Close")));
+      return ReactDOM.createPortal(
+        React.createElement("div", { className: "ssd-test-overlay", onClick: close },
+          React.createElement("div", { className: "ssd-test-panel", role: "dialog" },
+            React.createElement("div", { className: "ssd-test-title" }, tc("连接测试", "Connection test")),
+            React.createElement("div", { className: "ssd-test-list" }, body),
+            foot)),
+        document.body);
+    }
+
+    function TestButton() {
+      var s1 = React.useState(false), open = s1[0], setOpen = s1[1];
+      var s2 = React.useState({ loading: false, items: null, error: null }), state = s2[0], setState = s2[1];
+
+      function run() {
+        setState({ loading: true, items: null, error: null });
+        runPluginOp({ mode: "test" }).then(function (r) {
+          var out = r;
+          if (typeof out === "string") { try { out = JSON.parse(out); } catch (_) {} }
+          if (out && out.error) throw new Error(String(out.error));
+          setState({ loading: false, items: (out && out.items) || [], error: null });
+        }).catch(function (e) {
+          setState({ loading: false, items: null, error: String((e && e.message) || e) });
+        });
+      }
+
+      function openIt() {
+        setOpen(true);
+        if (!state.items && !state.loading) run();
+      }
+      // 刻意用 <a> 而不是 <button>：Collapsable Plugin Settings 把插件卡片头部
+      // 里「最后一个 button」认成启用开关，插进去的 button 会被它改造成开关
+      // （按钮被压成 39px 的滑块，点击也变成启用/禁用）。<a> 不进那个选择器。
+      // 配色交给主题：btn-primary 跟 External Player Launcher 的「设置」一致
+      // （用户 2026-11-02 反馈 btn-secondary 是灰的、不跟主题走）。
+      var trigger = React.createElement("a", {
+        className: "btn btn-primary ssd-test-btn",
+        role: "button",
+        tabIndex: 0,
+        onClick: function (e) { e.preventDefault(); openIt(); },
+        onKeyDown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIt(); } },
+      },
+        (FaIcon && faFlask) ? React.createElement(FaIcon, { icon: faFlask, className: "ssd-test-ico" }) : null,
+        tc("测试", "Test"));
+
+      return React.createElement(React.Fragment, null,
+        trigger,
+        open ? React.createElement(TestDialog, {
+          state: state, onClose: function () { setOpen(false); }, onRun: run,
+        }) : null);
+    }
+
+    try {
+      Api.patch.after("SettingGroup", function (props, _ctx, original) {
+        // 这段跑在 Stash 自己的 render 里，抛异常会把整页换成错误页（设置页
+        // 跟着消失、无从恢复）→ 出什么事都原样返回。
+        try {
+          var kids = props && props.children;
+          var owner = Array.isArray(kids) ? kids[1] : null;
+          var pid = owner && owner.props && owner.props.pluginID;
+          if (pid !== PLUGIN_ID) return original;
+          var el = React.createElement(TestButton, null);
+          // 位置：卡片头部「插件论坛链接」按钮的左边（用户 2026-11-02，对齐
+          // External Player Launcher 的「设置」）。那个链接是带 href 的
+          // Bootstrap Button，认 type.displayName + props.href 就能精确定位，
+          // 不会误命中旁边的启用开关。
+          var placed = injectIntoTree(props.topLevel,
+            function (n) {
+              return n && n.type && n.type.displayName === "Button" &&
+                n.props && n.props.href;
+            },
+            "before", el);
+          // 兜底：将来 Stash 改版去掉论坛链接按钮时，挂到头部末尾（上一版行为）。
+          if (!placed && props.topLevel && props.topLevel.props) {
+            var c = props.topLevel.props.children;
+            props.topLevel.props.children = (Array.isArray(c) ? c : [c]).concat([el]);
+          }
+        } catch (e) {
+          console.warn("[SSD] settings test button inject failed:", e);
+        }
+        return original;
+      });
+    } catch (e) {
+      console.warn("[SSD] SettingGroup patch failed:", e);
+    }
+  })();
 
   function initPlugin() {
     console.log("[SSD] stashDiscover v" + PLUGIN_VERSION + " loaded");

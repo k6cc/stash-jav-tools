@@ -381,6 +381,159 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath):
         emit_error(f"qBittorrent add failed (HTTP {status}): {body[:200]}")
 
 
+# ─── 连接测试（设置页「测试」按钮，用户 2026-11-02）─────────────────────
+# 三项各自返回一行结果，前端只负责画勾叉，不判断成败：
+#   jackett      → Torznab t=caps（最轻的请求，但 Jackett 对 caps 同样校验 key）
+#   qbittorrent  → 登录 → app/version，顺带读默认保存路径
+#   stash-box    → 只读 Stash 配置 + 本地库统计，**不发外网请求**（用户要求）
+def _host_of(url):
+    try:
+        return urllib.parse.urlparse(url).netloc or url
+    except Exception:
+        return url
+
+
+def _test_jackett(cfg):
+    item = {"key": "jackett", "label": "Jackett", "ok": False, "detail": "", "hint": ""}
+    url = _normalize_torznab_url(cfg.get("jackettUrl") or "")
+    key = (cfg.get("jackettApiKey") or "").strip()
+    if not url or not key:
+        item["detail"] = "URL 或 API Key 未填写"
+        return item
+    sep = "&" if "?" in url else "?"
+    caps = f"{url}{sep}t=caps&apikey={urllib.parse.quote(key)}"
+    status, body, _ = http_request(caps, timeout=15)
+    host = _host_of(url)
+    if status == 200:
+        # caps 解析不出 indexer 列表（Jackett 的 caps 不含），只确认可达 + key 通过
+        item["ok"] = True
+        item["detail"] = f"{host} 可达"
+        title = ""
+        try:
+            root = ET.fromstring(body)
+            srv = root.find("server")
+            if srv is not None:
+                title = srv.get("title") or ""
+        except ET.ParseError:
+            item["hint"] = "返回内容不是 Torznab XML，确认地址指向 Jackett 的 Torznab 接口"
+        if title:
+            item["detail"] = f"{host} · {title}"
+    elif status in (401, 403):
+        item["detail"] = f"API Key 无效（HTTP {status}）"
+        item["hint"] = "用 Jackett 仪表盘右上角的 API Key；Prowlarr 的 key 不通用"
+    elif status == 0:
+        item["detail"] = f"连不上 {host}"
+        item["hint"] = body[:150]
+    else:
+        item["detail"] = f"HTTP {status}"
+        item["hint"] = body[:150]
+    return item
+
+
+def _test_downloader(cfg):
+    item = {"key": "qbittorrent", "label": "qBittorrent", "ok": False, "detail": "", "hint": ""}
+    url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
+    user = (cfg.get("downloaderUsername") or "").strip()
+    pwd = (cfg.get("downloaderPassword") or "").strip()
+    dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
+    if dl_type and dl_type != "qbittorrent":
+        item["detail"] = f"暂不支持 {dl_type}"
+        return item
+    if not url:
+        item["detail"] = "URL 未填写"
+        return item
+    host = _host_of(url)
+    status, body, headers = http_request(
+        f"{url}/api/v2/auth/login", method="POST",
+        data={"username": user, "password": pwd}, timeout=15,
+    )
+    if status == 403:
+        item["detail"] = "登录被拒（HTTP 403）"
+        item["hint"] = "连续登录失败后 qB 会临时封 IP，先在 Web UI 里登录一次解除"
+        return item
+    if status == 0:
+        item["detail"] = f"连不上 {host}"
+        item["hint"] = body[:150]
+        return item
+    # ≤5.2 → 200 "Ok."；5.3.0 → 204 空 body（会话 cookie 仍在）
+    if not (status == 204 or (status == 200 and body.strip() == "Ok.")):
+        item["detail"] = f"登录失败（HTTP {status}）"
+        item["hint"] = (body[:150] or "检查用户名与密码")
+        return item
+    cookie = _session_cookie(headers)
+    if not cookie:
+        item["detail"] = "登录成功但没有拿到会话 cookie"
+        item["hint"] = "确认 Web UI 地址完整（含端口），且没有被反向代理吞掉 Set-Cookie"
+        return item
+    hdr = {"Cookie": cookie}
+    status, body, _ = http_request(f"{url}/api/v2/app/version", headers=hdr, timeout=10)
+    if status != 200:
+        item["detail"] = f"会话无效（HTTP {status}）"
+        item["hint"] = "登录成功了但后续请求被拒，通常是反代没转发 cookie"
+        return item
+    version = body.strip() or "?"
+    save_path = ""
+    status2, body2, _ = http_request(f"{url}/api/v2/app/preferences", headers=hdr, timeout=10)
+    if status2 == 200:
+        try:
+            save_path = str((json.loads(body2) or {}).get("save_path") or "")
+        except (ValueError, AttributeError):
+            pass
+    item["ok"] = True
+    item["detail"] = f"{host} · qBittorrent {version}"
+    if save_path:
+        item["hint"] = f"默认保存路径 {save_path}"
+    return item
+
+
+def _test_stashboxes(stash):
+    """只读配置 + 本地库统计：不发任何 stash-box 请求（用户 2026-11-02）。"""
+    try:
+        data = stash._gql("{configuration{general{stashBoxes{name endpoint api_key}}}}")
+        boxes = ((data.get("configuration") or {}).get("general") or {}).get("stashBoxes") or []
+    except Exception as e:
+        return [{"key": "stashbox", "label": "stash-box", "ok": False,
+                 "detail": f"读取 Stash 配置失败：{e}", "hint": ""}]
+    if not boxes:
+        return [{"key": "stashbox", "label": "stash-box", "ok": False,
+                 "detail": "Stash 里没有配置 stash-box", "hint": "设置 → 元数据提供者 → stash-box 添加并认证"}]
+    # 本地演员的 stash_id（一次查完，避免每个 box 查一遍）
+    counts = {}
+    try:
+        pdata = stash._gql("{findPerformers(filter:{per_page:-1}){performers{stash_ids{endpoint stash_id}}}}")
+        for p in (pdata.get("findPerformers") or {}).get("performers") or []:
+            for sid in (p.get("stash_ids") or []):
+                ep = (sid.get("endpoint") or "").lower()
+                if ep:
+                    counts[ep] = counts.get(ep, 0) + 1
+    except Exception as e:
+        return [{"key": "stashbox", "label": "stash-box", "ok": False,
+                 "detail": f"统计本地演员失败：{e}", "hint": ""}]
+    out = []
+    for b in boxes:
+        ep = (b.get("endpoint") or "").lower()
+        n = counts.get(ep, 0)
+        has_key = bool((b.get("api_key") or "").strip())
+        item = {
+            "key": "stashbox:" + ep,
+            "label": b.get("name") or _host_of(ep),
+            "ok": has_key and n > 0,
+            "detail": ("已配置 Key" if has_key else "缺少 API Key") + f" · 本地 {n} 位演员带该 box 的 ID",
+            "hint": "" if n else "本地还没有演员链接到这个 box，发现页会看不到它的数据",
+        }
+        out.append(item)
+    return out
+
+
+def do_test(stash):
+    cfg = stash.get_plugin_config()
+    items = [_test_jackett(cfg), _test_downloader(cfg)]
+    items.extend(_test_stashboxes(stash))
+    log_info("connection test → " + ", ".join(
+        f"{i['label']}={'ok' if i['ok'] else 'fail'}" for i in items))
+    emit_result({"mode": "test", "ok": all(i["ok"] for i in items), "items": items})
+
+
 def main():
     try:
         if len(sys.argv) > 1:
@@ -410,6 +563,8 @@ def main():
             magnet = stash.get_arg("magnet", "")
             savepath = stash.get_arg("savepath", "")
             do_push_download(stash, magnet, savepath)
+        elif mode == "test":
+            do_test(stash)
         else:
             emit_error(f"Unknown mode: {mode or '(empty)'}")
 

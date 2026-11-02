@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.10";
+  var PLUGIN_VERSION = "2.6.11";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -8646,6 +8646,50 @@
     };
     if (!ids.length) return Promise.resolve(stamp(0));
 
+    // 「预告也计入提醒」（默认关，用户 2026-10-27 语义反转）：关闭时预告场景
+    // 不计入导航角标。旧 key skipPreviewNotify 兼容读 —— discover.js 挂载时
+    // 会把旧值迁移成 notifyPreviewScenes，但本函数可能在它之前就跑。
+    // 提前到查询阶段算：续页判定要按同一口径判断「够不够 100 条」。
+    var skipPrev = true;
+    try {
+      var pf0 = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {};
+      var prevNotify0 = pf0.notifyPreviewScenes === true ||
+        (pf0.notifyPreviewScenes === undefined && pf0.skipPreviewNotify === false);
+      skipPrev = !prevNotify0;
+    } catch (_) {}
+    var pollToday = localDateStr(new Date());
+
+    // 预告密集的源会把第一页 100 条的名额占掉（javstash 实测 267 条新作里 86 条
+    // 是未来日期），已上映的部分因此数不满，角标偏小。只在**第一页被返回满**时
+    // 才按需补页，够数即停：预告不计入时补足 100 条已上映；开关开着时预告本身
+    // 算数，补足 100 条就停（用户 2026-11-03）。
+    var POLL_PER_PAGE = 100;
+    var POLL_MAX_PAGES = 3;
+    function pollCollectScenes(box, input) {
+      var all = [];
+      var page = 1;
+      function step() {
+        var q = { page: page, per_page: POLL_PER_PAGE };
+        Object.keys(input).forEach(function (k) { q[k] = input[k]; });
+        return callBoxSceneList(box, q).then(function (qs) {
+          var scenes = (qs && qs.scenes) || [];
+          all = all.concat(scenes);
+          var usable = 0;
+          all.forEach(function (sc) {
+            if (skipPrev && sc.release_date && sc.release_date > pollToday) return;
+            usable++;
+          });
+          // 只补到「刚好够 100 条有效数据」：再往下拉就是给后台轮询白等。
+          if (scenes.length >= POLL_PER_PAGE && usable < POLL_PER_PAGE && page < POLL_MAX_PAGES) {
+            page++;
+            return step();
+          }
+          return all;
+        });
+      }
+      return step();
+    }
+
     return Promise.all([getStashBoxes(), getPluginSettings()]).then(function (res) {
       var boxes = res[0] || [];
       var settings = res[1] || {};
@@ -8676,8 +8720,8 @@
       });
       if (!Object.keys(boxByEp).length) boxes.forEach(function (b) { boxByEp[String(b.endpoint).toLowerCase()] = b; });
 
-      // One query per endpoint, first 100 scenes — a light channel; the page's
-      // full pipeline paginates properly and corrects the badge.
+      // 每个源一条查询通道（必要时按需续页，见 pollCollectScenes）；
+      // 页面自己的完整管线会分页并纠正角标。
       return Promise.all(Object.keys(byEndpoint).map(function (ep) {
         var box = boxByEp[ep];
         if (!box) return Promise.resolve(null);
@@ -8685,29 +8729,19 @@
           var input = {
             performers: { value: byEndpoint[ep], modifier: "INCLUDES" },
             sort: "DATE", direction: "DESC",
-            page: 1, per_page: 100,
           };
           // 0 = 不限：不带日期过滤
           if (cutoff) input.date = { value: cutoff, modifier: "GREATER_THAN" };
-          return callBoxSceneList(box, input);
-        }).then(function (qs) {
-          return { ep: ep, ids: byEndpoint[ep], scenes: (qs && qs.scenes) || [] };
+          return pollCollectScenes(box, input);
+        }).then(function (scenes) {
+          return { ep: ep, ids: byEndpoint[ep], scenes: scenes || [] };
         }).catch(function () { return null; }); // a failed box keeps its cached count next round
       }));
     }).then(function (results) {
       var marks = {};
       try { marks = ((JSON.parse(localStorage.getItem(DP_READ_KEY) || "null") || {}).marks) || {}; } catch (_) {}
-      // 「预告也计入提醒」（默认关，用户 2026-10-27 语义反转）：关闭时预告场景
-      // 不计入导航角标。旧 key skipPreviewNotify 兼容读 —— discover.js 挂载时
-      // 会把旧值迁移成 notifyPreviewScenes，但本函数可能在它之前就跑。
-      var skipPrev = true;
-      try {
-        var pf = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {};
-        var prevNotify = pf.notifyPreviewScenes === true ||
-          (pf.notifyPreviewScenes === undefined && pf.skipPreviewNotify === false);
-        skipPrev = !prevNotify;
-      } catch (_) {}
-      var today = localDateStr(new Date());
+      // skipPrev / today 已在查询前算好：续页判定和计数必须同一口径。
+      var today = pollToday;
       // 忽略记录（§5.1 第 2 处）：页面看不见了但红点还在数 = 最典型的"忽略了还提醒"
       var ignScenes = {}, ignPerfs = {};
       try {

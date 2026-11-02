@@ -185,6 +185,13 @@ Jackett 版本不输出，所以老的 `tracker` 字段恒为空串 —— 前�
 - 品牌映射 BRAND_MAP：`javstash.org→JAVStash`、`stashdb.org→StashDB`、`theporndb.net→TPDB`（「在 xx 查看」按钮、来源角标统一）。
 - 弹窗滚动：点搜索时滚动一次露出 loading；结果原位替换不再滚动。
 
+## 关注角标（导航数字）口径
+
+- 角标 = 当前数据源 + 窗口（`prefs.recentDays`，缺省 30 天）+ 关注演员的场景，按**场景×关注演员**计数；剔除预告（开关关时）、已读 `marks`、`ownedKeys` 与 `code:` 命中、未链接演员、忽略记录（`pollFollowed`）。
+- `SSD:dp:<host>:local.v1` 结构是 `{fetchedAt, ownedKeys:{key:1}, linked:[{stashId}]}`。**`linked` 是数组**，`pollLocalSnap` 按元素 `p.stashId` 转映射；当成对象读会得到空集 → 所有场景被剔除、角标恒 0（2026-11-03 踩过）。
+- 每源每轮先拉 1 页 100 条；被截断且预告占名额时按需续页（上限 3 页，累计有效条数够 100 即停）。判定用的 `skipPrev` 必须在**查询前**算好，计数阶段复用同一变量，否则续页口径与计数口径会不一致。
+- 实测（2026-11-03，javstash 4 位关注，30 天窗口）：10 条 = 预告 3 + 已上映 7；开关关 → 角标 7，开 → 10。临时把 `POLL_PER_PAGE` 压到 4：关 → 5（第一页只有 1 条已上映，续页补齐），开 → 4（首页 4 条全算，不续页）。
+
 ## 外部插件对照（2026-10-29）
 - **tagMerge**（源码可读，同作者）：`normalize` 用 **NFKC** + 小写 + 剔分隔符 `\s·、，,。/-—_・`，比本插件的 `normalizedName`（NFC + 去空白）强，能命中全角与 `A / B` 写法；`candidateWords` + `filterTagHits` 是「本地主名/别名 ↔ 远端 name/aliases 归一化全等」的双向精确匹配，可直接搬。fill 缓存 `tgm.fillCache.v1.<endpoint>` **只存命中词**，未命中跨会话重查（能捕捉源站新增实体）。
 - **binge**（`index.html` 打包 998KB，需用 `node -e` 按关键字切上下文读）：缓存键 `binge.source.<host>.newScenes.*`，与本插件同源形状，但写缓存是 `try{setItem}catch{}`——**无预算、无衰减、无告警**，比本插件弱；值得抄的只有「读时逐条校验 shape，坏数据当 miss」。它调的 `scrapeSinglePerformer({stash_box_index, stash_id})` 在当前 schema 已不成立（现为 `source` + `input{performer_id}`）。

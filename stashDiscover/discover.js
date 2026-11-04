@@ -1636,10 +1636,15 @@
     if (isNaN(n) || n <= 0) return tc("今天上映", "today");
     return tc(n + " 天后上映", "in " + n + "d");
   }
+  // 搜索口径（用户 2026-11-05，论坛建议）：主发现页原先漏了 tags，而演员页/工作室页
+  // 的「发现」tab（stashDiscover.js getFilteredMissing）一直搜 tags —— 同一个词在两处
+  // 结果不一致。tags 早就在缓存里（BOX_SCENE_FIELDS 查了 tags { id name }，
+  // 落盘压成 tagDict 下标，hydrate 还原成 [{name}]），拼进来是纯本地计算，不多一次请求。
   function itemHaystack(it) {
     var sc = it.scene || {};
     return [sc.title, sc.code, sc.details, sc.studio && sc.studio.name,
       (sc.performers || []).map(function (p) { return p.performer && p.performer.name; }).join(" "),
+      (sc.tags || []).map(function (t) { return t && t.name; }).join(" "),
       it.boxName].filter(Boolean).join(" ").toLowerCase();
   }
   function filterItems(list) {

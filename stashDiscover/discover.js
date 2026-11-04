@@ -150,7 +150,17 @@
       // 缺它 → `.ssd-dp-btn.primary:hover` 的 background 计算为透明，
       // 按钮 hover 时"发白变灰"（用户 2026-10-27 实测「全部已读」）
       t["acc-d"] = mix(t.acc, "#000000", dark ? 0.2 : 0.14);
-      t["acc-tx"] = contrast(t.acc, "#FFFFFF") >= contrast(t.acc, t.on) ? "#FFFFFF" : t.on;
+      // 半透明主色底上的文字（tonal 按钮：搜索资源 / 详情 / 取关）。纯主色在
+      // 深色主题下对「13% 主色 + 深底」只有 3:1 上下，读起来发暗；dark 时混白
+      // 提到 4.5:1，light 时主色本身已够，直接沿用（用户 2026-11-05）。
+      t["acc-l"] = dark ? fit(mix(t.acc, "#FFFFFF", 0.25), [ui, bg], 4.5, true) : t.acc;
+      // 主按钮文字色（用户 2026-11-05）：对齐原生 .btn-primary —— 默认白字，
+      // 只有主色浅到白字读不清（< 3:1，例如浅黄/浅青主色）才换深墨色。
+      // 不能再拿 t.on 当深色候选：它在 light 主题下就等于 #FFF，于是只有
+      // 「白」与「白」两个分支，浅主色会掉成白底白字。
+      const accWhite = contrast(t.acc, "#FFFFFF");
+      const accInk = dark ? t.on : t.tx;
+      t["acc-tx"] = accWhite >= 3 || accWhite >= contrast(t.acc, accInk) ? "#FFFFFF" : accInk;
       return t;
     }
 
@@ -2996,7 +3006,7 @@
     var apiKey = d.source.apiKey;
 
     var overlay = el("div", "ssd-dp-modal-overlay");
-    overlay.addEventListener("click", function (e) { if (e.target === overlay) closePerfModal(); });
+    SSD.bindOverlayClose(overlay, closePerfModal);
     var m = el("div", "ssd-dp-modal");
     var close = el("button", "ssd-dp-modal-close", "&times;");
     close.type = "button";
@@ -3814,7 +3824,7 @@
       overlay.remove();
       if (backId) { SSD.modalBack.release(backId); backId = 0; }
     }
-    overlay.addEventListener("click", function (e) { if (e.target === overlay) shutdown(); });
+    SSD.bindOverlayClose(overlay, shutdown);
     var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
     var close = el("button", "ssd-dp-modal-close", "&times;");
     close.type = "button";
@@ -3920,7 +3930,7 @@
       overlay.remove();
       if (backId) { SSD.modalBack.release(backId); backId = 0; }
     }
-    overlay.addEventListener("click", function (e) { if (e.target === overlay) shutdown(); });
+    SSD.bindOverlayClose(overlay, shutdown);
     var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
     var body = el("div", "ssd-dp-modal-body");
     body.appendChild(el("div", "ssd-dp-igmodaltitle", tc("恢复全部", "Restore all")));
@@ -4286,7 +4296,7 @@
       setTimeout(function () { openImportFieldsDialog(kind, keep); }, 0);
     }
     document.addEventListener("keydown", onKey);
-    overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+    SSD.bindOverlayClose(overlay, close);
 
     var m = el("div", "ssd-dp-modal ssd-dp-fields-modal");
     var closeBtn = el("button", "ssd-dp-modal-close", "&times;");

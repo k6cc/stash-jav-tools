@@ -27,7 +27,13 @@
 - 插件 stdout 只能一条 JSON，多打一行就退化成 raw string；排查用的日志走 stderr。
 - `jackettUrl` 支持只填根地址（`http://host:9117`），后端自动补全 `/api/v2.0/indexers/all/results/torznab`；`apikey` 参数必带。
 - 结果排序：带磁力优先，再按 seeders 降序；上限 200 条（`SEARCH_RESULT_LIMIT`），超出时抬头显示源侧真实总数。
-- 搜索词推断：`looksLikeCode()` 白名单判定（长度 > 24 / 含空格或点 / uuid → 不是番号），像番号才用 `code`，否则用 `title`。TPDB 的 code 形如 `japanhdv.com-6097`，带点 → 判成非番号 → 走标题。
+- 搜索词推断（v2.6.12 起，2026-11-05 实测）：番号（`looksLikeCode()`）→ `YY MM DD 首位女演员` → 标题。
+  - `looksLikeCode()` 白名单判定（长度 > 24 / 含空格或点 / uuid → 不是番号）；TPDB 的 `japanhdv.com-6097` 带点 → 非番号。
+  - 日期词用 `release_date`，空则 `production_date`，两位年份（实测种子名是 `DogHouseDigital 26 11 04 ...`）。
+  - 演员优先 `FEMALE`/`TRANSGENDER_FEMALE`，全男场景退第一位（只留日期会搜出同天无关条目）；**演员名不含拉丁字母时不拼日期词**（`26 11 05 北岡果林` 必然 0 结果）。
+  - 实测（stashdb 最近 12 条 western 场景，直接打 Jackett）：标题命中 3 条、日期+演员命中 9 条；日期词的结果条数也更少。
+  - **打分必须有日期顺序判定**：`titleMatchScore` 是 token 命中率、不看顺序，`26 04 11 Millie Morgan` 与正确的 `26 11 04` 同分（实测并列）。日期三元组相邻命中 +0.34、不命中 ×0.85 才能把正确那条排到前面。
+  - 0 结果只给「标题」一个备选按钮：代码形 code 已是首选，非番号 code 正是要避开的词。不做自动重试（同步 op，反代 60s 会切）。
 
 ## TPDB 适配层（REST，不走 stash-box GraphQL）
 

@@ -10,8 +10,10 @@
   --ssd-accent-hover: #e8590c;
   --ssd-secondary: #495057;
   --ssd-secondary-hover: #868e96;
-  --ssd-info: #1c7ed6;
-  --ssd-info-hover: #1971c2;
+  /* 演员名 pill 的兜底色（拿到 gender 时改由 .pf-* 覆盖，见 .ssd-pill-performer）。
+     只此一处用 --ssd-info；#1971c2 对白字 5.0:1。 */
+  --ssd-info: #1971c2;
+  --ssd-info-hover: #1864ab;
   --ssd-success: #37b24d;
   --ssd-warning: #f59f00;
   --ssd-danger: #f03e3e;
@@ -1212,6 +1214,18 @@
   border-radius: 11px;
   max-width: 180px;
 }
+/* 演员名按性别上色（论坛建议②，用户 2026-11-05 决定原样采纳他给的三个色值，
+   不再加深）：女 #ff69b4、男 #4169E1、跨性别 #dda0dd（跨女/跨男共用，他的方案
+   只有一档）。白字对比度 2.65 / 4.85 / 2.07，靠 .ssd-btn 的 text-shadow 撑可读性
+   —— 用户已确认截图中观感可接受。没拿到 gender 时落回 --ssd-info 的蓝。 */
+.ssd-pill-performer.pf-f { background: #ff69b4; }
+.ssd-pill-performer.pf-m { background: #4169e1; }
+.ssd-pill-performer.pf-tf,
+.ssd-pill-performer.pf-tm { background: #dda0dd; }
+.ssd-pill-performer.pf-f:hover:not(:disabled) { background: #e05c9e; }
+.ssd-pill-performer.pf-m:hover:not(:disabled) { background: #3454be; }
+.ssd-pill-performer.pf-tf:hover:not(:disabled),
+.ssd-pill-performer.pf-tm:hover:not(:disabled) { background: #c28dc2; }
 .ssd-pill-text {
   min-width: 0;
   overflow: hidden;
@@ -1278,6 +1292,35 @@
   font-size: 13px;
   color: var(--ssd-modal-muted);
   padding: 12px 0;
+}
+/* 搜索词来源标签（番号 / 日期+演员 / 标题）：贴在输入框右边缘，不占一整行 */
+.ssd-search-src {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--ssd-modal-muted);
+  background: rgba(128, 128, 128, 0.14);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.ssd-search-src:empty { display: none; }
+/* 输入框右侧要给标签留位置，否则长词会压到标签下面 */
+.ssd-search-bar .clearable-input-group { position: relative; }
+.ssd-search-bar .form-control { padding-right: 76px; }
+/* 0 结果时的换词按钮行 */
+.ssd-search-alts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ssd-modal-muted);
+  padding: 4px 0 8px;
 }
 .ssd-search-list {
   display: flex;
@@ -2557,12 +2600,15 @@
 .ssd-dp-btn.tonal {
   background: color-mix(in srgb, var(--sx-acc) 13%, transparent);
   border-color: color-mix(in srgb, var(--sx-acc) 40%, transparent);
-  color: var(--sx-acc);
+  /* 半透明主色底 + 提亮的主色文字：纯 --sx-acc 在这层底上只有 3.5:1，
+     深色主题下发暗（用户 2026-11-05「搜索资源」）。--sx-acc-l 由主题派生，
+     换主题自动跟着变；浅色主题下就是主色本身。 */
+  color: var(--sx-acc-l, var(--sx-acc));
 }
 .ssd-dp-btn.tonal:hover {
   background: color-mix(in srgb, var(--sx-acc) 22%, transparent);
   border-color: var(--sx-acc);
-  color: var(--sx-acc);
+  color: var(--sx-acc-l, var(--sx-acc));
 }
 .ssd-dp-btn.tonal.danger {
   background: color-mix(in srgb, var(--sx-re) 11%, transparent);
@@ -4123,9 +4169,10 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-dp-selact.primary {
   background: var(--sx-acc);
   border-color: var(--sx-acc);
-  color: #fff;
+  /* 与主按钮同一口径：浅主色主题下自动转深墨色，不再硬写白字 */
+  color: var(--sx-acc-tx, #fff);
 }
-.ssd-dp-selact.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+.ssd-dp-selact.primary:hover:not(:disabled) { color: var(--sx-acc-tx, #fff); filter: brightness(1.08); }
 .ssd-dp-selact:disabled { opacity: 0.45; cursor: default; }
 
 /* 窄屏多选栏（用户 2026-10-30）：390 视口下筛选栏只有 329px 宽，
@@ -4188,6 +4235,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-scene-table tr.is-sel .ssd-dp-selbox {
   background: var(--sx-acc);
   border-color: var(--sx-acc);
+  /* 勾选圈同样吃主色文字口径：浅主色下白勾会看不见 */
+  color: var(--sx-acc-tx, #fff);
 }
 
 /* 演员小卡也能进多选（用户 2026-10-29）：总览里场景与演员是两种卡，样式

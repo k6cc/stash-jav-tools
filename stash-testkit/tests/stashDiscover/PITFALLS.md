@@ -133,6 +133,23 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **工具栏控件错位 3px 的元凶是 bootstrap label 的 `margin-bottom: .5rem`**：flex 行
   `align-items:center` 对齐的是 margin-box，label 比按钮高 7px，视觉上低 3px。修法
   `.ssd-dp-ignsearch { height:30px; margin:0; align-items:center }`。（第四轮）
+- **`.ssd-dp-btn.primary` 的文字色是 `--sx-acc-tx`，由 `derive()` 算**：原实现拿 `t.on` 当深色
+  候选，但 `t.on` 在 light 主题下就等于 `#FFF` → 只有「白/白」两个分支，浅主色会白底白字；
+  dark 主题下主色蓝（`#3991C8`）反而被判成深墨色（对比度 5.07 > 3.47）→ 蓝底黑字，与原生
+  `.btn-primary` 的白字不一致（用户 2026-11-05 实测「加入库 / 全部已读」）。现在的口径：
+  白字对比度 ≥ 3 就用白，否则用主题文字色。改这一处同时覆盖 `.ssd-dp-toolbar.is-open .ssd-dp-more`
+  与 `.ssd-dp-viewtoggle button.on`（都吃 `--sx-acc-tx`）。（2026-11-05）
+  **半透明底的那颗（`.ssd-dp-btn.tonal`：搜索资源 / 详情 / 取关）吃 `--sx-acc-l`**：
+  13% 主色底 + 纯 `--sx-acc` 只有 3.5:1，深色主题下发暗；`acc-l` 在 dark 下混白 25%
+  再 `fit(...,4.5)` → 实测 `#71B0D8`、5.1:1，light 下直接等于主色。
+- **演员名 pill 按性别上色，色值写死不走主题**（用户 2026-11-05 采纳论坛建议②，最终**原样用
+  对方给的三个色值**，不再加深）：`.pf-f` 粉 `#ff69b4`、`.pf-m` 蓝 `#4169e1`、跨性别 `#dda0dd`
+  （`.pf-tf` / `.pf-tm` 共用，他的方案只有一档），无 `gender` 落回 `--ssd-info`。白字对比度
+  2.65 / 4.85 / 2.07 —— 低于 4.5，靠 `.ssd-btn` 的 `text-shadow: 0 1px 1px rgba(0,0,0,.3)`
+  撑可读性，用户对照截图确认观感可接受；**不要再为了对比度把颜色改深**，那样阴影在深底上
+  反而看不清（浅底才是他截图里阴影明显的原因）。**`gender` 只在 `findScene` 里取到**
+  （`BOX_SCENE_DETAIL_FIELDS`），列表字段集没有 → 弹窗首帧那批 pill 是蓝的，详情返回后才变色，
+  属于预期，别当成没生效。（2026-11-05）
 - **别用 grid 的 `auto-fill`**：会生成空轨道，宽屏上卡片组贴左；`minmax(150px,172px)` 实测在
   1252 容器里算出 5 列 242px（不是预期的 7 列 172px），行为不可预期。定宽卡 + flex 换行 + 居中。（第二轮）
 - **`.ssd-dp-tabs` 自带 4px padding + 1px 边框**，选态 tabs 会高到 39px →
@@ -172,6 +189,16 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   交给进程；tasks 的 `defaultArgs` 只在手动点击时生效，而手动点击没有 query / magnet，
   `runPluginTask` 又只把 stdout 当日志、不解析 `{"error"}` → 任务页显示「完成、无错误、什么都没
   发生」。（第七轮）
+- **`sys.stdin` 必须自己按 UTF-8 解码**：Stash 把 args 以 UTF-8 写进 stdin，而 Windows 下
+  `sys.stdin` 默认用本地代码页（中文系统 cp936）+ `surrogateescape` —— 纯 ASCII 的 `mode` / `lang`
+  没问题，**中文/日文搜索词**要么直接 `UnicodeDecodeError`，要么变成孤立代理项
+  （`U+DC80..DCFF`），一路传到 `urllib.parse.quote()` 才炸成
+  `UnicodeEncodeError: ... '\udc98' ... surrogates not allowed`（论坛实测日文标题）。
+  stdout/stderr 早就 `reconfigure(encoding="utf-8")` 了，只有 stdin 漏了：
+  `sys.stdin.reconfigure(encoding="utf-8", errors="replace")`。判据：
+  `runPluginOperation(args:{mode:"search", query:"麻薬捜査官"})`，修前必报错、修后返回结果。
+  另在 `main` 里对 `query`/`magnet`/`savepath` 过一遍 `_safe_text()`（清孤立代理项），
+  防止旧前端或 argv 通道再带进来。（2026-11-05）
 - **NUMBER 类型设置项「没填」会被存成 0，不是空**：`type: NUMBER` 的项在设置页显示的数字和
   落盘的值都以 0 兜底 —— 用户点过一次保存，`plugins.<id>` 里就多一个 `key: 0`，之后无论代码怎么
   兜默认值，设置页永远显示 0。要「可留空」只能改 `type: STRING`（同 `previewDays`），并把历史
@@ -345,6 +372,11 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   → prevented，到底再往下 → prevented，**中段 → false**（漏测这档就会把详情锁死）。
 - 一套守卫覆盖 6 个弹层：场景详情、discover.js 的四个（演员详情 / 忽略详情 / 恢复全部 /
   入库字段）、stashDiscover.js 的两个入库预览（`.ssd-imp-body`）。新加弹层别忘挂。
+- **点遮罩关闭不能只判 `e.target === overlay`**：`click` 的 target 是 mousedown 与 mouseup
+  目标的**最近公共祖先**，从弹窗内按住拖到遮罩上松手，target 就是 overlay → 误关（论坛第 37 楼
+  说的 drag/long-press 误触，实测成立）。统一用 `SSD.bindOverlayClose(overlay, close)`：
+  `pointerdown` 捕获阶段记起点与坐标，click 时要求起点在遮罩、位移 < 8px、非长按（> 700ms），
+  `e.detail === 0`（键盘）直接忽略。七个弹层共用一个实现，新弹层直接调用，别自己再写一遍。
 - **`86vh` 同属 dvh 那一类**：`.ssd-dp-modal` / `.ssd-imp` 的 `max-height: min(86vh, N)` 在
   Android 地址栏可见时同样会露到底部外面，一并换成 `86dvh`。
 - **角标和关注页是两套数据源，口径必须一致**：导航角标走主 JS 的轻量轮询（每 6h），

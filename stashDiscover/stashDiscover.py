@@ -26,6 +26,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+# Stash 把 args 以 UTF-8 写进 stdin，但 Windows 下 sys.stdin 默认按本地代码页
+# （中文系统 cp936）解码：中文/日文搜索词要么直接 UnicodeDecodeError，要么被
+# surrogateescape 变成孤立代理项（U+DC80..DCFF），一路传到
+# urllib.parse.quote() 才炸成 "surrogates not allowed"（论坛实测日文标题）。
+# 必须显式按 UTF-8 解码 stdin —— stdout/stderr 早就这么做了，只有 stdin 漏了。
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PLUGIN_DIR not in sys.path:
@@ -35,6 +42,22 @@ PLUGIN_ID = "stashDiscover"
 # 单次搜索下发给前端的条数上限。operation 通道没有日志的 64KB 行上限；
 # UI 仍然分页渲染，200 只是"能一次拿全"，不是"一屏显示 200 条"。
 SEARCH_RESULT_LIMIT = 200
+
+
+def _safe_text(s):
+    """去掉 JSON 里可能夹带的孤立代理项。
+
+    Windows 上按本地代码页解码过的字符串会带 U+DC80..DCFF，这种字符没法编码成
+    UTF-8：拼进 URL 会让 urllib.parse.quote 抛 UnicodeEncodeError，写进结果又会
+    让 json.dumps 出错。这里统一换成 '?'，宁可搜不到也不整条失败。
+    """
+    if not isinstance(s, str):
+        return s
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        return s.encode("utf-8", "replace").decode("utf-8")
 
 
 class StashInterface:
@@ -601,14 +624,14 @@ def main():
         zh = want_zh(stash)
 
         if mode == "search":
-            query = stash.get_arg("query", "")
+            query = _safe_text(stash.get_arg("query", ""))
             if not query:
                 emit_error(_t(zh, "没有搜索关键词。", "No search query provided."))
             else:
                 do_search(stash, query, zh)
         elif mode == "push_download":
-            magnet = stash.get_arg("magnet", "")
-            savepath = stash.get_arg("savepath", "")
+            magnet = _safe_text(stash.get_arg("magnet", ""))
+            savepath = _safe_text(stash.get_arg("savepath", ""))
             do_push_download(stash, magnet, savepath, zh)
         elif mode == "test":
             do_test(stash, zh)

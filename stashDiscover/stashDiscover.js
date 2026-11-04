@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.11";
+  var PLUGIN_VERSION = "2.6.12";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -4876,6 +4876,11 @@
   var _searchPerPage = 20;
   var _searchResults = [];
   var _searchLow = [];          // 标题匹配度低、默认折叠的结果
+  var _searchAlts = [];         // 当前场景的备选搜索词（0 结果时给一键换词）
+  var _searchCands = [];        // 主词 + 备选，用于判断某次搜索词属于哪种自动判定
+  var _searchBarCtx = null;     // { item, btn }：备选按钮重搜时要用
+  var _searchSection = null;    // 当前结果区，备选按钮往这里加
+  var _searchCurQuery = "";     // 最近一次实际下发的搜索词
 
   // 翻页的目标序列：不从调用方传列表，而是从触发卡片反查同一容器里的兄弟节点 ——
   // .ssd-scene-card 与 .ssd-scene-table 的 tr 都挂了 __ssdItem，所以演员页 / 工作室页 /
@@ -5017,7 +5022,7 @@
 
     var overlay = document.createElement("div");
     overlay.className = "ssd-modal-overlay";
-    overlay.onclick = function (e) { if (e.target === overlay) closeModal(); };
+    bindOverlayClose(overlay, closeModal);
 
     var modal = document.createElement("div");
     modal.className = "ssd-modal";
@@ -5246,6 +5251,27 @@
       if (range <= 1) { e.preventDefault(); return; }
       if (d < 0 ? body.scrollTop <= 0 : body.scrollTop >= range - 1) e.preventDefault();
     }, { passive: false });
+  }
+
+  // 点遮罩关闭的防误触（论坛建议③）：click 的 target 是 mousedown / mouseup 的
+  // 最近公共祖先，从弹窗内按住拖到遮罩上松手，target 就是遮罩 —— 只判
+  // e.target === overlay 会直接关掉（用户 2026-11-05 反馈的"误触"）。改成按下时
+  // 记起点：起点必须在遮罩本身上、位移 < 8px、且不是长按（>700ms）才关。
+  // 正常点空白完全不受影响；键盘触发（detail === 0）不关。
+  function bindOverlayClose(overlay, close) {
+    if (!overlay || typeof close !== "function") return;
+    var downOn = false, sx = 0, sy = 0, t0 = 0;
+    overlay.addEventListener("pointerdown", function (e) {
+      downOn = e.target === overlay;
+      sx = e.clientX; sy = e.clientY; t0 = Date.now();
+    }, true);
+    overlay.addEventListener("click", function (e) {
+      if (e.detail === 0) return;                  // 键盘 / 脚本触发
+      if (e.target !== overlay || !downOn) return;
+      if (Math.abs(e.clientX - sx) > 8 || Math.abs(e.clientY - sy) > 8) return;
+      if (Date.now() - t0 > 700) return;           // 长按选词后松手
+      close();
+    });
   }
 
   // 转屏 / 改窗口才需要重算（地址栏伸缩只改高度，封面靠 aspect-ratio，位置不变，
@@ -5818,6 +5844,17 @@
     // Carousel (cover + DMM screenshots) is handled by probeModalGallery().
   }
 
+  // 演员名 pill 的性别底色（论坛建议②，用户 2026-11-05 采纳）：
+  // 没拿到 gender（部分 western 源缺）时返回空串，落回 --ssd-info 的蓝。
+  function perfGenderClass(g) {
+    var v = String(g || "").toUpperCase();
+    if (v === "FEMALE") return "pf-f";
+    if (v === "MALE") return "pf-m";
+    if (v === "TRANSGENDER_FEMALE") return "pf-tf";
+    if (v === "TRANSGENDER_MALE") return "pf-tm";
+    return "";
+  }
+
   function renderDetailsInto(container, sc, item) {
     container.innerHTML = "";
 
@@ -5874,9 +5911,10 @@
         if (!pf || !pf.name) return;
         // Clickable → solid button (interactive = solid; transparent is
         // reserved for non-clickable badges like the tags below)
+        var gcls = perfGenderClass(pf.gender);
         var pill = document.createElement("button");
         pill.type = "button";
-        pill.className = "ssd-btn ssd-btn-sm ssd-btn-info ssd-pill-performer";
+        pill.className = "ssd-btn ssd-btn-sm ssd-btn-info ssd-pill-performer" + (gcls ? " " + gcls : "");
         pill.title = pf.name;
         var pillText = document.createElement("span");
         pillText.className = "ssd-pill-text";
@@ -6335,9 +6373,7 @@
 
     var overlay = document.createElement("div");
     overlay.className = "ssd-imp-overlay";
-    overlay.addEventListener("click", function (e) {
-      if (e.target === overlay) closeImportDialog();
-    });
+    bindOverlayClose(overlay, closeImportDialog);
     var panel = document.createElement("div");
     panel.className = "ssd-imp";
     overlay.appendChild(panel);
@@ -6998,9 +7034,7 @@
 
     var overlay = document.createElement("div");
     overlay.className = "ssd-imp-overlay";
-    overlay.addEventListener("click", function (e) {
-      if (e.target === overlay) closeImportDialog();
-    });
+    bindOverlayClose(overlay, closeImportDialog);
     var panel = document.createElement("div");
     panel.className = "ssd-imp ssd-imp-sm";
     overlay.appendChild(panel);
@@ -7336,32 +7370,100 @@
     return /^[A-Za-z0-9]{2,12}[-_](?:\d{2,7}|[A-Za-z]{2,4}[-_]\d{1,7})$/.test(s);
   }
 
-  // 搜索词：番号形 code 优先（JAV 场景标题是日文长句，搜不出结果），
-  // 否则一律用标题 —— western 场景本来就没有番号。
+  // 搜索词自动判定（用户 2026-11-05，论坛反馈实测）：三种形态各有胜率 ——
+  //   番号：JAV 唯一稳定的键（日本标题搜不出东西）；
+  //   日期+演员：western 种子文件名是 `Site YY MM DD Performer ...`，标题常常
+  //     根本不在里面。实测 12 条 stashdb western 场景，标题搜命中 3 条，
+  //     日期+演员搜命中 9 条，且结果条数更少（噪音更低）；
+  //   标题：兜底（无日期、无演员可用的场景）。
+  // 不做成设置项：分支由场景字段确定性推导，且同一次浏览里 JAV 与 western
+  // 会混着出现，全局开关必然对其中一类有害。
+  function queryPerformer(sc) {
+    var list = ((sc && sc.performers) || []).map(function (p) {
+      return p && p.performer ? p.performer : p;
+    }).filter(function (p) { return p && p.name; });
+    if (!list.length) return null;
+    // 优先女/跨性别女性：western 种子文件名里基本只写她们。全男场景（gay
+    // 片商）没有女演员时退到第一位 —— 只剩日期会搜出同一天的一堆无关条目。
+    var want = list.filter(function (p) {
+      var g = String(p.gender || "").toUpperCase();
+      return g === "FEMALE" || g === "TRANSGENDER_FEMALE";
+    });
+    return want[0] || list[0];
+  }
+
+  // 两位年份的 YY MM DD：实测种子命名就是这种（`DogHouseDigital 26 11 04 ...`）。
+  function queryDate(sc) {
+    var raw = String((sc && (sc.release_date || sc.production_date)) || "").trim();
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+    if (!m) return null;
+    return m[1].slice(2) + " " + m[2] + " " + m[3];
+  }
+
+  var SEARCH_KIND_LABEL = {
+    code: function () { return tc("番号", "code"); },
+    date: function () { return tc("日期+演员", "date + performer"); },
+    title: function () { return tc("标题", "title"); },
+  };
+
+  // 返回 { q, kind }。kind 只用于告诉用户这词是怎么来的（自动判定是确定性的，
+  // 用户看不到种子文件名，没法判得比这里更准 → 不给选项，只给可见性）。
   function searchQueryFor(sc) {
     var code = String((sc && sc.code) || "").trim();
     var title = String((sc && sc.title) || "").trim();
-    if (code && looksLikeCode(code)) return code;
-    return title || code;
+    var d = queryDate(sc);
+    var pf = queryPerformer(sc);
+    if (code && looksLikeCode(code)) return { q: code, kind: "code" };
+    // 名字得是拉丁文才拼日期词：JAV 场景的演员名常是汉字/假名，塞进
+    // `26 11 05 北岡果林` 这种词只会白跑一次请求。
+    if (d && pf && /[A-Za-z]/.test(pf.name)) return { q: d + " " + pf.name, kind: "date" };
+    if (title) return { q: title, kind: "title" };
+    return code ? { q: code, kind: "code" } : null;
+  }
+
+  // 0 结果时的备选词：自动判定撞上「种子还没出」时换一次词再试。
+  // 只备「标题」一种：代码形 code 本来就是首选，非番号 code（TPDB 那种站点 id）
+  // 正是我们要避开的词，两者当备选都没意义。
+  // 做成按钮而不自动重试 —— 搜索是同步 op，反代 60s 会切，翻倍请求不可控。
+  function searchQueryAlts(sc) {
+    var primary = searchQueryFor(sc);
+    if (!primary) return [];
+    var title = String((sc && sc.title) || "").trim();
+    if (!title || title === primary.q) return [];
+    return [{ q: title, kind: "title" }];
   }
 
   function handleSearchResources(item, btn) {
     var sc = _state.modalDetail ? _state.modalDetail.scene : item.scene;
-    var defaultQuery = searchQueryFor(sc);
-    if (!defaultQuery) {
-      showModalNotice(tc("无法构建搜索词（无番号或标题）", "Cannot build search query (no code or title)"), "error");
+    var pick = searchQueryFor(sc);
+    if (!pick) {
+      showModalNotice(tc("无法构建搜索词（无番号、日期或标题）", "Cannot build search query (no code, date or title)"), "error");
       return;
     }
 
     var section = document.querySelector("[data-ssd-search]");
     if (!section) return;
 
-    ensureSearchBar(section, item, btn, defaultQuery);
+    _searchAlts = searchQueryAlts(sc);
+    _searchCands = [pick].concat(_searchAlts);
+    _searchBarCtx = { item: item, btn: btn };
+
+    ensureSearchBar(section, item, btn, pick.q);
 
     // Second invocation uses the bar's current text (may be user-edited)
     var input = section.querySelector("[data-ssd-search-input]");
-    var query = (input ? input.value : defaultQuery).trim() || defaultQuery;
-    doSearchResources(section, item, btn, query);
+    var query = (input ? input.value : pick.q).trim() || pick.q;
+    // 用户改过词就不再声称「按番号/日期+演员」，否则提示和实际不符
+    var kind = searchKindOf(query);
+    doSearchResources(section, item, btn, query, kind);
+  }
+
+  // 这次搜索词属于哪种自动判定形态；被用户改过则返回 ""（不贴标签）。
+  function searchKindOf(q) {
+    for (var i = 0; i < (_searchCands || []).length; i++) {
+      if (_searchCands[i].q === q) return _searchCands[i].kind;
+    }
+    return "";
   }
 
   function ensureSearchBar(section, item, btn, defaultQuery) {
@@ -7379,18 +7481,30 @@
     input.className = "clearable-text-field form-control";
     input.setAttribute("data-ssd-search-input", "");
     input.value = defaultQuery;
-    input.placeholder = tc("番号 / 标题", "Code / title");
+    input.placeholder = tc("番号 / 日期+演员 / 标题", "Code / date+performer / title");
     group.appendChild(input);
+
+    // 这词是怎么来的（番号 / 日期+演员 / 标题）：自动判定不给开关，只给可见性，
+    // 用户看到来源才敢改词。
+    var chip = document.createElement("span");
+    chip.className = "ssd-search-src";
+    chip.setAttribute("data-ssd-search-src", "");
+    group.appendChild(chip);
 
     var goBtn = document.createElement("button");
     goBtn.type = "button";
     goBtn.className = "ssd-dp-btn primary";
-    goBtn.textContent = tc("搜索", "Search");
+    // 文案单独一层，和弹窗其他动作按钮同一套结构（图标不随状态被抹掉）
+    goBtn.innerHTML = '<span class="ssd-dp-bico">' + ACT_FIND_SVG + "</span>";
+    var goTx = document.createElement("span");
+    goTx.className = "ssd-dp-btxt";
+    goTx.textContent = tc("搜索", "Search");
+    goBtn.appendChild(goTx);
 
     function submit() {
       var q = input.value.trim();
       if (!q) { input.focus(); return; }
-      doSearchResources(section, item, btn, q);
+      doSearchResources(section, item, btn, q, searchKindOf(q));
     }
 
     goBtn.onclick = submit;
@@ -7430,8 +7544,18 @@
     catch (e) { body.scrollTop = top; }
   }
 
-  function doSearchResources(section, item, btn, query) {
+  function doSearchResources(section, item, btn, query, kind) {
     if (!query) return;
+
+    // 搜索来源标签：让用户知道这词是按番号 / 日期+演员 / 标题生成的。
+    // kind 为空（用户自己改过的词）就清空，不假装知道。
+    var chip = section.querySelector("[data-ssd-search-src]");
+    if (chip) {
+      var lbl = kind && SEARCH_KIND_LABEL[kind] ? SEARCH_KIND_LABEL[kind]() : "";
+      chip.textContent = lbl ? tc("按" + lbl, lbl) : "";
+      chip.setAttribute("data-kind", kind || "");
+      chip.title = query;
+    }
 
     var results = section.querySelector("[data-ssd-search-results]");
     if (!results) {
@@ -7456,6 +7580,7 @@
       // 排序要用实际下发的搜索词；后端老版本没回 query 时用本次的兜底
       var payload = result || {};
       if (!payload.query) payload.query = query;
+      _searchSection = section;
       renderSearchResults(results, payload);
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
@@ -7563,8 +7688,18 @@
   function rankSearchResults(list, query) {
     var qNorm = normSearchText(query);
     var qTokens = searchQueryTokens(query);
+    // 日期三元组单独看：token 命中不看顺序，`26 04 11 Millie Morgan` 与正确的
+    // `26 11 04 Millie Morgan` 会打成同分（实测这两条并列在结果里）。三元组
+    // 相邻出现才算真命中，命中加权、不命中打折 —— 名对日期错的那条就会落到后面。
+    var qDate = /^\d{2} \d{2} \d{2}( |$)/.test(qNorm) ? qNorm.slice(0, 8) : "";
     var scored = (list || []).map(function (res, i) {
-      return { res: res, i: i, score: titleMatchScore(qNorm, qTokens, res && res.title) };
+      var base = titleMatchScore(qNorm, qTokens, res && res.title);
+      var score = base;
+      if (qDate && base > 0) {
+        var tn = " " + normSearchText(res && res.title) + " ";
+        score = tn.indexOf(" " + qDate + " ") !== -1 ? Math.min(1, base + 0.34) : base * 0.85;
+      }
+      return { res: res, i: i, score: score };
     });
     // 一条都没命中，说明词表对不上（例如中文整句标题）——排序和折叠都失效，
     // 原样返回，别假装筛过
@@ -7587,10 +7722,39 @@
     return { primary: primary, low: low };
   }
 
+  // 0 结果时给一键换词：自动判定可能恰好撞上「种子还没出」，而换一种形态
+  // （标题 / 日期+演员 / 番号）经常能搜到。只给按钮、不自动重试 —— 搜索是
+  // 同步 op，反代 60s 会切，翻倍请求不可控，而且用户往往想自己看看词。
+  function renderSearchAlts() {
+    var section = _searchSection;
+    var ctx = _searchBarCtx;
+    if (!section || !ctx) return;
+    var rest = (_searchCands || []).filter(function (c) { return c.q && c.q !== _searchCurQuery; });
+    if (!rest.length) return;
+    var row = document.createElement("div");
+    row.className = "ssd-search-alts";
+    row.appendChild(document.createTextNode(tc("换个搜索词再试：", "Try another query: ")));
+    rest.forEach(function (alt) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "ssd-dp-btn ghost sm";
+      b.textContent = SEARCH_KIND_LABEL[alt.kind] ? SEARCH_KIND_LABEL[alt.kind]() : alt.kind;
+      b.title = alt.q;
+      b.onclick = function () {
+        var input = section.querySelector("[data-ssd-search-input]");
+        if (input) input.value = alt.q;
+        doSearchResources(section, ctx.item, ctx.btn, alt.q, alt.kind);
+      };
+      row.appendChild(b);
+    });
+    section.appendChild(row);
+  }
+
   function renderSearchResults(section, result) {
     section.innerHTML = "";
     var raw = result.results || [];
-    var ranked = rankSearchResults(raw, result.query || "");
+    _searchCurQuery = String(result.query || "");
+    var ranked = rankSearchResults(raw, _searchCurQuery);
     _searchResults = ranked.primary;
     _searchLow = ranked.low;
     _searchPage = 1;
@@ -7618,6 +7782,7 @@
       empty.className = "ssd-search-empty";
       empty.textContent = tc("未找到资源", "No resources found");
       section.appendChild(empty);
+      renderSearchAlts();
       return;
     }
 
@@ -8555,6 +8720,8 @@
     modalBack: modalBack,
     // 弹层滚到边界别把背后页面带走（场景详情弹窗与 discover.js 的弹层共用）
     guardScrollChain: guardScrollChain,
+    // 点遮罩关闭 + 防误触（七个弹层共用）
+    bindOverlayClose: bindOverlayClose,
   };
 
   // ─── Discover nav entry + route shell (synchronous top-level registration) ─

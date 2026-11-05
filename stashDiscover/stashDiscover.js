@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.13";
+  var PLUGIN_VERSION = "2.6.14";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -6466,23 +6466,57 @@
     });
     list.appendChild(srcRow.row);
 
-    // 演员：只显示数字，不做开关（Q19：建档无条件，新建 N 位是纯信息）
-    var perfCb = impRow({
+    // 演员三态（用户 2026-11-05 论坛反馈）：这一行原先只有勾选框 + 数字，
+    // 「只关联库里已有的、别新建」在预览这一步无处可选 —— 设置里早就是三态，
+    // 这里没跟上。改成和标签 / 工作室同一套下拉，pick.performers 直接透传三态。
+    var perfHint = document.createElement("span");
+    perfHint.className = "ssd-imp-hint";
+    function refreshPerfHint() {
+      var v = perfSel.value;
+      if (!draft.perf.plan.length) {
+        perfHint.textContent = tc("源里没有", "none on source");
+      } else if (v === "none") {
+        perfHint.textContent = tc("全部不写", "none written");
+      } else if (v === "existing") {
+        perfHint.textContent = tc("关联 " + draft.perf.linked + " 位已有" +
+          (draft.perf.create ? " · 新建的 " + draft.perf.create + " 位不写" : ""),
+          draft.perf.linked + " linked" +
+          (draft.perf.create ? " · " + draft.perf.create + " skipped" : ""));
+      } else {
+        perfHint.textContent = tc("关联 " + draft.perf.linked + " 位已有" +
+          (draft.perf.create ? " · 新建 " + draft.perf.create + " 位" : ""),
+          draft.perf.linked + " linked" + (draft.perf.create ? " · " + draft.perf.create + " new" : ""));
+      }
+      // 三态选「不写」时同步勾选框，两个控件不能各说一套（同标签行）
+      if (perfRow) {
+        perfRow.cb.checked = v !== "none";
+        perfRow.row.classList.toggle("is-off", !perfRow.cb.checked);
+      }
+    }
+    var perfSel = impSelect([
+      ["all", tc("全写（含新建）", "Write all (create new)")],
+      ["existing", tc("只关联已有", "Link existing only")],
+      ["none", tc("不写演员", "No performers")],
+    ], prefs.performers);
+    var perfWrap = document.createElement("div");
+    perfWrap.className = "ssd-imp-inline";
+    perfWrap.appendChild(perfSel);
+    perfWrap.appendChild(perfHint);
+    perfSel.addEventListener("change", refreshPerfHint);
+    // 默认值是三态字符串，"none" 才是关（字符串全为真值，直接当布尔会永远是勾上的）
+    var perfRow = impRow({
       label: tc("演员", "Performers"),
-      // 默认值是三态字符串了；"none" 才是关（字符串全为真值，直接当布尔会永远是勾上的）
-      checked: prefs.performers !== "none" && prefs.performers !== false,
-      value: draft.perf.plan.length
-        ? tc("关联 " + draft.perf.linked + " 位已有 · 新建 " + draft.perf.create + " 位",
-             draft.perf.linked + " linked · " + draft.perf.create + " new")
-        : tc("源里没有", "none on source"),
+      checked: prefs.performers !== "none",
+      node: perfWrap,
     });
-    list.appendChild(perfCb.row);
+    list.appendChild(perfRow.row);
+    refreshPerfHint();
     if (draft.perf.ambiguous) {
       var amb = document.createElement("div");
       amb.className = "ssd-imp-note";
       amb.textContent = tc(
-        "其中 " + draft.perf.ambiguous + " 位库里有重名但无法确定是不是同一人，按新建处理（事后可在演员页合并）",
-        draft.perf.ambiguous + " with a same-name local record could not be confirmed — created as new; merge later if needed");
+        "其中 " + draft.perf.ambiguous + " 位库里有重名但无法确定是不是同一人，按新建处理（选「只关联已有」时这几位跳过，事后可在演员页合并）",
+        draft.perf.ambiguous + " with a same-name local record could not be confirmed — created as new (skipped when linking existing only); merge later if needed");
       list.appendChild(amb);
     }
 
@@ -6610,7 +6644,7 @@
         director: getters.director ? getters.director() : "",
         urlsWeb: webRow.cb.checked,
         urlsSrc: srcRow.cb.checked,
-        performers: perfCb.cb.checked,
+        performers: perfRow.cb.checked ? perfSel.value : "none",
         // 勾掉勾选框与选「不写」等价
         tags: tagRow.cb.checked ? tagSel.value : "none",
         studio: stRow.cb.checked ? stSel.value : "none",

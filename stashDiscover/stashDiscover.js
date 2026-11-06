@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.15";
+  var PLUGIN_VERSION = "2.6.16";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -2248,8 +2248,8 @@
 
     } else if (vs === "net-fail") {
       body.appendChild(panelDesc(tc(
-        "网络请求失败，没有取到任何场景。检查网络或代理后重试。",
-        "The request failed and no scenes could be fetched. Check your connection or proxy, then retry.")));
+        "请求失败，没取到场景。检查网络或代理后重试。",
+        "Request failed — no scenes fetched. Check your connection or proxy, then retry.")));
       var failed = failedSources();
       if (failed.length) {
         var list = document.createElement("div");
@@ -2268,8 +2268,8 @@
 
     } else if (vs === "no-box") {
       body.appendChild(panelDesc(tc(
-        "本插件从已配置的 stash-box 读取场景。请在 设置 → 元数据提供者 中添加至少一个实例，然后重试。",
-        "Scenes are read from configured stash-boxes. Add at least one in Settings → Metadata Providers, then retry.")));
+        "未配置 stash-box：请在 设置 → 元数据提供者 添加一个实例，然后重试。",
+        "No stash-box configured — add one in Settings → Metadata Providers, then retry.")));
       var retryBtn2 = makePanelBtn(tc("重试", "Retry"), "primary");
       retryBtn2.onclick = retryLoad;
       actions.appendChild(retryBtn2);
@@ -2279,8 +2279,8 @@
 
     } else if (vs === "no-ids") {
       body.appendChild(panelDesc(tc(
-        "本插件按 stash-box 编号查询场景。在演员编辑面板的「Stash IDs」区点「添加Stash编号」，为下列源各填入一个编号；写入后会自动重新查询。",
-        "Scenes are queried by stash-box ID. Open the performer edit panel, click \"Add Stash ID\" in the \"Stash IDs\" section and fill in one ID for each source below — the tab re-queries automatically once it is saved.")));
+        "场景按 stash-box 编号查询。在演员编辑面板「Stash IDs」里为下列源各填一个编号，保存后自动重新查询。",
+        "Scenes are queried by stash-box ID. Fill in one ID per source in the performer's \"Stash IDs\" section — it re-queries once saved.")));
       var boxList = document.createElement("div");
       boxList.className = "ssd-src-list";
       (_state.allBoxes || []).forEach(function (b) {
@@ -2292,8 +2292,8 @@
           "Edit panel opened — waiting for an ID to be saved…"), true, false));
       }
       if (_state.editWatchMissing) {
-        body.appendChild(panelNote(tc("没找到编辑按钮，请手动点开页面右上角的编辑（铅笔）图标。",
-          "Edit button not found — open the edit (pencil) icon at the top right manually."), false, true));
+        body.appendChild(panelNote(tc("找不到编辑按钮，请手动点右上角的铅笔图标。",
+          "Edit button not found — click the pencil icon at the top right."), false, true));
       }
 
       var findBtn = findEntryBtn("lg", "primary");
@@ -2640,8 +2640,8 @@
     } else if (_state.findState === "fail") {
       wrap.appendChild(panelNote(tc("搜索失败：", "Search failed: ") + (_state.findMessage || ""), false, true));
     } else if (_state.findState === "empty") {
-      wrap.appendChild(panelNote(tc("在源上没找到同名演员。可换一个名字或别名再试，也可以手动在编辑面板里填编号。",
-        "No performer with that name on the sources. Try another name or alias, or fill the ID in the edit panel yourself."), false, false));
+      wrap.appendChild(panelNote(tc("源上没找到同名演员，换个名字或别名再试。",
+        "No performer with that name on the sources — try another name or alias."), false, false));
     } else if (_state.findResults.length) {
       var list = document.createElement("div");
       list.className = "ssd-find-list";
@@ -3353,8 +3353,8 @@
     var body = document.createElement("div");
     body.className = "ssd-panel-body";
     body.appendChild(panelDesc(tc(
-      "忽略后「最新 / 关注 / 工作室」都不再查询这位演员，本页也不再出结果。点「恢复显示」立即生效。",
-      "Ignored performers are excluded from Discover queries and listings. Restore to bring them back immediately.")));
+      "忽略后「最新 / 关注 / 工作室」都不再查这位演员，点「恢复显示」立即生效。",
+      "Ignored performers are skipped across Discover; Restore brings them back immediately.")));
     panel.appendChild(body);
 
     var actions = document.createElement("div");
@@ -4017,8 +4017,8 @@
       if (_state.preferredFallback) {
         var fbChip = makeChip(tc(_state.preferredBoxLabel + " 无编号 · 已改查其他源",
           _state.preferredBoxLabel + " has no ID · queried other sources"), "muted");
-        fbChip.title = tc("该演员在首选源没有编号，插件改为查询其他有编号的源。可在 设置 → 插件 → stashDiscover 中调整「首选源」。",
-          "This performer has no ID on the preferred source, so the other sources that do have one were queried. Change it in Settings → Plugins → stashDiscover.");
+        fbChip.title = tc("首选源没有编号，改查其他有编号的源。可在插件设置里改「首选源」。",
+          "No ID on the preferred source, so sources that have one were queried. Change it in the plugin settings.");
         fallbackGroup.appendChild(fbChip);
         if (findEntryVisible("content")) fallbackGroup.appendChild(findEntryBtn("sm", "secondary"));
       }
@@ -6575,8 +6575,8 @@
       var amb = document.createElement("div");
       amb.className = "ssd-imp-note";
       amb.textContent = tc(
-        "其中 " + draft.perf.ambiguous + " 位库里有重名但无法确定是不是同一人，按新建处理（选「只关联已有」时这几位跳过，事后可在演员页合并）",
-        draft.perf.ambiguous + " with a same-name local record could not be confirmed — created as new (skipped when linking existing only); merge later if needed");
+        "其中 " + draft.perf.ambiguous + " 位有同名档案但无法确认是同一人，按新建处理（「只关联已有」时跳过，可事后合并）",
+        draft.perf.ambiguous + " with same-name local records that could not be confirmed — created as new (skipped in link-only mode); merge later if needed");
       list.appendChild(amb);
     }
 
@@ -6665,8 +6665,8 @@
       label: tc("封面", "Cover"),
       checked: prefs.cover,
       value: draft.covers.length
-        ? tc(draft.covers.length + " 个候选，入库后后台补写（失败只丢封面）",
-             draft.covers.length + " candidate(s), fetched after import (cover only on failure)")
+        ? tc(draft.covers.length + " 个候选 · 失败只丢封面",
+             draft.covers.length + " candidate(s) · cover only on failure")
         : tc("没有候选图", "no candidate"),
     });
     list.appendChild(coverRow.row);
@@ -6856,9 +6856,7 @@
     var st = _coverStat;
     _coverStat = { ok: 0, fail: 0 };
     if (!st.fail) return;
-    SSD.toast(tc(st.fail + " 条场景的封面没保存成功（其余字段已完整入库）",
-                 st.fail + " cover(s) could not be saved — all other fields were imported"),
-              { duration: 6000 });
+    SSD.toast(tc(st.fail + " 条封面未保存", st.fail + " cover(s) not saved"), { duration: 6000 });
   }
 
   function doSceneImport(draft, pick, onProgress) {
@@ -7325,7 +7323,7 @@
         state.classList.add("is-link");
       } else {
         state.textContent = plan.how === "ambiguous"
-          ? tc("库里有重名但无法确定是不是同一人，将新建一条档案（事后可合并）",
+          ? tc("库里有重名，无法确认是否同一人，将新建一条（可事后合并）",
               "Same-name records exist but cannot be confirmed — a new record will be created")
           : tc("将新建一条演员档案", "A new performer record will be created");
       }
@@ -7840,7 +7838,7 @@
     }
     if (/^error running plugin: exit status \d+/.test(s) || /exit status \d+/.test(s)) {
       return tc(
-        "插件后端执行出错，具体原因在 Stash 日志里（搜索 stashDiscover 的 stderr）",
+        "插件后端出错，原因见 Stash 日志（搜 stashDiscover 的 stderr）",
         "Plugin backend exited with an error — see the plugin stderr in the Stash log"
       ) + "：" + s;
     }
@@ -9384,7 +9382,7 @@
             React.createElement(
               "div",
               { className: "ssd-dp-state" },
-              tc("发现页模块 30 秒内没有加载完成，重试通常就好了。", "The Discover page module did not load within 30 seconds — retrying usually fixes it."),
+              tc("发现页模块 30 秒没加载完，点重试即可。", "The Discover module did not load in 30s — tap Retry."),
               React.createElement("button", { className: "ssd-dp-retry", onClick: retry }, tc("重试", "Retry"))
             )
           );
@@ -9392,7 +9390,7 @@
         return React.createElement(
           "div",
           { className: "ssd-dp-page" },
-          React.createElement("div", { className: "ssd-dp-state" }, tc("发现页已在设置中关闭，刷新浏览器后入口不再显示。", "The Discover page is disabled in settings; the entry disappears after a browser refresh."))
+          React.createElement("div", { className: "ssd-dp-state" }, tc("发现页已在设置中关闭，刷新浏览器后入口消失。", "The Discover page is disabled in settings; the entry disappears after a browser refresh."))
         );
       }
       if (st === 0 || !SSD.discoverMount) {

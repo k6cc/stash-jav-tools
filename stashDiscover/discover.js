@@ -2824,8 +2824,8 @@
       // （用户 2026-10-25 第四轮；有关注但无新发布仍走通用空态）
       if (view === "studios" && !ds.studioCount) {
         var noFav = stateBox("empty",
-          tc("还没有收藏的工作室。在 Stash 中收藏（♥）工作室后，其新作品会出现在这里。",
-             "No favorited studios yet. Favorite (♥) studios in Stash and their new releases will show up here."));
+          tc("还没有收藏工作室：在 Stash 里点 ♥ 收藏后，新作品会出现在这里。",
+             "No favorited studios yet — favorite (♥) one in Stash and its new releases show up here."));
         var goStash = el("button", "ssd-dp-btn primary", tc("去 Stash 查看", "Open Stash studios"));
         goStash.type = "button";
         goStash.addEventListener("click", function () { window.location.assign(SSD.appUrl("/studios")); });
@@ -3555,13 +3555,13 @@
     if (!fl.length) {
       var empty = stateBox("empty",
         ignoredFollow.length
-          ? tc("关注的演员当前都在已忽略列表里。点上面的「管理」可以恢复。",
-               "All followed performers on this source are ignored. Use Manage above to restore them.")
+          ? tc("关注的演员都在已忽略列表里，点「管理」可恢复。",
+               "All followed performers on this source are ignored — use Manage to restore them.")
           : allFollow.length
-            ? tc("当前数据源下还没有关注的演员。切换数据源，或从收藏导入当前源的演员。",
-                 "No followed performers on the current source. Switch the source, or import its favorites.")
-            : tc("还没有关注的演员。在演员卡上点 ♥ 即可关注，或从库内收藏一键导入。",
-                 "Not following anyone yet. Tap ♥ on a performer card, or import your ❤ favorites in one tap."));
+            ? tc("当前源下还没有关注的演员：换个源，或从收藏导入。",
+                 "No followed performers on this source — switch source, or import its favorites.")
+            : tc("还没有关注的演员：在演员卡上点 ♥，或从库内收藏导入。",
+                 "Not following anyone yet — tap ♥ on a performer card, or import your favorites."));
       empty.appendChild(makeImportButton());
       c.appendChild(empty);
       return;
@@ -4349,8 +4349,8 @@
       var r = store.set(isScene ? "scene" : "performer", patch);
       // 写失败不能静默：localStorage 满时改动一刷新就没了
       if (!r.ok) {
-        warn.textContent = tc("保存失败：浏览器本地存储已满，改完的选择一刷新就会丢。",
-          "Could not save: browser storage is full — changes are lost on refresh.");
+        warn.textContent = tc("保存失败：本地存储已满，刷新后改动会丢。",
+          "Could not save: local storage is full — changes are lost on refresh.");
         warn.style.display = "";
       }
     }
@@ -4533,8 +4533,8 @@
     srcSel.addEventListener("change", function () {
       if (!dpSetPrefs({ source: srcSel.value })) {
         settingsWarn(wrap, tc(
-          "保存失败：浏览器本地存储已满。请先在设置里「重置」清出空间，改完的选择一刷新就会丢。",
-          "Could not save: browser storage is full. Reset the settings to free space — changes will be lost on refresh."));
+          "保存失败：本地存储已满，请先在设置里「重置」清出空间。",
+          "Could not save: local storage is full — reset the settings to free space first."));
       }
       _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0; _dp.page = 1;
       // 角标按当前数据源统计（单源口径），切源后立即重算一次
@@ -4567,8 +4567,8 @@
     rowW.appendChild(inpW);
     secG.appendChild(rowW);
     secG.appendChild(el("div", "ssd-dp-sethint", tc(
-      "0 = 不限。仅作用于发现页；演员详情「发现」标签的窗口在插件设置的 Recent Window 中调整。",
-      "0 = unlimited. Applies to the Discover page only; the performer-page Discover tab uses Recent Window in the plugin settings.")));
+      "0 = 不限。只影响发现页；演员详情「发现」标签的窗口在设置的 Recent Window 调整。",
+      "0 = unlimited. Discover page only; the performer-page Discover tab uses Recent Window in settings.")));
     // TPDB 走批量查询，整体最多 TPDB_MAX_PAGES_BATCH 页（用户 2026-10-26）
     if (dpRecentDays() === 0 && sourceIsTPDB()) {
       var tpdbPages = SSD.TPDB_MAX_PAGES_BATCH || 5;
@@ -4605,8 +4605,8 @@
     }, prevLabel));
     secG.appendChild(rowP);
     secG.appendChild(el("div", "ssd-dp-sethint", tc(
-      "只决定预告场景算不算进统计：关闭时未读、红框、总览计数、导航角标都不含预告；点开演员仍照常显示。",
-      "Controls whether upcoming scenes count toward unread marks, red borders, overview totals and the nav badge. Opening a performer always shows them.")));
+      "预告算不算进统计：关闭时未读、红框、总览计数、角标都不含预告（点开演员照常显示）。",
+      "Whether upcoming scenes count toward unread marks, red borders, overview totals and the nav badge. Opening a performer always shows them.")));
 
     // 从收藏导入（§6.2；P5 工厂复用）
     var rowI = el("div", "ssd-dp-setrow");
@@ -4696,8 +4696,8 @@
     }
 
     secB.appendChild(el("div", "ssd-dp-sethint", tc(
-      "只作用于发现页与演员弹层里的场景卡；演员详情「发现」标签保持原样。",
-      "Applies to scene cards on the Discover page and in performer dialogs only; the performer-page Discover tab is unchanged.")));
+      "只影响发现页和演员弹层的场景卡，演员详情「发现」标签不变。",
+      "Scene cards on the Discover page and in performer dialogs only; the performer-page Discover tab is unchanged.")));
     wrap.appendChild(secB);
 
     // ── 显示上限（平铺列表：每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──

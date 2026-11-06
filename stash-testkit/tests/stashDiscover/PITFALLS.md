@@ -429,3 +429,15 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   `opts.inlib && item.hasLocalPerformer`，而 `hasLocalPerformer` 只有热门数据集赋值。
   `buildSceneTable` 的调用方（`sceneGrid`）必须把 `opts` 透传下去，漏了就是「网格有绿标、
   列表一个都没有」。
+- **源端点写错（`http://`、带 `www.`、只填 host）在浏览器里是「无法连接」，不是报错**：
+  源站回 3xx，而 `callBoxGQL` 用 `redirect:"error"`，3xx 直接变 `TypeError: Failed to fetch`
+  —— 归成 `network`。重定向响应本身不带 `Access-Control-Allow-Origin`，所以改成
+  `follow` 在跨域下同样失败（四种组合都实测过）。Stash 自己的 scrape 走服务端客户端会
+  跟随后跳转，于是出现「scrape 正常、只有这个插件连不上」的分裂现象（2026-11 论坛
+  FansDB）。v2.6.17 起 `callBoxGQL` 在 `network` 失败时按 `boxEpRewrite()` 的等价写法
+  重试（http→https、去 www、补 `/graphql`），成功后落 `localStorage["ssd.box.epAlt"]`，
+  探不通记 10 分钟不再试；内网 / 单段主机名一律不改写。
+  判据：`SSD.callBoxGQL("http://<源>", key, "{version{version}}")` 应返回 `auth`（或数据），
+  不是 `network`。
+- **别拿 uri 的 `hostname` 拼改写地址**：`http://host:8080` 的 `hostname` 不含端口，
+  换 scheme 后拼出来的地址是错的。用 `u.host`，`www.` 替换也在 `host` 上做。

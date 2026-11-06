@@ -3799,6 +3799,7 @@
     if (e.indexOf("javstash") !== -1) return "JAVStash";
     if (e.indexOf("theporndb") !== -1) return "TPDB";
     if (e.indexOf("pmvstash") !== -1) return "PMVStash";
+    if (e.indexOf("fansdb") !== -1) return "FansDB";
     return e.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   }
   // 性别：stash-box 给的是枚举名（FEMALE / MALE / TRANSGENDER_FEMALE …）

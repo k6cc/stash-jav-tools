@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.16";
+  var PLUGIN_VERSION = "2.6.17";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -36,6 +36,7 @@
     "stashdb.org": "StashDB",
     "theporndb.net": "TPDB",
     "pmvstash.org": "PMVStash",
+    "fansdb.cc": "FansDB",
   };
 
   // ─── i18n ────────────────────────────────────────────────────────────────
@@ -210,6 +211,73 @@
       });
   }
 
+  // ─── 端点改写自愈 ────────────────────────────────────────────────────────
+  // 端点写法不标准时（http:// 被跳 https、带 www. 被跳裸域、只填了 host），
+  // 服务端回 3xx。插件用 redirect:"error" 让 3xx 直接变成 TypeError，而重定向
+  // 响应本身通常不带 Access-Control-Allow-Origin，改成 follow 在跨域下也是失败
+  //（2026-11 论坛：FansDB "just this plugin fails to connect"；Stash 自己的
+  // 抓取走服务端客户端会跟随后跳转，所以用户那边 scrape 一切正常）。
+  // 只在网络层失败时按等价写法重试，不改用户的配置；自建 / 内网源不碰。
+  var BOX_EP_ALT_KEY = "ssd.box.epAlt";
+  var BOX_EP_ALT_TIMEOUT = 8000;          // 候选端点的单次上限，别把首屏拖久
+  var BOX_EP_ALT_BAD_MS = 10 * 60 * 1000; // 探不通就 10 分钟内不再试
+  var _boxEpAltMem = null;
+  var _boxEpAltBad = {};
+
+  function boxEpAltMap() {
+    if (_boxEpAltMem) return _boxEpAltMem;
+    try { _boxEpAltMem = JSON.parse(localStorage.getItem(BOX_EP_ALT_KEY) || "{}") || {}; }
+    catch (e) { _boxEpAltMem = {}; }
+    return _boxEpAltMem;
+  }
+
+  function boxEpAltRemember(from, to) {
+    var m = boxEpAltMap();
+    if (to) m[from] = to; else delete m[from];
+    try { localStorage.setItem(BOX_EP_ALT_KEY, JSON.stringify(m)); } catch (e) { /* 配额满只影响下次探测 */ }
+  }
+
+  // 局域网 / 本机源：改写成公网域名或 https 只会更连不上，一律不动
+  function boxEpIsLocal(hostname) {
+    var h = String(hostname || "").toLowerCase();
+    return h === "localhost" || h === "[::1]" || h === "::1" ||
+      /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /\.local$/.test(h) ||
+      /^[^.]+$/.test(h);   // 单段主机名（docker 服务名等）
+  }
+
+  // 源站自己就是这么跳的等价写法，顺序即尝试顺序
+  function boxEpRewrite(endpoint) {
+    var u;
+    try { u = new URL(endpoint); } catch (e) { return []; }   // 没写 scheme，无从改写
+    if (boxEpIsLocal(u.hostname)) return [];
+    var path = u.pathname || "/";
+    if (path === "/") path = "/graphql";        // 只填了 host
+    var host = u.host;                          // 含端口
+    var bare = host.replace(/^www\./i, "");
+    var isHttp = u.protocol === "http:";
+    var out = [];
+    function push(scheme, h) {
+      var s = scheme + "://" + h + path + (u.search || "");
+      if (s !== endpoint && out.indexOf(s) === -1) out.push(s);
+    }
+    if (path !== (u.pathname || "/")) push(isHttp ? "https" : u.protocol.replace(":", ""), host);
+    if (isHttp) push("https", host);
+    if (bare !== host) push("https", bare);
+    return out;
+  }
+
+  function boxEpCandidates(endpoint) {
+    var known = boxEpAltMap()[endpoint];
+    if (known) {
+      // 记过的改写排第一；端点本身被改过写法时，其余候选仍留作兜底
+      return [known].concat(boxEpRewrite(endpoint).filter(function (u) { return u !== known; }));
+    }
+    var bad = _boxEpAltBad[endpoint];
+    if (bad && Date.now() - bad < BOX_EP_ALT_BAD_MS) return [];
+    return boxEpRewrite(endpoint);
+  }
+
   function callBoxGQL(endpoint, apiKey, query, variables, timeoutMs, _ctx) {
     var ctx = _ctx || { attempt: 0, deadline: Date.now() + BOX_RETRY_BUDGET };
     var payload = { query: query };
@@ -218,7 +286,9 @@
     if (apiKey) headers["ApiKey"] = apiKey;
 
     // 单次尝试：排队 → 请求 → 错误分类
-    function once() {
+    // at = 本次实际请求的地址（端点改写后与 endpoint 不同）；排队键仍用原
+    // endpoint，同一源的不同写法共用一条队列和惩罚期。
+    function once(at, tmo) {
       var wait = boxGateTake(endpoint);
       var start = wait > 0 ? sleepMs(wait) : Promise.resolve();
       return start.then(function () {
@@ -227,7 +297,7 @@
         var timer = setTimeout(function () {
           timedOut = true;
           if (controller) controller.abort();
-        }, timeoutMs || BOX_TIMEOUT_MS);
+        }, tmo || BOX_TIMEOUT_MS);
         function done() { clearTimeout(timer); }
 
         function fetchError(e) {
@@ -235,7 +305,7 @@
           return ssdError("network", (e && e.message) || "network error");
         }
 
-        return fetch(endpoint, {
+        return fetch(at, {
           method: "POST",
           headers: headers,
           body: JSON.stringify(payload),
@@ -273,8 +343,8 @@
     }
 
     // 只有 ratelimit 会回到 loop 重试（见 retryWaitFor）
-    function loop() {
-      return once().catch(function (e) {
+    function loop(at, tmo) {
+      return once(at, tmo).catch(function (e) {
         var wait = retryWaitFor(e, ctx);
         if (wait == null) {
           // 重试过才把次数写进明细，便于日志和用户判断是不是没缓过来
@@ -284,13 +354,48 @@
           throw e;
         }
         ctx.attempt++;
-        console.warn("[ssd] 429 " + boxHostOf(endpoint) + " retry " + ctx.attempt +
+        console.warn("[ssd] 429 " + boxHostOf(at) + " retry " + ctx.attempt +
           "/" + BOX_MAX_RETRIES + " in " + wait + "ms");
-        return sleepMs(wait).then(loop);
+        return sleepMs(wait).then(function () { return loop(at, tmo); });
       });
     }
 
-    return loop();
+    // 只在网络层失败（含 3xx 被 redirect:"error" 打断）时试等价写法。
+    // 传了 _ctx 说明是内部重试链，交给最外层处理，避免每层都探一遍。
+    function heal(err) {
+      if (_ctx || !err || err.ssdKind !== "network") throw err;
+      var cands = boxEpCandidates(endpoint);
+      if (!cands.length) { _boxEpAltBad[endpoint] = Date.now(); throw err; }
+      var i = 0;
+      function next(last) {
+        if (i >= cands.length) {
+          _boxEpAltBad[endpoint] = Date.now();
+          // 记过的改写也失效了（源换域名等），别让下次还先撞它
+          boxEpAltRemember(endpoint, "");
+          throw last;
+        }
+        var url = cands[i++];
+        return loop(url, Math.min(timeoutMs || BOX_TIMEOUT_MS, BOX_EP_ALT_TIMEOUT))
+          .then(function (d) {
+            boxEpAltRemember(endpoint, url);
+            delete _boxEpAltBad[endpoint];
+            console.info("[ssd] endpoint rewritten: " + endpoint + " -> " + url);
+            return d;
+          }, function (e2) {
+            // 候选连上了（哪怕鉴权 / 接口报错）说明改写是对的：记住它，把这个
+            // 真正的错误交给用户，别再往下试
+            if (e2 && e2.ssdKind !== "network" && e2.ssdKind !== "timeout") {
+              boxEpAltRemember(endpoint, url);
+              delete _boxEpAltBad[endpoint];
+              throw e2;
+            }
+            return next(e2);
+          });
+      }
+      return next(err);
+    }
+
+    return loop(endpoint, timeoutMs).catch(heal);
   }
 
   // ─── ThePornDB REST adapter ──────────────────────────────────────────────
@@ -1047,7 +1152,9 @@
   function brandNameForEndpoint(endpoint, fallback) {
     var host = "";
     try { host = new URL(endpoint).host; } catch (e) { host = String(endpoint || ""); }
-    return BRAND_MAP[host] || fallback || host;
+    // www. 写法也要命中，否则界面上显示的是裸主机名
+    var bare = host.replace(/^www\./i, "");
+    return BRAND_MAP[host] || BRAND_MAP[bare] || fallback || host;
   }
 
   // ─── Data loading ─────────────────────────────────────────────────────────

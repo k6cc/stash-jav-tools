@@ -29,6 +29,7 @@
 4. tag 命名：`<插件名>-vX.Y.Z`（如 `sceneTranslate-v2.9.2`）；多插件联动发版时每个插件各打一个 tag
 5. `git push; git push --tags`（分号分隔，勿用 `&&`）
 6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
+7. **确认插件源（GitHub Pages）已换成新版本** —— Stash 读的是 `https://k6cc.github.io/stash-plugins/plugins/main/index.yml`，`raw.githubusercontent.com` 更新不代表它更新（v2.6.18 就卡在 Pages 部署失败，源上仍是上一版，用户点「更新插件」看不到新版）。查法：`curl -s "https://k6cc.github.io/stash-plugins/plugins/main/index.yml?cb=$(date +%s)" | grep -A4 "id: <插件>"` 看 version；`gh api repos/k6cc/stash-plugins/pages --jq .status` 应为 `built`。若 `errored`，看 `pages build and deployment` 那次 run 的 deploy 日志（常见 `updating_pages` 超时 / `Deployment cancelled`），重跑或在 stash-plugins 推一个空提交换 build version 重触发
 - Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
 - **新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/new-plugin-release.md`
 

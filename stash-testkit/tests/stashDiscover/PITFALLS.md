@@ -408,3 +408,24 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   确认页面真的把 `lang` 发出去了（GraphQL 后端收不到就等于没做）。
 
 
+- **卡片角标的底色别跟 `--sx-acc`**：它跟主按钮是同一枚 token，而某些主题的「主色」
+  本身接近白色（kb-classic 实测 `#EEF0F1`，配 `--sx-acc-tx` 深字），`color-mix` 出来
+  是浅灰底 + 白字，等于看不见。要压住封面图就用写死的深色（「在库中」用 `#1d6fa5`），
+  与走 `--sx-gr` 的「库内演员」绿标也更好区分。判据：读 `getComputedStyle(badge).backgroundColor`，
+  不是看截图缩放后的小字。
+- **「已在库」的定态不要按弹窗开一次查一次**：除热门外的数据集本身已按「未拥有」过滤，
+  `item.owned` 为真只可能来自热门榜。所以详情弹窗里看到 `item.owned` 就 `markActOwned()`，
+  不额外发 `findExistingSceneId`；真正点击时那一层判重继续保留（防缓存 12h 内的陈旧数据）。
+- **封面补写已改成后台队列（v2.6.15 起）**：`sceneUpdate({cover_image})` 是 Stash 服务端
+  同步下载外链图，TPDB CDN 连不上时要等超时（实测 5s+ 仍不返回）。以前它挂在入库的
+  then 链里，表现为「点确认入库后弹窗不关、按钮不变、卡片不动」；现在 `sceneCreate` 返回
+  即解锁 UI，封面进 `queueCover`（并发 1、场景间 120ms、单候选 10s 超时、超时放弃该条
+  剩余候选），失败时队列排空后汇总一条 toast。所以「点完立刻关弹窗」是正常行为，
+  不要据此判定封面没写；要验封面就等 2–3 秒后看 toast/`console.warn` 有没有出现。
+- **`callGQL` 没有超时也没有 AbortController**（只有 box 端的 `callBoxGQL` 有）。任何
+  「到点放弃」都只能在外层 `Promise.race` 实现，底层请求仍会跑完 —— 写超时逻辑时记得给
+  输掉的那一边挂 `.catch`，否则失败会变成未处理拒绝。
+- **列表模式的徽章要传 `opts.inlib`**：`buildSceneRow(item, opts)` 的「库内演员」判据是
+  `opts.inlib && item.hasLocalPerformer`，而 `hasLocalPerformer` 只有热门数据集赋值。
+  `buildSceneTable` 的调用方（`sceneGrid`）必须把 `opts` 透传下去，漏了就是「网格有绿标、
+  列表一个都没有」。

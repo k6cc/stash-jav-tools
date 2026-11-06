@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.14";
+  var PLUGIN_VERSION = "2.6.15";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -3616,8 +3616,8 @@
       if (ck && codeSet[ck]) { skip++; return tick(); }
       planSceneImport(item, sc).then(function (draft) {
         return submitSceneImport(draft, pickFromPrefs(draft));
-      }).then(function () {
-        ok++;
+      }).then(function (created) {
+        if (created && created.existed) skip++; else ok++;
         var i = _state.cachedMissing.indexOf(item);
         if (i !== -1) _state.cachedMissing.splice(i, 1);
         tick();
@@ -4282,7 +4282,7 @@
   // ── List view — 1:1 native .table-list.scene-table (scene list table) ──
   // Structure captured from the native scenes page list mode; themes apply
   // automatically via native class names. No select-col (no bulk operations).
-  function buildSceneTable(pageItems) {
+  function buildSceneTable(pageItems, opts) {
     var wrap = document.createElement("div");
     wrap.className = "table-list scene-table ssd-scene-table";
 
@@ -4317,7 +4317,7 @@
 
     var tbody = document.createElement("tbody");
     pageItems.forEach(function (item) {
-      tbody.appendChild(buildSceneRow(item));
+      tbody.appendChild(buildSceneRow(item, opts));
     });
     table.appendChild(tbody);
 
@@ -4450,7 +4450,7 @@
     });
   }
 
-  function buildSceneRow(item) {
+  function buildSceneRow(item, opts) {
     var sc = item.scene;
     var tr = document.createElement("tr");
 
@@ -4484,13 +4484,32 @@
     titleSpan.textContent = sc.title || sc.code || tc("无标题", "Untitled");
     titleLink.appendChild(titleSpan);
     titleTd.appendChild(titleLink);
-    // 列表模式同款标记：行里没有封面角标的位置，文字尾巴上补一个（同上，只在
-    // 「临时查看已忽略」时出现）
+    // 徽章统一降到标题下一行（用户 2026-11-06）：这一列原本只放一行标题，
+    // 下面的高度其实是空的；挂在文字尾巴上会挤掉标题的省略号，还随标题长短
+    // 左右横跳。一行排开、与标题同一条左基线，窄屏真放不下才换行。
+    var rowBadges = [];
+    if (item.owned) rowBadges.push(["ssd-row-owned", tc("在库中", "In library")]);
+    if (opts && opts.inlib && item.hasLocalPerformer) {
+      rowBadges.push(["ssd-row-inlib", tc("库内演员", "Known")]);
+    }
     if (_state.showIgnored && isItemIgnored(item)) {
-      var ignTag = document.createElement("span");
-      ignTag.className = "ssd-row-ignored";
-      ignTag.textContent = tc("已忽略", "Ignored");
-      titleTd.appendChild(ignTag);
+      rowBadges.push(["ssd-row-ignored", tc("已忽略", "Ignored")]);
+    }
+    if (rowBadges.length) {
+      var badgeRow = document.createElement("div");
+      badgeRow.className = "ssd-row-badges";
+      rowBadges.forEach(function (b) {
+        var bsp = document.createElement("span");
+        bsp.className = b[0];
+        bsp.textContent = b[1];
+        if (b[0] === "ssd-row-owned") {
+          bsp.title = tc("这部片已在你的本地库中", "This scene is already in your library");
+        } else if (b[0] === "ssd-row-inlib") {
+          bsp.title = tc("这部片里有你库内的演员", "Features a performer in your library");
+        }
+        badgeRow.appendChild(bsp);
+      });
+      titleTd.appendChild(badgeRow);
     }
     tr.appendChild(titleTd);
 
@@ -5113,6 +5132,10 @@
       title: tc("预览字段后写入本地库", "Preview fields, then add to the library"),
       on: function () { handleSaveScene(item, saveBtn); },
     });
+    // 已在库的直接定态：热门榜现在是完整榜单（保留名次），点进去不该还挂着
+    // 一个可点的「加入库」（用户 2026-11-06）。item.owned 只由热门数据集给，
+    // 其它视图的数据集本身已按「未拥有」过滤，所以这里不发额外查询。
+    if (item.owned) markActOwned(saveBtn);
     btnRow.appendChild(saveBtn);
 
     var openBtn = ssdActButton({
@@ -6286,6 +6309,32 @@
     });
   }
 
+  // 入库后把这条从各列表里摘掉 —— 发现页条目靠事件（那边重算 datasets），
+  // 演员页「发现」tab 直接 splice 缓存数组再重绘。
+  function dropSceneFromLists(item) {
+    if (!item) return;
+    if (item._dp) {
+      // 发现页那两处监听挂在 window 上，非冒泡事件传不过去
+      // （表现为「入库成功但卡片还挂着」）
+      document.dispatchEvent(new CustomEvent(SCENE_SAVED_EVENT, { detail: { item: item }, bubbles: true }));
+    } else {
+      var idx = _state.cachedMissing.indexOf(item);
+      if (idx !== -1) _state.cachedMissing.splice(idx, 1);
+      setTimeout(function () { if (_modalEl) renderTabContent(); }, 1500);
+    }
+  }
+
+  // 「已在库」终态：按钮文案统一叫「在库中」并禁用（用户 2026-11-06）。
+  // 与导入成功的按钮同款（ssd-btn-success），区别只在不可再点。
+  function markActOwned(btn) {
+    if (!btn) return;
+    btn.disabled = true;
+    setActLabel(btn, tc("在库中", "In Library"));
+    btn.title = tc("这条场景已在你的本地库中", "This scene is already in your library");
+    btn.classList.remove("err");
+    btn.classList.add("ssd-btn-success");
+  }
+
   function handleSaveScene(item, btn) {
     var sc = _state.modalDetail ? _state.modalDetail.scene : item.scene;
     // 只记住文案层，图标留着（按钮已换成 ssd-dp-btn：图标 + 文案两层）
@@ -6293,12 +6342,23 @@
     var label = lbl ? lbl.textContent : btn.textContent;
     btn.disabled = true;
     setActLabel(btn, tc("准备中…", "Preparing…"));
-    planSceneImport(item, sc).then(function (draft) {
-      if (btn.isConnected) { btn.disabled = false; setActLabel(btn, label); }
-      openSceneImportDialog(draft, btn);
+    function restore() { if (btn.isConnected) { btn.disabled = false; setActLabel(btn, label); } }
+    // 点「加入库」先判一次重（用户 2026-11-06）：已在库就整段预览都不必开，
+    // 直接把按钮定成「已在库」并把卡片摘掉。提交侧的判重仍然保留 —— 那是兜底。
+    findExistingSceneId(item.endpoint, sc).then(function (existingId) {
+      if (existingId) {
+        markActOwned(btn);
+        SSD.toast(tc("该场景已在库中，未重复创建", "Already in library — nothing created"));
+        dropSceneFromLists(item);
+        return;
+      }
+      return planSceneImport(item, sc).then(function (draft) {
+        restore();
+        openSceneImportDialog(draft, btn);
+      });
     }).catch(function (e) {
       console.error("[SSD] import plan failed:", e);
-      if (btn.isConnected) { btn.disabled = false; setActLabel(btn, label); }
+      restore();
       showModalNotice(tc("读取本地库失败：", "Could not read the library: ") +
         (e && e.message ? e.message : String(e)), "error");
     });
@@ -6605,8 +6665,8 @@
       label: tc("封面", "Cover"),
       checked: prefs.cover,
       value: draft.covers.length
-        ? tc(draft.covers.length + " 个候选，失败只丢封面",
-             draft.covers.length + " candidate(s), cover only on failure")
+        ? tc(draft.covers.length + " 个候选，入库后后台补写（失败只丢封面）",
+             draft.covers.length + " candidate(s), fetched after import (cover only on failure)")
         : tc("没有候选图", "no candidate"),
     });
     list.appendChild(coverRow.row);
@@ -6653,6 +6713,10 @@
       submitSceneImport(draft, pick, function (t) { ok.textContent = t; })
         .then(function (created) {
           closeImportDialog();
+          // 判重命中：没建任何东西，按钮也别报「已加入」（那条记录本来就在）
+          if (created && created.existed) {
+            SSD.toast(tc("该场景已在库中，未重复创建", "Already in library — nothing created"));
+          }
           afterSceneImported(draft.item, btn, created);
         })
         .catch(function (e) {
@@ -6674,8 +6738,130 @@
     });
   }
 
+  // 入库前判重（用户 2026-11-06 论坛反馈）：同一个 box 场景被点两次「加入库」
+  // 会建出两条本地记录。卡片在「热门」这类不按已拥有过滤的视图里不会消失，
+  // 关掉弹窗再点一次就是一次全新的 sceneCreate —— 原来单条入库这条路径上
+  // 没有任何判重（批量入库只在两个页面各自按番号跳过，且都漏了 stash_id）。
+  // 两路一起查：stash_id 是权威键，番号兜住「早先手动加的、没写 stash_id」的记录。
+  function findExistingSceneId(endpoint, sc) {
+    var ep = String(endpoint || "").toLowerCase();
+    var sid = String((sc && sc.id) || "");
+    var code = String((sc && sc.code) || "").trim();
+    if (!sid && !code) return Promise.resolve(null);
+    return callGQL(
+      "query($ep:String!,$sid:String!,$code:String!){" +
+        "bySid:findScenes(scene_filter:{stash_id_endpoint:{endpoint:$ep,stash_id:$sid,modifier:EQUALS}},filter:{per_page:1}){scenes{id}} " +
+        "byCode:findScenes(scene_filter:{code:{value:$code,modifier:EQUALS}},filter:{per_page:1}){scenes{id}}}",
+      { ep: ep, sid: sid, code: code }
+    ).then(function (d) {
+      var bySid = (((d || {}).bySid || {}).scenes || [])[0];
+      // 番号是空串时不吃 byCode 的结果（EQUALS "" 的语义各版本不保证）
+      var byCode = code ? ((((d || {}).byCode || {}).scenes) || [])[0] : null;
+      return (bySid && bySid.id) || (byCode && byCode.id) || null;
+    }).catch(function () {
+      // 查不动就放行：宁可多建一条，也不要因为判重失败把入库整条挡死
+      return null;
+    });
+  }
+
   // 提交：演员建档在前（场景要引用它们的 id），标签/工作室按三态，最后 sceneCreate
   function submitSceneImport(draft, pick, onProgress) {
+    var sc = draft.scene;
+    return findExistingSceneId(draft.endpoint, sc).then(function (existingId) {
+      // 已在库：一个字段都不写，直接把已有场景交回去（调用方按 existed 标「已在库」）
+      if (existingId) return { id: existingId, code: sc.code, existed: true };
+      return doSceneImport(draft, pick, onProgress);
+    });
+  }
+
+  // ─── 封面后台补写（用户 2026-11-06）───────────────────────────────────────
+  // 场景落地即视为入库成功；封面属于「有更好」，放后台队列里串行补。
+  // 为什么不等：sceneUpdate(cover_image) 是 Stash 服务端同步下载外链图，
+  // 实测一张 2.0s（javstash 直链）、候选最多 3 张；批量 30 条就是 +60s，
+  // 而本地 GQL 通道（callGQL）没有超时也没有 abort —— 一张挂死的图能把整批
+  // 扣在半路，批量期间选择条又是全禁用的，没有逃生口。
+  //   · 并发 1 + 场景间 120ms：Stash 侧是 SQLite 写 + 下载，打并发只会互相拖
+  //   · 单候选 10s 上限：超时说明这台主机在黑洞，直接放弃该条剩余候选
+  //     （换下一张大概率还是同一台主机，再等 10s 没意义）
+  //   · 队列排空后汇总一次；全部成功就不打扰（成功不需要通知）
+  var COVER_TRY_MS = 10000;
+  var COVER_GAP_MS = 120;
+  var _coverQ = [];
+  var _coverBusy = false;
+  var _coverStat = { ok: 0, fail: 0 };
+  var _coverTimer = 0;
+
+  // callGQL 不支持 AbortController，只能在外层赛跑：超时后底层请求仍在跑，
+  // 结果丢掉即可（同一个场景的同一张封面，晚到的成功不会有副作用）。
+  function withTimeout(p, ms) {
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      var t = setTimeout(function () {
+        settled = true;
+        reject(new Error("timeout"));
+      }, ms);
+      p.then(function (v) {
+        if (settled) return;
+        settled = true; clearTimeout(t); resolve(v);
+      }, function (e) {
+        if (settled) return;
+        settled = true; clearTimeout(t); reject(e);
+      });
+    });
+  }
+
+  function queueCover(sceneId, urls) {
+    if (!sceneId || !urls || !urls.length) return;
+    _coverQ.push({ id: sceneId, urls: urls.slice() });
+    pumpCover();
+  }
+
+  function pumpCover() {
+    if (_coverBusy) return;
+    var job = _coverQ.shift();
+    if (!job) { flushCoverStat(); return; }
+    _coverBusy = true;
+    coverTryAt(job, 0);
+  }
+
+  function coverTryAt(job, i) {
+    if (i >= job.urls.length) return coverSettled(false);
+    var req;
+    try {
+      req = callGQL(
+        "mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}",
+        { input: { id: job.id, cover_image: job.urls[i] } }
+      );
+    } catch (e) {
+      return coverTryAt(job, i + 1);
+    }
+    withTimeout(req, COVER_TRY_MS).then(function () {
+      coverSettled(true);
+    }, function (e) {
+      var msg = (e && e.message) || String(e);
+      console.warn("[SSD] cover not set (scene " + job.id + ", candidate " + (i + 1) + "):", msg);
+      if (msg === "timeout") return coverSettled(false);
+      coverTryAt(job, i + 1);
+    });
+  }
+
+  function coverSettled(ok) {
+    if (ok) _coverStat.ok++; else _coverStat.fail++;
+    _coverBusy = false;
+    clearTimeout(_coverTimer);
+    _coverTimer = setTimeout(pumpCover, COVER_GAP_MS);
+  }
+
+  function flushCoverStat() {
+    var st = _coverStat;
+    _coverStat = { ok: 0, fail: 0 };
+    if (!st.fail) return;
+    SSD.toast(tc(st.fail + " 条场景的封面没保存成功（其余字段已完整入库）",
+                 st.fail + " cover(s) could not be saved — all other fields were imported"),
+              { duration: 6000 });
+  }
+
+  function doSceneImport(draft, pick, onProgress) {
     var endpoint = draft.endpoint;
     var sc = draft.scene;
 
@@ -6732,8 +6918,8 @@
       if (pick.director) input.director = pick.director;
 
       // 封面不塞进 sceneCreate：Stash 会同步下载外链图，TPDB 的 CDN 连不上时
-      // 整条入库直接失败（实测 "processing cover image: ... EOF"）。场景先落地，
-      // 封面单独补，失败只丢封面 —— 候选链逐个试，外站直链各有防盗链规则。
+      // 整条入库直接失败（实测 "processing cover image: ... EOF"）。
+      // 也不在入库链里等它补完（用户 2026-11-06）：见 queueCover 上方注释。
       var coverList = pick.cover ? draft.covers : [];
 
       return callGQL(
@@ -6742,17 +6928,8 @@
       ).then(function (data) {
         var created = data && data.sceneCreate;
         if (!created || !created.id) throw new Error(tc("创建返回空结果", "Create returned empty result"));
-        function tryCover(i) {
-          if (i >= coverList.length) return created;
-          return callGQL(
-            "mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}",
-            { input: { id: created.id, cover_image: coverList[i] } }
-          ).catch(function (e) {
-            console.warn("[SSD] cover not set (candidate " + (i + 1) + "):", (e && e.message) || e);
-            return tryCover(i + 1);
-          });
-        }
-        return tryCover(0);
+        queueCover(created.id, coverList);
+        return created;
       });
     }).then(function (created) {
       // 手动入库成功 → 该场景的忽略记录没意义了（§3 最后一条）
@@ -6790,20 +6967,10 @@
 
   function afterSceneImported(item, btn, created) {
     if (!created || !created.id) return;
-    if (btn && btn.isConnected) {
-      btn.textContent = tc("已加入 ✓", "Added ✓");
-      btn.classList.add("ssd-btn-success");
-    }
-    if (item._dp) {
-      // Discover page owns this item — let it drop the card and re-render
-      // bubbles 必须开：发现页那两处监听挂在 window 上，document 上派发的
-      // 非冒泡事件根本传不过去（表现为「入库成功但卡片还挂着」）
-      document.dispatchEvent(new CustomEvent(SCENE_SAVED_EVENT, { detail: { item: item }, bubbles: true }));
-    } else {
-      var idx = _state.cachedMissing.indexOf(item);
-      if (idx !== -1) _state.cachedMissing.splice(idx, 1);
-      setTimeout(function () { if (_modalEl) renderTabContent(); }, 1500);
-    }
+    // setActLabel 而不是 textContent：按钮是「图标层 + 文案层」两段，
+    // 直接改 textContent 会把图标一并抹掉
+    if (btn && btn.isConnected) { markActOwned(btn); if (item) item.owned = true; }
+    dropSceneFromLists(item);
   }
 
 

@@ -666,7 +666,9 @@
 .ssd-dp-page .ssd-overlay-days,
 .ssd-dp-modal-scenes .ssd-overlay-days,
 .ssd-dp-page .ssd-overlay-inlib,
-.ssd-dp-modal-scenes .ssd-overlay-inlib {
+.ssd-dp-modal-scenes .ssd-overlay-inlib,
+.ssd-dp-page .ssd-overlay-owned,
+.ssd-dp-modal-scenes .ssd-overlay-owned {
   font-size: 10.5px;
 }
 
@@ -2406,6 +2408,52 @@
   font-weight: 700;
   pointer-events: none;
 }
+/* 「在库中」角标：热门榜保留完整榜单后，用来标已入库的片（用户 2026-11-06）。
+   与「库内演员」区分开 —— 那条是绿标、指「这部片里有你库内的演员」；这条用
+   固定深蓝，指「这部片本身已经在库里」。
+   底色不跟 --sx-acc 走：部分主题的「主色」本身就是近白色（kb-classic 实测
+   #EEF0F1），color-mix 出来是浅灰底 + 白字，等于看不见。这里写死深蓝压住封面。 */
+.ssd-overlay-owned {
+  position: absolute;
+  top: 0.7rem;
+  left: 0.7rem;
+  z-index: 9;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #1d6fa5;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+/* 列表模式（一行一个场景）没有封面角标的位置，徽章统一挂在标题下一行
+   （用户 2026-11-06）：一行排开、与标题同一条左基线，窄屏或徽章多到放不下
+   才换行。原来每个徽章各自 margin-left:6px 挂在标题尾巴上，会比标题多缩进
+   6px，还随标题长短左右横跳。 */
+.ssd-row-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ssd-row-badges > span {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 15px;
+  white-space: nowrap;
+}
+.ssd-row-badges > .ssd-row-owned { background: #1d6fa5; }
+/* 绿标跟卡片角标同色；先给不依赖变量的兜底 —— 演员页「发现」tab 不在
+   suiteTheme 的注入作用域里，--sx-gr 为空时 color-mix 整条失效只剩白字 */
+.ssd-row-badges > .ssd-row-inlib {
+  background: #2b8a3e;
+  background: color-mix(in srgb, var(--sx-gr) 72%, black 28%);
+}
 /* 「已忽略」角标：只在演员页发现 tab 的「临时查看已忽略」里出现。
    top-left 与「预告」撞位 —— 已忽略的片多半也不该再被当预告推，但信息不丢更好，
    所以让被它挡在后面的预告角标整体下移一行，两个角标都露出来。
@@ -2426,18 +2474,8 @@
   pointer-events: none;
 }
 .ssd-overlay-ignored ~ .ssd-overlay-preview { top: 2.45rem; }
-/* 列表模式下同一个标记（行里没有封面角标，挂在标题文字尾巴上） */
-.ssd-row-ignored {
-  margin-left: 6px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: rgba(209, 77, 65, 0.94);
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  vertical-align: 1px;
-  white-space: nowrap;
-}
+/* 列表模式下同一个标记（行里没有封面角标，挂进标题下的徽章行） */
+.ssd-row-badges > .ssd-row-ignored { background: rgba(209, 77, 65, 0.94); }
 /* ⚠️ 卡片里的 `filter: blur(30px)`（封面）/ `blur(2px)`（标题、描述、工作室链接）
    不是占位残留，是 sfwswitch（社区插件「Blur NSFW images and unblur on mouse over」）
    的效果，悬停时会解到 blur(0)。**别在这里屏蔽**：v2.5.0 曾经整卡写

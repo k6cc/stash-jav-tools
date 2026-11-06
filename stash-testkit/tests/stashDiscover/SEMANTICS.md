@@ -13,7 +13,7 @@
   - 年龄/国籍点击后按需 1 次查询：本地映射走本地 `findPerformer{birthdate country}`，否则走 box `findPerformer{birth_date country}`（经 `_boxRateLimiter`）。
   - **头像先 `new Image()` 预载、完成后再挂载**：卡片尺寸随图等比收缩（max 120×120），提前定位会按塌陷高度计算、图片加载后卡片盖住 pill。
   - 点击语义：预载中同 pill 再点 = 继续等待（不取消）；挂载后再点同 pill = toggle 关闭；点卡片 = 新标签开 box 演员页；点空白/滚动弹窗 = 关闭。
-- **加入库**：改成三段式「算草稿 → 弹窗预览 → 确认提交」（v2.6.0 批次6，见下节）；`sceneCreate` 的 `urls` 必须是**字符串数组**（传 `[{url}]` 对象数组过不了本地 schema 校验）；`stash_ids` 直接随 sceneCreate 提交；`cover_image` 仍在场景落地后单独补；演员/工作室按 §4.5 四步判定建档/关联。
+- **加入库**：改成三段式「算草稿 → 弹窗预览 → 确认提交」（v2.6.0 批次6，见下节）；`sceneCreate` 的 `urls` 必须是**字符串数组**（传 `[{url}]` 对象数组过不了本地 schema 校验）；`stash_ids` 直接随 sceneCreate 提交；`cover_image` 在场景落地后由后台队列补写（不阻塞入库，v2.6.15）；演员/工作室按 §4.5 四步判定建档/关联。
 - **弹窗剧照探测（DMM）**：JAV 场景用 `urls` 里的 r18 链接推 content id，拿不到再用番号 `deriveContentId`；非 JAV（欧美源）只有封面。两通道探测（r18.dev JSON → 非空即用，否则按补齐 id 枚举 DMM CDN），每次探测都按 `naturalWidth>=300 && naturalHeight>=200` 过滤，占位符不会进轮播。
   - **id 必须零补齐**：DMM CDN 的 content id 数字部分固定补到 5 位（`OFJE-614` → `ofje00614`），r18.dev 的 URL id 丢掉补齐（`id=ofje614`）；未补齐时 `<cid>jp-N.jpg` 全部命中 90×122 占位符（`ofje00614jp-11.jpg` 也是占位符，可据首尾命中数判断真实张数）。
   - **r18 `gallery[].image_full` 两种形态**：`<cid>-N.jpg`（120×90 缩略图）与 `<cid>jp-N.jpg`（本身即真图）；真实剧照恒为 `<host>/<dir>/<cid>jp-<n>.jpg`，所以按「条目自身目录 + cid + 序号」重建（`dmmShotUrl`），**不要就地插 `jp`**（对已是真图的条目会产出 `jpjp-N` 占位符）。
@@ -190,6 +190,15 @@ Jackett 版本不输出，所以老的 `tracker` 字段恒为空串 —— 前�
 
 - 品牌映射 BRAND_MAP：`javstash.org→JAVStash`、`stashdb.org→StashDB`、`theporndb.net→TPDB`（「在 xx 查看」按钮、来源角标统一）。
 - 弹窗滚动：点搜索时滚动一次露出 loading；结果原位替换不再滚动。
+
+## 各视图的「已拥有」口径（2026-11-06 定）
+
+- **最新 / 关注 / 工作室 / 演员发现 tab**：数据集按「未拥有」过滤，入库后条目消失（`buildResult` 的 `filterPipeline` 每次用新鲜 `ownedKeys` 重筛）。
+- **热门**：**不过滤**。`buildTrending` 给每条打 `item.owned`（`ownedKeys[endpoint:stashId]` 或 `code:<番号>`），卡片左上角画「在库中」深蓝角标、列表模式标在标题尾部。理由：榜单位次本身有参考价值，剔掉后后面的片顶上来，热度顺序失真。
+- 入库事件 → 按**当前视图**重算数据集（`ensureData(viewDataKeys(view))`），不是只清 latest/studios；热门重算后卡片留在原位、只是多出徽章。
+- 详情弹窗的「加入库」：`item.owned` 为真时直接 `markActOwned()`（「在库中」+ disabled），不发额外查询 —— 除热门外，数据集本身已保证 item 不在库；真点下去时 `handleSaveScene` 的 `findExistingSceneId` 与提交层仍是两道兜底。
+- 实测（javstash，2026-11-06）：热门 30 条全保留、其中 1 条 owned 带角标；入库新片后卡片仍在该位次、徽章出现、按钮变「在库中」disabled；最新视图同操作后卡片消失。
+- **列表模式的徽章**（v2.6.15）：`在库中 / 库内演员 / 已忽略` 统一进 `.ssd-row-badges`，排在标题下一行、同一行左对齐（`gap:4px`，放不下才换行），不再挂在标题文字尾巴上。行高 100px、标题 21px，两行共 ~41px，仍垂直居中；标题会整体上移 8–10px，这是接受的观感。
 
 ## 关注角标（导航数字）口径
 

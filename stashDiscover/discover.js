@@ -1126,11 +1126,25 @@
   function buildTrending(base, entry, fromCache) {
     var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: base.source.host };
     var linkedSet = {};
+    // 热门榜不过滤已拥有（用户 2026-11-06 第二次反馈）：榜单位次本身有参考价值，
+    // 按「未拥有」剔掉会让后面的片顶上来，热度顺序就失真了。这里改成给已入库的
+    // 打 owned 标记，卡片上画「在库中」徽章，位置与名次都不动。
     var linkedPromise = loadLinkedPerformers(base.source.endpoint);
-    return linkedPromise.then(function (linked) {
+    return Promise.all([linkedPromise, loadOwnedKeys()]).then(function (res) {
+      var linked = res[0] || [], ownedKeys = res[1] || {};
       linked.forEach(function (p) { linkedSet[p.stashId] = true; });
-      var items = (entry.scenes || []).map(function (sc) {
+      var epPrefix = String(base.source.endpoint).toLowerCase() + ":", seenCode = {};
+      var items = [];
+      (entry.scenes || []).forEach(function (sc) {
+        if (!sc) return;
+        // 同一番号在榜上重复出现只留前一条（保留去重，但不看是否已拥有）
+        var ck = sc.code ? "code:" + String(sc.code).trim().toLowerCase() : "";
+        if (ck) {
+          if (seenCode[ck]) return;
+          seenCode[ck] = true;
+        }
         var item = shapeBoxItem(box, sc);
+        item.owned = !!(ownedKeys[epPrefix + String(sc.id).toLowerCase()] || (ck && ownedKeys[ck]));
         var hasLocal = false;
         var perfs = sc.performers || [];
         for (var i = 0; i < perfs.length; i++) {
@@ -1138,7 +1152,7 @@
           if (pf && linkedSet[String(pf.id)]) { hasLocal = true; break; }
         }
         item.hasLocalPerformer = hasLocal; // §5 角标标记
-        return item;
+        items.push(item);
       });
       return { source: base.source, fetchedAt: entry.fetchedAt, fromCache: fromCache, items: items,
                cacheTrim: fromCache === "network" ? null : cacheTrimOf(entry) };
@@ -1845,6 +1859,14 @@
         for (var bi = 0; bi < moved.length; bi++) badgeBox.appendChild(moved[bi]);
         badgeHost.appendChild(badgeBox);
       }
+      // 「在库中」：热门榜保留完整榜单后，已入库的片靠这个徽章标出来
+      // （用户 2026-11-06）。与「库内演员」不是一回事 —— 那条指的是这部片里有你
+      // 库内的演员，两者可以同时出现，所以插到堆叠容器最上面单独一个。
+      if (opts.owned && item.owned) {
+        var ownBadge = el("span", "ssd-overlay-owned", tc("在库中", "In library"));
+        ownBadge.title = tc("这部片已在你的本地库中", "This scene is already in your library");
+        badgeBox.insertBefore(ownBadge, badgeBox.firstChild);
+      }
       if (opts.days) {
         var old = badgeBox.querySelector(".ssd-overlay-preview");
         if (old) old.remove();
@@ -1913,7 +1935,7 @@
   function sceneGrid(items, opts) {
     opts = opts || {};
     if (_dp.mode === "list" && opts.allowList) {
-      var tbl = SSD.buildSceneTable(items);
+      var tbl = SSD.buildSceneTable(items, opts);
       // 多选态靠 host.__ssdItem 找回条目：卡片与表格行都挂一份，选择逻辑
       // 就不用再猜「这一行对应哪个 item」（表格行没有 dataset 可依赖）
       var rows = tbl.querySelectorAll("tbody tr");
@@ -2233,8 +2255,9 @@
       if (ck && codeSet[ck]) { skip++; return tick(); }
       SSD.planSceneImport(it, sc).then(function (draft) {
         return SSD.submitSceneImport(draft, SSD.pickFromPrefs(draft));
-      }).then(function () {
-        ok++;
+      }).then(function (created) {
+        // 判重命中（本地已有同 stash_id / 同番号）算「跳过」，不是新建
+        if (created && created.existed) skip++; else ok++;
         try { readMark(it.endpoint, sc.id); } catch (_) {}
         var k = selKey(it);
         delete _dp.sel.keys[k];
@@ -2555,7 +2578,7 @@
       if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", _dp.err.trending ? errText(_dp.err.trending) : null, function () { retryDataset("trending"); });
       else if (!(t.items || []).length) secBody(s3, null).appendChild(stateBox("empty", tc("榜单暂无内容", "Empty list")));
       else {
-        var g3 = sceneGrid(t.items.slice(0, prefetchLimit(rows.trending)), { inlib: true });
+        var g3 = sceneGrid(t.items.slice(0, prefetchLimit(rows.trending)), { inlib: true, owned: true });
         g3.classList.add("ssd-dp-grid");
         s3.appendChild(g3);
         trimRows(g3, rows.trending);
@@ -2731,7 +2754,7 @@
   var DRILL = {
     latest: { title: tc("最新发布", "Latest"), key: "latest", items: function (d) { return d.latest || []; }, sort: "date-desc" },
     preview: { title: tc("预告", "Upcoming"), key: "latest", items: function (d) { return d.preview || []; }, sort: "date-asc", days: true },
-    trending: { title: tc("热门", "Trending"), key: "trending", items: function (t) { return t.items || []; }, sort: "hot", inlib: true },
+    trending: { title: tc("热门", "Trending"), key: "trending", items: function (t) { return t.items || []; }, sort: "hot", inlib: true, owned: true },
     studios: { title: tc("工作室新发布", "Studio releases"), key: "studios", items: function (st) { return st.items || []; }, sort: "date-desc" },
   };
   function latestSub() {
@@ -2812,7 +2835,7 @@
         c.appendChild(stateBox("empty", _dp.search ? tc("没有匹配的场景", "No matching scenes") : tc("暂无内容", "Nothing here yet")));
       }
     } else {
-      c.appendChild(sceneGrid(pageItems, { days: cfg.days, allowList: true }));
+      c.appendChild(sceneGrid(pageItems, { days: cfg.days, allowList: true, inlib: cfg.inlib, owned: cfg.owned }));
     }
     var bottomPager = pagerBar(view, all.length, totalPages, perPage, { plain: true });
     if (bottomPager) c.appendChild(bottomPager);
@@ -3037,7 +3060,9 @@
     addBtn.type = "button";
     function markAdded() {
       addBtn.disabled = true;
-      addBtn.textContent = tc("已加入 ✓", "Added ✓");
+      // 文案统一成「在库中」（用户 2026-11-06）：入库后这颗按钮既不该再点，
+      // 也不该读起来像「刚刚加入」—— 有的演员是几个月前进的库
+      addBtn.textContent = tc("在库中", "In Library");
       addBtn.classList.remove("err");
       addBtn.classList.add("ok");
     }
@@ -5553,8 +5578,10 @@
     if (_dp.sel.on) syncSelBar();
   }
 
-  // 入库后：失效本地 memo（ownedKeys 变了）→ 重建 latest/studios（缓存仍在，
-  // buildResult 用新鲜 ownedKeys 重筛，已入库场景自然消失）；顺带标已读。
+  // 入库后：失效本地 memo（ownedKeys 变了）→ 重算当前视图的数据集。
+  // 口径分两种：最新/关注/工作室是「未拥有」，重算后卡片自然消失；热门是
+  // 「全榜 + 标记」，重算后卡片留在原位、只是多出「在库中」徽章（用户 2026-11-06）。
+  // 所以这里不能只清 latest/studios —— 那样在热门下徽章永远不出来。
   var _savedDebounce = 0;
   window.addEventListener(SSD.SCENE_SAVED_EVENT, function (e) {
     var item = e && e.detail && e.detail.item;
@@ -5563,8 +5590,11 @@
     clearTimeout(_savedDebounce);
     _savedDebounce = setTimeout(function () {
       if (!_dp.refs.content) return;
-      _dp.d.latest = null; _dp.d.studios = null;
-      ensureData(["latest", "studios"]);
+      var keys = viewDataKeys(_dp.view);
+      if (!keys.length) return;          // 设置 / 已忽略管理页不挂数据集
+      _dp.d = {}; _dp.err = {};
+      ensureData(keys);
+      render();
     }, 400);
   });
 

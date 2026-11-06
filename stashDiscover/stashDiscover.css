@@ -2543,8 +2543,10 @@
   cursor: pointer;
 }
 .ssd-dp-cachetrim:hover { background: color-mix(in srgb, var(--ssd-warning) 26%, transparent); }
-/* 底部翻页行：只有按钮，靠右收尾（§13.5 不再重复计数） */
-.ssd-dp-pagerow.is-end { justify-content: flex-end; margin-top: 4px; }
+/* 底部翻页行：只有按钮，靠右收尾（§13.5 不再重复计数）。
+   上间距取 12px，和顶部翻页到卡片的那 12px（headrow 的 margin-bottom）一致 ——
+   原来 4px 贴着卡片太近（用户 2026-11-07） */
+.ssd-dp-pagerow.is-end { justify-content: flex-end; }
 
 /* 子 tab + 顶部翻页并成一行（§13.5）：原先三行各占一处，iPad 上白扔约 58px。
    宽度不足时 flex-wrap 自动把右侧翻页掉到第二行 —— 「不够才换行」。 */
@@ -2564,12 +2566,14 @@
   min-width: 0;
 }
 
-/* 工作室分组入口条（§8.2 进入点）*/
+/* 工作室分组入口条（§8.2 进入点）。
+   上方间距交给 headrow 的 margin-bottom（12px），这里不再叠 12px；下方留 12px
+   与卡片分开（原来 4px 贴着卡片，用户 2026-11-07） */
 .ssd-dp-grpstrip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0 4px;
+  margin: 0 0 12px;
 }
 .ssd-dp-grpchip {
   padding: 5px 12px;
@@ -3145,7 +3149,23 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 }
 .ssd-dp-igmeta { font-size: 11.5px; color: var(--sx-tx2); line-height: 1.35; word-break: break-word; }
 .ssd-dp-igmeta.dim { color: var(--sx-tx3); }
-.ssd-dp-igrestore { align-self: flex-start; margin-top: 2px; }
+/* 快照被截断时的「+N」徽章：跟在演员名/别名后面，不抢正文的视觉权重 */
+.ssd-dp-igmore {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--sx-ui3);
+  color: var(--sx-tx2);
+  font-size: 10.5px;
+  line-height: 1.5;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+/* 「恢复显示」钉在卡片底部（用户 2026-11-07）：工作室名换行会把卡片撑高，
+   按钮若紧跟在内容后面，同一行里就会一高一低。margin-top:auto 吃掉剩余
+   空间，同一 flex 行内卡片等高（align-items: stretch 默认）→ 按钮齐底。 */
+.ssd-dp-igrestore { align-self: flex-start; margin-top: auto; }
 
 /* 演员卡：头像 + 名字 + 别名 + 恢复 */
 .ssd-dp-igperf {
@@ -3519,8 +3539,9 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   padding: 9px 0;
 }
 .ssd-dp-setrow + .ssd-dp-setrow { border-top: 1px solid var(--sx-line); }
-/* 已忽略首行卡片（§7）：与下面的「通用」分组之间留一口气 */
-.ssd-dp-set-ign { margin-bottom: 18px; }
+/* 已忽略首行卡片（§7）：不再额外加下方留白 —— 「入库默认字段」卡片就紧跟
+   在它下面，18px 叠上容器 gap 后中间空出 32px 且没有任何文字承接（用户
+   2026-11-07）。统一交给 .ssd-dp-settings 的 14px gap。 */
 .ssd-dp-setname { font-size: 13px; color: var(--sx-tx); }
 .ssd-dp-sethint {
   font-size: 12px;
@@ -3528,6 +3549,19 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   color: var(--sx-tx2);
   padding: 0 0 9px;
 }
+/* 提示行插在两条设置之间时，会把「.ssd-dp-setrow + .ssd-dp-setrow」那条淡分隔线
+   打断（相邻选择器失效）—— 这里补回来，用同一个色（用户 2026-11-07）。 */
+.ssd-dp-sethint + .ssd-dp-setrow { border-top: 1px solid var(--sx-line); }
+/* 讲「整段生效范围」的提示（不是某一条控件的注释）：与上面的控件隔一条淡线，
+   行高、留白各压一档，读起来比控件行矮，不会像又一条设置（用户 2026-11-07）。 */
+.ssd-dp-sethint.sep {
+  border-top: 1px solid var(--sx-line);
+  margin-top: 2px;
+  padding: 7px 0 5px;
+  line-height: 1.32;
+}
+/* 整行只有一个按钮、左侧没有标题时贴右，与其他行的下拉/开关对齐 */
+.ssd-dp-setrow.is-end { justify-content: flex-end; }
 /* 设置写入失败（localStorage 配额满）的就地提示 */
 .ssd-dp-setwarn {
   font-size: 12px;

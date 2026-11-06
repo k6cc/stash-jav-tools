@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.18";
+  var PLUGIN_VERSION = "2.6.19";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -8372,6 +8372,9 @@
   var IGNORE_MAX_PER_KIND = 3000;  // 场景 / 演员各自条数上限
   var IGNORE_MAX_CHARS = 1000000;  // 整包字符预算（配额约 5.24M，留足余量）
   var IGNORE_SNAPSHOT_P = 4;       // 场景快照只留前 4 位演员名（管理页搜索用）
+  var IGNORE_SNAPSHOT_A = 12;      // 演员快照只留前 12 个别名（同上）
+  // 超出上面两个上限时，额外记一个总数（pn / an），管理页据此在末尾挂「+N」徽章 ——
+  // 只存名字不存总数的话，用户根本看不出被截掉了多少（用户 2026-11-07）
   var _ignoreMemo = null;
 
   function ignoreKey(endpoint, id) {
@@ -8477,12 +8480,13 @@
     var k = ignoreKey(ep, sc.id);
     if (!st.scenes[k]) {
       var imgs = (item.images && item.images.length ? item.images : (sc.images || []));
-      var names = [];
+      var allNames = [];
       (sc.performers || []).forEach(function (p) {
         var pf = p && p.performer;
-        if (pf && pf.name && names.length < IGNORE_SNAPSHOT_P) names.push(pf.name);
+        if (pf && pf.name) allNames.push(pf.name);
       });
-      st.scenes[k] = {
+      var names = allNames.slice(0, IGNORE_SNAPSHOT_P);
+      var snap = {
         at: Date.now(),
         title: ignClip(sc.title, IGN_TEXT_CAP.title),
         date: ignClip(sc.release_date, IGN_TEXT_CAP.date),
@@ -8492,6 +8496,9 @@
         p: names.map(function (nm) { return ignClip(nm, IGN_TEXT_CAP.alias); })
           .filter(function (nm) { return !!nm; }),
       };
+      // 演员总数只在被截断时存（约 +8 字符/条），管理页用它算「+N」
+      if (allNames.length > names.length) snap.pn = allNames.length;
+      st.scenes[k] = snap;
     }
     var r = ignoreWrite();
     r.key = k;
@@ -8507,8 +8514,11 @@
     if (!st.performers[k]) {
       var snap = { at: Date.now(), name: ignClip(o.name, IGN_TEXT_CAP.name), image: o.image || "" };
       // 别名只在不额外请求时带（管理页搜索用，约 +10 字符/条）
-      var als = ignClipList(o.aliases, 12, IGN_TEXT_CAP.alias);
-      if (als && als.length) snap.alias_list = als;
+      var als = ignClipList(o.aliases, IGNORE_SNAPSHOT_A, IGN_TEXT_CAP.alias);
+      if (als && als.length) {
+        snap.alias_list = als;
+        if ((o.aliases || []).length > als.length) snap.an = (o.aliases || []).length;
+      }
       // 管理页卡片要显示国旗/年龄/性别（用户 2026-10-29）。这三个字段本来就在
       // stash-box 的 performer 对象里，忽略时顺手存下，约 +20 字符/条；不存的话
       // 管理页只能再发一次请求，而「零请求」正是这一页的立身之本。
@@ -8584,7 +8594,8 @@
               if (pf.birth_date) { cur.birthdate = String(pf.birth_date).slice(0, 10); wrote = true; }
               if (pf.gender) { cur.gender = String(pf.gender).slice(0, 24); wrote = true; }
               if (!(cur.alias_list && cur.alias_list.length) && pf.aliases && pf.aliases.length) {
-                cur.alias_list = pf.aliases.slice(0, 12);
+                cur.alias_list = pf.aliases.slice(0, IGNORE_SNAPSHOT_A);
+                if (pf.aliases.length > cur.alias_list.length) cur.an = pf.aliases.length;
                 wrote = true;
               }
               if (!wrote) return;
@@ -8690,11 +8701,16 @@
               ? v.p.slice(0, IGNORE_SNAPSHOT_P).map(function (x) { return ignClip(x, IGN_TEXT_CAP.alias); })
                   .filter(function (x) { return !!x; })
               : [];
+            // 被截断时的演员总数（旧文件没有这个字段，正常跳过）
+            if (Number(v.pn) > rec.p.length) rec.pn = Number(v.pn);
           } else {
             rec.name = ignClip(v.name, IGN_TEXT_CAP.name);
             rec.image = String(v.image || "");
-            var als = ignClipList(v.alias_list, 12, IGN_TEXT_CAP.alias);
-            if (als && als.length) rec.alias_list = als;
+            var als = ignClipList(v.alias_list, IGNORE_SNAPSHOT_A, IGN_TEXT_CAP.alias);
+            if (als && als.length) {
+              rec.alias_list = als;
+              if (Number(v.an) > als.length) rec.an = Number(v.an);
+            }
             // 卡片用的零开销标签，导入时一并带过来（老文件没有这些字段，跳过）
             if (v.country) rec.country = String(v.country).slice(0, 4);
             if (v.birthdate) rec.birthdate = String(v.birthdate).slice(0, 10);

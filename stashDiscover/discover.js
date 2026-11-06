@@ -1253,7 +1253,8 @@
           var raw = localStorage.getItem(LS_PREFIX + host + ":trendingPerf.v1");
           if (raw) {
             var e = JSON.parse(raw);
-            if (e && Date.now() - (e.fetchedAt || 0) < TRENDING_PERF_CACHE_TTL_MS && Array.isArray(e.performers)) {
+            // v2：缓存条数 24 → 30（补位窗口）。旧缓存只有 24 条，判 miss 重取一次
+            if (e && e.v === 2 && Date.now() - (e.fetchedAt || 0) < TRENDING_PERF_CACHE_TTL_MS && Array.isArray(e.performers)) {
               // 旧缓存可能没有 degraded 字段：TPDB 一律归一为 degraded
               var deg = SSD.isTPDBBox({ endpoint: base.source.endpoint }) ? true : e.degraded;
               return { source: base.source, fromCache: "fresh", performers: e.performers, degraded: deg };
@@ -1262,9 +1263,9 @@
         } catch (_) {}
       }
       var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
-      return fetchTrendingPerformers(box, opts.perPage || 24, genders).then(function (r) {
+      return fetchTrendingPerformers(box, opts.perPage || 30, genders).then(function (r) {
         try {
-          localStorage.setItem(LS_PREFIX + host + ":trendingPerf.v1", JSON.stringify({ fetchedAt: Date.now(), performers: r.performers, degraded: r.degraded }));
+          localStorage.setItem(LS_PREFIX + host + ":trendingPerf.v1", JSON.stringify({ v: 2, fetchedAt: Date.now(), performers: r.performers, degraded: r.degraded }));
         } catch (_) {}
         return { source: base.source, fromCache: "network", performers: r.performers, degraded: r.degraded };
       });
@@ -1546,18 +1547,22 @@
   // 导入按钮（关注视图 followbar 与空状态共用工厂）
   // 反馈（用户 2026-10-27）：点击立即变色 + 文案「导入中…」+ 图标旋转；
   // 结束按结果给「已导入 N 位 / 均已关注 / 导入失败」并停留 ~2s，可被打断。
-  function makeImportButton() {
-    var btn = el("button", "ssd-dp-btn ghost", I.heartFill + "<span>" + tc("从收藏导入", "Import ❤ favorites") + "</span>");
+  // compact = 关注页工具栏 / 空态用「从收藏导入」（页面本身就是关注列表，不必重复
+  // 「关注」二字，窄屏也省 2 个字）；设置页那行没有左侧标题，用「从收藏导入关注」
+  // 才说得清按钮做什么（用户 2026-11-07）。
+  function makeImportButton(compact) {
+    var label = compact ? tc("从收藏导入", "Import favorites") : tc("从收藏导入关注", "Follow favorites");
+    var btn = el("button", "ssd-dp-btn ghost", I.heartFill + "<span>" + label + "</span>");
     btn.type = "button";
     var busy = false;
     var resetT = 0;
-    function setFace(cls, label) {
+    function setFace(cls, text) {
       btn.classList.remove("ok", "err", "busy");
       if (cls) btn.classList.add(cls);
       var span = btn.querySelector("span");
-      if (span) span.textContent = label;
+      if (span) span.textContent = text;
     }
-    var idle = function () { setFace(null, tc("从收藏导入", "Import ❤ favorites")); btn.title = ""; };
+    var idle = function () { setFace(null, label); btn.title = ""; };
     btn.addEventListener("click", function () {
       if (busy) return;
       busy = true;
@@ -2657,7 +2662,9 @@
       if (!d || !tp) secBody(s6, "loading", null);
       else {
         var g6 = el("div", "ssd-dp-grid mini");
-        buildCoStars().slice(0, rows.performers * 12).forEach(function (cs) {
+        // 总览只给每位已关注演员 2 个名额：一行 12 格要覆盖更多人，
+        // 否则高产演员的共演者会把整行占满（用户 2026-11-07）
+        buildCoStars({ perSource: 2 }).slice(0, rows.performers * 12).forEach(function (cs) {
           g6.appendChild(miniPerfCard({
             name: cs.meta.name,
             image: cs.meta.image,
@@ -2683,8 +2690,19 @@
     ensureData([k], true);
   }
 
+  // 共同出演上限：数据全部来自已在内存的 actorsWithNew（场景缓存），纯本地
+  // 派生、零额外请求，只受屏幕与头像图片约束。96 = 筛选栏每页上限 96 一页
+  // 装得满（用户 2026-11-07：原来硬编码 12，线上大库明显不够看）。
+  var CO_STAR_CAP = 96;
+
   // 共同出演派生（§3.5 子源 1：actorsWithNew 全量分组提取不在库 co-star）
-  function buildCoStars() {
+  // opts.perSource：同一位已关注演员最多贡献几位共演者 —— 总览传 2，避免一个
+  //   高产演员的共演者占满整行（用户 2026-11-07）；视图页不传 = 不限
+  // opts.cap：条数上限，默认 CO_STAR_CAP
+  function buildCoStars(opts) {
+    opts = opts || {};
+    var perSource = parseInt(opts.perSource, 10) || 0;
+    var cap = parseInt(opts.cap, 10) || CO_STAR_CAP;
     var d = _dp.d.latest;
     if (!d || !d.linked) return [];
     var lib = {};
@@ -2706,17 +2724,34 @@
           counts[pid].n++;
           if (counts[pid].items.length < 12) counts[pid].items.push(it);
           if (!coWith[pid]) coWith[pid] = {};
-          var w = coWith[pid][srcId] || (coWith[pid][srcId] = { name: srcName, n: 0 });
+          var w = coWith[pid][srcId] || (coWith[pid][srcId] = { srcId: srcId, name: srcName, n: 0 });
           w.n++;
         });
       });
     });
-    return Object.keys(counts).map(function (k) {
+    var out = Object.keys(counts).map(function (k) {
       // 按同场场景数降序：同一共演者可能同时与多位已关注演员同场
       var list = Object.keys(coWith[k] || {}).map(function (x) { return coWith[k][x]; })
         .sort(function (a, b) { return b.n - a.n; });
       return { meta: meta[k], scenes: counts[k].n, items: counts[k].items, coWith: list };
-    }).sort(function (a, b) { return b.scenes - a.scenes; }).slice(0, 12);
+    }).sort(function (a, b) { return b.scenes - a.scenes; });
+    // 搜索在截断**之前**做：候选常常上千，先取前 96 再过滤的话，第 97 位之后
+    // 的演员会搜不到（用户库大，实测共同出演候选已超 96）
+    var q = String(opts.q || "").toLowerCase();
+    if (q) out = out.filter(function (cs) { return (cs.meta.name || "").toLowerCase().indexOf(q) !== -1; });
+    // 按「主要同场演员」（同场最多的那位）限额：排在前面被挤掉的名额由后面
+    // 别的演员的共演者补上，整行才不会被一个人包场
+    if (perSource > 0) {
+      var used = {};
+      out = out.filter(function (cs) {
+        var sid = (cs.coWith[0] && cs.coWith[0].srcId) || "";
+        if (!sid) return true;
+        if ((used[sid] || 0) >= perSource) return false;
+        used[sid] = (used[sid] || 0) + 1;
+        return true;
+      });
+    }
+    return out.slice(0, cap);
   }
 
   // 共演卡副标题：说清「跟谁一起演」，而不是只给一个没有指向的场景数
@@ -2743,17 +2778,26 @@
               "with " + list[0].name + " · " + n + " scenes");
   }
   // 热门演员榜迷你卡（§3.5 子源 2；过滤已在库 §3.5）
+  // 补位口径（用户 2026-11-07）：已忽略 / 已在库的从榜上摘掉，后面的演员顶上
+  // 来，但徽章用**原始名次**、不重新编号（#27 出现在第 3 张是正常的）；
+  // 补位只在缓存的 30 名里找，不再额外请求。
+  var TRENDING_SHOW = 24;   // 每屏展示位
+  var TRENDING_POOL = 30;   // 缓存与补位窗口（请求 per_page 已是 90，零额外流量）
   function trendingPerfMinis(o) {
     var d = _dp.d.latest, tp = _dp.d.trendingPerf;
     if (!tp || !d) return [];
     var lib = {};
     (d.linked || []).forEach(function (p) { lib[String(p.stashId)] = true; });
-    var out = [], rank = 0;
-    (tp.performers || []).forEach(function (pf) {
-      if (lib[String(pf.stashId)]) return;
-      rank++;
-      if (o && o.limit != null && out.length >= o.limit) return;
-      if (o && o.limit != null && rank > o.limit * 3) return;
+    var endpoint = (tp.source && tp.source.endpoint) || (d.source && d.source.endpoint) || "";
+    var want = (o && o.limit != null) ? o.limit : TRENDING_SHOW;
+    var list = tp.performers || [], out = [];
+    for (var i = 0; i < list.length && out.length < want; i++) {
+      var pos = i + 1;
+      if (pos > TRENDING_POOL) break;
+      var pf = list[i];
+      if (!pf) continue;
+      if (lib[String(pf.stashId)]) continue;
+      if (SSD.dpIgnore && endpoint && SSD.dpIgnore.isPerformerIgnored(endpoint, pf.stashId)) continue;
       out.push(miniPerfCard({
         name: pf.name,
         image: pf.image,
@@ -2763,11 +2807,11 @@
         sub: tc((pf.sceneCount || 0) + " 部作品", (pf.sceneCount || 0) + " scenes"),
         // 角标只留序号：英文 "Trending #12" 有 12 字符，迷你卡只有 168px 宽，
         // 会被撑到半张卡；中文「热门榜 #12」已经够短，保持（用户 2026-10-28）
-        badge: tc("热门榜 #" + rank, "#" + rank), badgeKind: "hot",
-        badgeTitle: tc("热门榜第 " + rank + " 位", "Trending #" + rank),
-        onClick: function () { openPerfModal({ src: "hot", stashId: pf.stashId, name: pf.name, image: pf.image, sceneCount: pf.sceneCount, rank: rank }); },
+        badge: tc("热门榜 #" + pos, "#" + pos), badgeKind: "hot",
+        badgeTitle: tc("热门榜第 " + pos + " 位", "Trending #" + pos),
+        onClick: function () { openPerfModal({ src: "hot", stashId: pf.stashId, name: pf.name, image: pf.image, sceneCount: pf.sceneCount, rank: pos }); },
       }));
-    });
+    }
     return out;
   }
 
@@ -2939,17 +2983,21 @@
 
     // 子切换（本地有更新 | 共同出演 | 热门榜）
     // 英文标签缩短 + tab 允许换行，避免长词溢出按钮（用户 2026-10-27）
+    // 与顶部翻页同处一行（右侧），和其它视图的 headrow 一致 —— 移动端也省一行
+    var headrow = el("div", "ssd-dp-headrow");
     var sub = el("div", "ssd-dp-tabs ssd-dp-subtabs");
     [["local", tc("本地有更新", "Local")], ["co", tc("共同出演", "Co-starred")], ["hot", tc("热门演员榜", "Trending")]].forEach(function (pair) {
       var b = el("button", "ssd-dp-tab" + (src === pair[0] ? " on" : ""), pair[1]);
       b.type = "button";
       b.addEventListener("click", function () {
         dpSetPrefs({ perfSrc: pair[0] });
+        _dp.page = 1;   // 换子源 = 换列表，页码从头
         render();
       });
       sub.appendChild(b);
     });
-    c.appendChild(sub);
+    headrow.appendChild(sub);
+    c.appendChild(headrow);
 
     if (!d) {
       if (_dp.err.latest) { c.appendChild(stateBox("error", errText(_dp.err.latest), retryLatest)); return; }
@@ -2964,14 +3012,36 @@
     var q = _dp.search.trim().toLowerCase();
     var grid = el("div", "ssd-dp-grid mini");
     var emptyMsg = tc("暂无可发现的演员", "No performers to discover");
+    // 本地有更新 / 共同出演跟筛选栏「每页」分页（用户 2026-11-07）；
+    // 热门榜是固定 24 条整榜（名次有意义），不分页
+    var paged = src !== "hot";
+    var perPage = toNum(prefs.perPage, 24);
+    var all = [];
     if (src === "local") {
-      // 本地所有有更新的演员（搜索可过滤，点击 → 演员过滤视图）
       emptyMsg = tc("回看期内没有新作品", "No new releases in the lookback window");
-      (d.actorsWithNew || []).forEach(function (grp) {
-        var nm = grp.performer.name || "";
-        if (q && nm.toLowerCase().indexOf(q) === -1) return;
+      all = (d.actorsWithNew || []).filter(function (grp) {
+        return !q || (grp.performer.name || "").toLowerCase().indexOf(q) !== -1;
+      });
+    } else if (src === "co") {
+      all = buildCoStars({ q: q });
+    }
+    var totalPages = Math.max(1, Math.ceil(all.length / perPage));
+    if (paged && _dp.page > totalPages) _dp.page = 1;
+    var start = paged ? (_dp.page - 1) * perPage : 0;
+    var shown = paged ? all.slice(start, start + perPage) : all;
+    // 顶部翻页贴右侧（与其它视图的 headrow 同款）。用 pagerNav 而不是 pagerBar：
+    // 后者的计数文案写「共 N 部」，对演员是错的
+    var topNav = paged ? pagerNav(totalPages) : null;
+    if (topNav) {
+      var tw = el("div", "ssd-dp-headrow-pager");
+      tw.appendChild(topNav);
+      headrow.appendChild(tw);
+    }
+    if (src === "local") {
+      // 本地所有有更新的演员（点击 → 演员过滤视图）
+      shown.forEach(function (grp) {
         grid.appendChild(miniPerfCard({
-          name: nm,
+          name: grp.performer.name || "",
           image: grp.performer.image,
           stashId: grp.performer.stashId,
           sub: subLatest(grp.newest),
@@ -2982,8 +3052,7 @@
         }));
       });
     } else if (src === "co") {
-      buildCoStars().forEach(function (cs) {
-        if (q && cs.meta.name.toLowerCase().indexOf(q) === -1) return;
+      shown.forEach(function (cs) {
         grid.appendChild(miniPerfCard({
           name: cs.meta.name,
           image: cs.meta.image,
@@ -2999,8 +3068,11 @@
         emptyMsg = tc("该源不提供热门演员榜（TPDB 没有热度排序）", "This source has no trending performers list (TPDB has no popularity sort)");
       }
     }
-    if (!grid.children.length) c.appendChild(stateBox("empty", emptyMsg));
-    else c.appendChild(grid);
+    if (!grid.children.length) { c.appendChild(stateBox("empty", emptyMsg)); return; }
+    c.appendChild(grid);
+    // 底部翻页：只有按钮、不重复计数（pagerBar 的计数文案是「部」，对演员是错的）
+    var pb = paged && all.length ? pagerBar("performers", all.length, totalPages, perPage, { plain: true }) : null;
+    if (pb) c.appendChild(pb);
   }
 
   // 弹层滚到边界别把背后的发现页带走（手机在顶部继续下拉还会触发下拉刷新）。
@@ -3620,7 +3692,7 @@
                  "No followed performers on this source — switch source, or import its favorites.")
             : tc("还没有关注的演员：在演员卡上点 ♥，或从库内收藏导入。",
                  "Not following anyone yet — tap ♥ on a performer card, or import your favorites."));
-      empty.appendChild(makeImportButton());
+      empty.appendChild(makeImportButton(true));
       c.appendChild(empty);
       return;
     }
@@ -3686,7 +3758,7 @@
       });
       barActs.appendChild(allBtn);
     }
-    barActs.appendChild(makeImportButton()); // §6.2 增量导入（已关注的自动跳过）
+    barActs.appendChild(makeImportButton(true)); // §6.2 增量导入（已关注的自动跳过）
     bar.appendChild(barActs);
     c.appendChild(bar);
 
@@ -3876,12 +3948,22 @@
     return "";
   }
 
+  // 快照截断后的「还有 N 个」徽章（用户 2026-11-07）：存储只留前 4 位演员 /
+  // 前 12 个别名，不标出来的话用户会以为这个片子就这么多演员
+  function ignMoreBadge(rest) {
+    if (!(rest > 0)) return null;
+    var b = el("span", "ssd-dp-igmore", "+" + rest);
+    b.title = tc("还有 " + rest + " 个未存进快照", rest + " more not in the snapshot");
+    return b;
+  }
+
   function ignRows(kind) {
     var bag = kind === "performers" ? SSD.dpIgnore.performers() : SSD.dpIgnore.scenes();
     var rows = Object.keys(bag).map(function (k) {
       var r = bag[k] || {};
       return { key: k, at: r.at || 0, title: r.title, code: r.code, date: r.date, studio: r.studio,
-               cover: r.cover, p: r.p || [], name: r.name, image: r.image, alias_list: r.alias_list || [],
+               cover: r.cover, p: r.p || [], pn: r.pn || 0,
+               name: r.name, image: r.image, alias_list: r.alias_list || [], an: r.an || 0,
                country: r.country || "", birthdate: r.birthdate || "", gender: r.gender || "" };
     });
     rows.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });   // 忽略时间倒序
@@ -3942,6 +4024,8 @@
         (row.p || []).forEach(function (nm) {
           pwrap.appendChild(el("span", "ssd-dp-igchip", nm));
         });
+        var pMore = ignMoreBadge(Math.max(row.pn || 0, (row.p || []).length) - (row.p || []).length);
+        if (pMore) pwrap.appendChild(pMore);
         body.appendChild(pwrap);
       }
       body.appendChild(el("div", "ssd-dp-igmodalmeta", tc("忽略于 " + new Date(row.at || 0).toLocaleString(),
@@ -3977,6 +4061,8 @@
       if ((row.alias_list || []).length) {
         var awrap = el("div", "ssd-dp-igchips");
         (row.alias_list || []).forEach(function (nm) { awrap.appendChild(el("span", "ssd-dp-igchip", nm)); });
+        var aMore = ignMoreBadge(Math.max(row.an || 0, (row.alias_list || []).length) - (row.alias_list || []).length);
+        if (aMore) awrap.appendChild(aMore);
         pmain.appendChild(awrap);
       }
       // 键是 "endpoint:stashId"，endpoint 可能是 URL（自带冒号）→ 从右切，
@@ -4268,7 +4354,13 @@
         // （见 ignRows），弹窗里的 meta 行也照旧保留。
         var metaTxt = [row.studio, row.date].filter(Boolean).join(" · ");
         if (metaTxt) card.appendChild(el("div", "ssd-dp-igmeta", metaTxt));
-        if ((row.p || []).length) card.appendChild(el("div", "ssd-dp-igmeta dim", (row.p || []).slice(0, 4).join(" · ")));
+        if ((row.p || []).length) {
+          var sh = (row.p || []).slice(0, 4);
+          var pLine = el("div", "ssd-dp-igmeta dim", sh.join(" · "));
+          var pRest = ignMoreBadge(Math.max(row.pn || 0, (row.p || []).length) - sh.length);
+          if (pRest) pLine.appendChild(pRest);
+          card.appendChild(pLine);
+        }
         var btn = el("button", "ssd-dp-btn ghost sm ssd-dp-igrestore", tc("恢复显示", "Restore"));
         btn.type = "button";
         btn.addEventListener("click", function (e) { e.stopPropagation(); restoreIgn("scenes", row.key); });
@@ -4297,7 +4389,14 @@
         var pgm = genderNode(row.gender);
         if (pgm) sub.appendChild(pgm);
         if (pag != null) sub.appendChild(el("span", "ssd-dp-igage", pag + tc(" 岁", " yrs")));
-        if (!sub.childNodes.length) sub.textContent = aliasTxt || ignSourceName(row.key);
+        if (!sub.childNodes.length) {
+          sub.textContent = aliasTxt || ignSourceName(row.key);
+          // 别名快照最多存 12 个、卡片只摆 2 个 → 多出来的用「+N」交代
+          if (aliasTxt) {
+            var aRest = ignMoreBadge(Math.max(row.an || 0, (row.alias_list || []).length) - 2);
+            if (aRest) sub.appendChild(aRest);
+          }
+        }
         if (sub.childNodes.length) info.appendChild(sub);
         info.title = [row.name, row.country, genderMark(row.gender),
           (pag != null ? pag + "y" : ""), aliasTxt].filter(Boolean).join(" · ");
@@ -4671,7 +4770,9 @@
       "Whether upcoming scenes count toward unread marks, red borders, overview totals and the nav badge. Opening a performer always shows them.")));
 
     // 从收藏导入（§6.2；P5 工厂复用）
-    var rowI = el("div", "ssd-dp-setrow");
+    // 这行只有按钮、没有左侧标题，is-end 让它贴右，与其他行的下拉/开关对齐
+    // （用户 2026-11-07）
+    var rowI = el("div", "ssd-dp-setrow is-end");
     rowI.appendChild(makeImportButton());
     secG.appendChild(rowI);
     wrap.appendChild(secG);
@@ -4680,6 +4781,32 @@
     // 三项都只切 CSS 属性，改完立即生效，不必重建卡片（重建会打断弹层与滚动位置）
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("场景卡角标", "Scene card badges")));
     var secB = el("div", "ssd-dp-set-box");
+
+    // 自定义角标（预告 / 距上映天数 / 库内演员）贴哪一侧。
+    // 排在最前（用户 2026-11-07）：与下一行「显示工作室角标」挨着，两者都有
+    // 「左上」档且互斥，放一起才看得出是一组、选一个另一个会让位。
+    var posLabel = tc("默认角标位置", "Default badge position");
+    var rowB3 = el("div", "ssd-dp-setrow");
+    rowB3.appendChild(el("span", "ssd-dp-setname", posLabel));
+    var selPos = document.createElement("select");
+    selPos.className = "ssd-dp-setsel";
+    [["tl", tc("左上", "Top left")], ["bl", tc("左下", "Bottom left")]]
+      .forEach(function (o) {
+        var op = document.createElement("option");
+        op.value = o[0];
+        op.textContent = o[1];
+        selPos.appendChild(op);
+      });
+    selPos.value = dpBadgePos();
+    selPos.addEventListener("change", function () {
+      dpSetPrefs({ badgePos: selPos.value });
+      // 自定义角标要占左上 → 工作室角标（若也在左上）让到右上
+      if (selPos.value === "tl" && dpStudioBadge() === "tl") dpSetPrefs({ studioBadge: "tr" });
+      syncBadgeSelects();
+      applyBadgePrefs();
+    });
+    rowB3.appendChild(selPos);
+    secB.appendChild(rowB3);
 
     // 工作室名（原生 .studio-overlay）：隐藏 / 右上（默认）/ 左上
     // 「左上」与「默认角标位置 = 左上」互斥 —— 左上角只放一组，选了这边另一组
@@ -4728,42 +4855,24 @@
     rowB2.appendChild(selDur);
     secB.appendChild(rowB2);
 
-    // 自定义角标（预告 / 距上映天数 / 库内演员）贴哪一侧
-    var posLabel = tc("默认角标位置", "Default badge position");
-    var rowB3 = el("div", "ssd-dp-setrow");
-    rowB3.appendChild(el("span", "ssd-dp-setname", posLabel));
-    var selPos = document.createElement("select");
-    selPos.className = "ssd-dp-setsel";
-    [["tl", tc("左上", "Top left")], ["bl", tc("左下", "Bottom left")]]
-      .forEach(function (o) {
-        var op = document.createElement("option");
-        op.value = o[0];
-        op.textContent = o[1];
-        selPos.appendChild(op);
-      });
-    selPos.value = dpBadgePos();
-    selPos.addEventListener("change", function () {
-      dpSetPrefs({ badgePos: selPos.value });
-      // 自定义角标要占左上 → 工作室角标（若也在左上）让到右上
-      if (selPos.value === "tl" && dpStudioBadge() === "tl") dpSetPrefs({ studioBadge: "tr" });
-      syncBadgeSelects();
-      applyBadgePrefs();
-    });
-    rowB3.appendChild(selPos);
-    secB.appendChild(rowB3);
     // 联动会改到另一个下拉的值，这里把两个 select 拉回实际偏好（静默，不提示）
     function syncBadgeSelects() {
       selStudio.value = dpStudioBadge();
       selPos.value = dpBadgePos();
     }
 
-    secB.appendChild(el("div", "ssd-dp-sethint", tc(
+    // 段末范围说明：这条讲的是上面三项的生效范围，不是「显示时长角标」的注释
+    // → 加 sep 补一条淡分隔线并压低行高（用户 2026-11-07）
+    secB.appendChild(el("div", "ssd-dp-sethint sep", tc(
       "只影响发现页和演员弹层的场景卡，演员详情「发现」标签不变。",
       "Scene cards on the Discover page and in performer dialogs only; the performer-page Discover tab is unchanged.")));
     wrap.appendChild(secB);
 
-    // ── 显示上限（平铺列表：每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──
-    wrap.appendChild(el("h3", "ssd-dp-set-h", tc("显示上限", "Display limits")));
+    // ── 总览与列表上限（每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──
+    // 标题不再叫「显示上限」（用户 2026-11-07）：那两个「最多场景」不只管总览模块，
+    // 最新 / 工作室钻取、演员与工作室过滤页都按它截断，光写「显示上限」会被当成
+    // 全局条数开关。也不写「总览显示上限」——那会漏掉钻取与过滤页。
+    wrap.appendChild(el("h3", "ssd-dp-set-h", tc("总览与列表上限", "Overview and list limits")));
     var secC = el("div", "ssd-dp-set-box");
     [
       ["capPerActor", tc("每位演员最多场景", "Max scenes per performer"), capPerActor()],

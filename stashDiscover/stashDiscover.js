@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.6.17";
+  var PLUGIN_VERSION = "2.6.18";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -9063,6 +9063,24 @@
   var DP_NOTIFY_KEY = "SSD:dp:notify"; // "0" = muted (P6 settings UI writes it)
   var DP_PREFS_KEY = "SSD:dp:prefs"; // discover page prefs (active source lives here)
   var DP_POLL_MIN_MS = 6 * 3600 * 1000;
+  // 已读过期与 discover.js 的 readTtlMs() 同口径：回看窗口 + 7 天，窗口不限
+  // 时给 10 年。轮询直接 parse read.v1、不走页面的 readStore()，所以判定要在
+  // 这里再做一次，否则窗口内读过的会被当成已读一直扣减（用户 2026-11-06）。
+  var DP_READ_TTL_MIN_MS = 7 * 24 * 3600 * 1000;
+  var DP_LOOKBACK_DEFAULT = 30;
+  function dpReadTtlMs() {
+    var days = DP_LOOKBACK_DEFAULT;
+    try {
+      var p = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {};
+      var v = parseInt(p.recentDays, 10);
+      if (!isNaN(v) && v >= 0) days = v;
+    } catch (_) {}
+    if (!days) return 3650 * 24 * 3600 * 1000;
+    return Math.max(DP_READ_TTL_MIN_MS, (days + 7) * 24 * 3600 * 1000);
+  }
+  // unread.v1 的计数口径版本（与 discover.js emitUnread 里写的 v 同步）。
+  // 口径变了缓存还是旧数字时，启动那次轮询要绕过 6h 节流立刻重算。
+  var DP_UNREAD_V = 2;
 
   function dpCachedUnread() {
     try {
@@ -9089,7 +9107,7 @@
   }
 
   function dpWriteUnread(n) {
-    try { localStorage.setItem(DP_UNREAD_KEY, JSON.stringify({ n: n, at: Date.now() })); } catch (_) {}
+    try { localStorage.setItem(DP_UNREAD_KEY, JSON.stringify({ n: n, at: Date.now(), v: DP_UNREAD_V })); } catch (_) {}
     try { window.dispatchEvent(new CustomEvent("ssd:unread-changed", { detail: n })); } catch (_) {}
   }
 
@@ -9104,7 +9122,11 @@
       if (notifyMuted()) return Promise.resolve(0); // §6.4: muted → skip poll, hide badge
       var last = 0;
       try { last = ((JSON.parse(localStorage.getItem(DP_POLL_KEY) || "null") || {}).lastAt) || 0; } catch (_) {}
-      proceed = force || !last || Date.now() - last >= DP_POLL_MIN_MS;
+      // 缓存里的值是旧口径算的（比如那会儿过期已读还在当已读）→ 不受 6h 节流
+      // 限制，启动就重算一次，否则角标会一直顶着个错数字。
+      var cachedV = 0;
+      try { cachedV = ((JSON.parse(localStorage.getItem(DP_UNREAD_KEY) || "null") || {}).v) || 0; } catch (_) {}
+      proceed = force || !last || Date.now() - last >= DP_POLL_MIN_MS || cachedV !== DP_UNREAD_V;
     } catch (_) {}
     if (!proceed) return Promise.resolve(dpCachedUnread());
 
@@ -9213,6 +9235,11 @@
     }).then(function (results) {
       var marks = {};
       try { marks = ((JSON.parse(localStorage.getItem(DP_READ_KEY) || "null") || {}).marks) || {}; } catch (_) {}
+      var marksAt = Date.now(), readTtl = dpReadTtlMs();
+      function readFresh(key) {
+        var at = marks[key];
+        return !!at && (marksAt - at) <= readTtl;
+      }
       // skipPrev / today 已在查询前算好：续页判定和计数必须同一口径。
       var today = pollToday;
       // 忽略记录（§5.1 第 2 处）：页面看不见了但红点还在数 = 最典型的"忽略了还提醒"
@@ -9231,7 +9258,7 @@
           if (skipPrev && sc.release_date && sc.release_date > today) return;
           var sceneKey = r.ep + ":" + String(sc.id || "").toLowerCase();
           if (ignScenes[sceneKey]) return;
-          if (marks[sceneKey]) return;
+          if (readFresh(sceneKey)) return;
           // 关注页的管线会剔除「本地已拥有」的场景（stash_id 键 + code 键）。
           // 角标不剔除的话就是「角标 2、关注页一片空白」（用户 2026-11-02）。
           if (snap) {
@@ -9411,6 +9438,11 @@
         var h = function (e) { _navUnread = (e && e.detail) || 0; s[1](_navUnread); };
         var off = function () { s[1](-1); };
         var loc = function () { lc[1](function (v) { return v + 1; }); }; // functional bump: the closure's lc[0] goes stale after the first fire
+        // 启动轮询可能在导航项挂载之前就跑完并发了事件；那样这次事件白丢，
+        // 角标会一直顶着挂载前读到的旧缓存，直到下次事件（用户 2026-11-06
+        // 「打开 Stash 只显示一个未读」）。挂载时补读一次当前缓存。
+        var cur = dpCachedUnread();
+        if (cur !== _navUnread) { _navUnread = cur; s[1](cur); }
         window.addEventListener("ssd:unread-changed", h);
         window.addEventListener("ssd:discover-disabled", off);
         window.addEventListener("ssd:locale-changed", loc);

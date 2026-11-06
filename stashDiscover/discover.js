@@ -1371,7 +1371,15 @@
   // ── 关注 store（§6.1 轻量订阅，localStorage；P5 补轮询/收藏导入）────────
   var FOLLOW_KEY = "SSD:dp:follow.v1";
   var READ_KEY = "SSD:dp:read.v1";
-  var READ_TTL_MS = 7 * 24 * 3600 * 1000; // §6.4 已读 7 天过期
+  // 已读过期必须晚于回看窗口：窗口内读过的场景若按 7 天清掉，会重新变未读
+  // （用户 2026-11-06）。取「窗口 + 7 天」作缓冲；窗口设为不限（0）时给 10 年
+  // —— 等于不过期（场景始终在数据集里），但留个上限防 marks 无限增长。
+  var READ_TTL_MIN_MS = 7 * 24 * 3600 * 1000;
+  function readTtlMs() {
+    var days = dpRecentDays();
+    if (!days) return 3650 * 24 * 3600 * 1000;
+    return Math.max(READ_TTL_MIN_MS, (days + 7) * 24 * 3600 * 1000);
+  }
 
   function followStore() {
     try {
@@ -1403,6 +1411,17 @@
   // 几百次纯属白费（就地刷新计数后调用量还会涨）。写入一律走 readMark，改的是
   // 同一个对象，不会读到旧值。
   var _readCache = null;
+  // 过期清理必须挂在**读**路径上。以前只在 readMark 里清 —— 于是一批「7 天前
+  // 读过的」记录会一直算已读，角标和关注页都少报，直到用户又点开任意一条（触发
+  // readMark）才一次性删掉过期项、计数突然跳回真实值（用户 2026-11-06 线上：
+  // 打开 Stash 只显示 1 个未读，点开一条场景再关掉弹窗才变成 33）。
+  function pruneRead(st) {
+    var now = Date.now(), ttl = readTtlMs(), dirty = false;
+    Object.keys(st.marks).forEach(function (k) {
+      if (now - st.marks[k] > ttl) { delete st.marks[k]; dirty = true; }
+    });
+    return dirty;
+  }
   function readStore() {
     if (_readCache) return _readCache;
     try {
@@ -1410,6 +1429,9 @@
       var o = raw ? JSON.parse(raw) : null;
       _readCache = (o && typeof o === "object" && o.marks) ? o : { marks: {} };
     } catch (_) { _readCache = { marks: {} }; }
+    if (pruneRead(_readCache)) {
+      try { localStorage.setItem(READ_KEY, JSON.stringify(_readCache)); } catch (_) {}
+    }
     return _readCache;
   }
   function sceneKey(endpoint, sceneId) { return String(endpoint).toLowerCase() + ":" + String(sceneId).toLowerCase(); }
@@ -1417,8 +1439,7 @@
   function readMark(endpoint, sceneId) {
     var st = readStore(), now = Date.now();
     st.marks[sceneKey(endpoint, sceneId)] = now;
-    // 顺手清 7 天过期（§6.4 兜底）
-    Object.keys(st.marks).forEach(function (k) { if (now - st.marks[k] > READ_TTL_MS) delete st.marks[k]; });
+    pruneRead(st);   // 顺手清过期项（§6.4 兜底）
     try { localStorage.setItem(READ_KEY, JSON.stringify(st)); } catch (_) {}
   }
   function readMarkAll(pairs) {
@@ -1441,8 +1462,10 @@
   }
   function emitUnread() {
     var n = computeUnread();
-    // 持久化轮询同款缓存（unread.v1）：主 JS 导航角标硬刷新后用它恢复初值
-    try { localStorage.setItem("SSD:dp:unread.v1", JSON.stringify({ n: n, at: Date.now() })); } catch (_) {}
+    // 持久化轮询同款缓存（unread.v1）：主 JS 导航角标硬刷新后用它恢复初值。
+    // v = 计数口径版本，主 JS 的 DP_UNREAD_V 必须同步 —— 口径改过而缓存还是旧
+    // 数字时，靠版本号让启动轮询跳过 6h 节流、立刻重算一次。
+    try { localStorage.setItem("SSD:dp:unread.v1", JSON.stringify({ n: n, at: Date.now(), v: 2 })); } catch (_) {}
     try { window.dispatchEvent(new CustomEvent("ssd:unread-changed", { detail: n })); } catch (_) {}
   }
 
@@ -3515,6 +3538,41 @@
   }
 
   // ── 关注视图（§3.4：分组 + 未读标记 + 全部已读 + 空状态；P5 补数据层）──
+  // 展开某位演员后，把他的分组头顶到视口最上面（用户 2026-11-06）。
+  // 手风琴是单开：展开 B 会同时折叠上面的 A，页面高度骤减而浏览器仍保持原
+  // scrollTop → B 的整块内容跑到屏幕上方之外，翻得越多偏得越离谱（移动端一屏
+  // 只放得下两三个分组，最明显）。render() 重建 DOM 之后按 data-stash-id 找回
+  // 新节点，把头的 top 对到吸顶偏移下面。
+  function stickGroupTop(stashId) {
+    var host = _dp.refs.content;
+    if (!host) return;
+    var node = null;
+    var list = host.querySelectorAll(".ssd-dp-fgrp");
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].getAttribute("data-stash-id") === stashId) { node = list[i]; break; }
+    }
+    if (!node) return;
+    var head = node.querySelector(".ssd-dp-fgrp-head") || node;
+    var rect = head.getBoundingClientRect();
+    // 顶栏是 fixed；多选态下工具栏也吸顶，两者都不能把分组头压在下面
+    var off = 0;
+    try {
+      off = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ssd-stick-top")) || 0;
+    } catch (_) {}
+    var bars = document.querySelectorAll(".ssd-dp-toolbar, .ssd-tab-pane .filtered-list-toolbar");
+    for (var j = 0; j < bars.length; j++) {
+      var cs = getComputedStyle(bars[j]);
+      if (cs.position !== "sticky" && cs.position !== "fixed") continue;
+      var br = bars[j].getBoundingClientRect();
+      if (br.height && br.top <= off + 4) off = Math.max(off, br.bottom);
+    }
+    var delta = rect.top - off - 8;
+    if (Math.abs(delta) < 8) return;          // 已经贴顶，别为几像素抖一下
+    var y = Math.max(0, window.scrollY + delta);
+    try { window.scrollTo({ top: y, behavior: "auto" }); }
+    catch (_) { window.scrollTo(0, y); }
+  }
+
   function renderFollow(c) {
     var d = _dp.d.latest;
     var allFollow = followList();
@@ -3662,8 +3720,11 @@
       var isOpen = !!g && _dp.followOpenKey === String(f.stashId);
       var toggleRow = function () {
         if (!g) return;
-        _dp.followOpenKey = isOpen ? null : String(f.stashId);
+        var open = !isOpen;
+        _dp.followOpenKey = open ? String(f.stashId) : null;
         render();
+        // 只在展开时定位：折叠时这一组的头本来就在原处，强行滚会白跳一下
+        if (open) stickGroupTop(String(f.stashId));
       };
       // 展开箭头：SVG chevron（字符 ▸ 在 13px 下笔画太细，各平台渲染还不一致），
       // 收起朝右 / 展开朝下，靠旋转过渡

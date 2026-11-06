@@ -441,3 +441,25 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   不是 `network`。
 - **别拿 uri 的 `hostname` 拼改写地址**：`http://host:8080` 的 `hostname` 不含端口，
   换 scheme 后拼出来的地址是错的。用 `u.host`，`www.` 替换也在 `host` 上做。
+- **已读过期（7 天）必须挂在读路径上**：只在 `readMark` 里 prune 的话，一批过期记录
+  会一直算「已读」，角标和关注页都少报，直到用户又标记一条才一次性删干净 —— 表现为
+  「打开 Stash 只有 1 个未读，点开随便一条场景再关掉弹窗突然变 33」（用户 2026-11-06
+  线上）。现在 `readStore()`（首次读）和 `readMark()` 都调 `pruneRead()`；轮询
+  `dpPollFollowed` 自己也 parse `read.v1`，不走 readStore，所以那边要用
+  `readFresh()` 按 `DP_READ_TTL_MS` 再判一次 —— 两处 TTL 必须同值。
+- **计数口径改过之后要让旧缓存失效**：`unread.v1` 存了 `v`（口径版本），启动轮询发现
+  `v !== DP_UNREAD_V` 就绕过 6h 节流立刻重算，否则用户升级后角标会一直顶着旧数字。
+  `discover.js` 的 `emitUnread` 与 `stashDiscover.js` 的 `dpWriteUnread` 两处都要写 v。
+- **关注页手风琴展开后要手动定位**：单开模式下展开 B 会折叠上面的 A，页面高度骤减而
+  浏览器保持 scrollTop → B 整块跑到视口上方之外。`toggleRow()` 里 render 之后按
+  `data-stash-id` 找回新节点、把 head 顶到 `--ssd-stick-top` 下面（`stickGroupTop`）。
+  只在**展开**时定位，折叠时不滚。判据：给 body 加临时 `padding-bottom` 造出滚动空间，
+  展开后 head 的 `getBoundingClientRect().top` 应约等于 stick-top + 8。
+- **已读 TTL 必须 ≥ 回看窗口**：固定 7 天会让「窗口内、7 天前点开过」的场景重新变未读，
+  角标无故上涨（用户 2026-11-06）。取「窗口 + 7 天」，窗口设为不限（0）时给 10 年
+  （等于不过期，但防 marks 无限增长）。两处必须同口径：`discover.js` 的 `readTtlMs()`
+  和 `stashDiscover.js` 的 `dpReadTtlMs()` —— 轮询直接 parse `read.v1`，不走页面
+  `readStore()`，漏一处就是「页面已读、角标未读」。
+- **导航角标不能只在事件到时更新**：启动轮询可能在导航项挂载前就写完缓存并发了
+  `ssd:unread-changed`，这次事件没有监听者 → 角标一直显示挂载前读到的旧缓存。
+  `DiscoverNavItem` 的 `useEffect` 里要再读一次 `dpCachedUnread()` 比对。

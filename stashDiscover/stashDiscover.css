@@ -3658,6 +3658,62 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 }
 .ssd-dp-setsel:focus { border-color: var(--sx-acc); }
 .ssd-dp-setsel.num { width: 88px; }
+/* 设置页下拉的自定义浮层（discover.js enhanceSettingSelects）：
+   原生 select 的弹层在靠近视口底部时会整块跑出屏幕，且不会自动向上翻。 */
+.ssd-dp-nsel-off { display: none; }   /* 原生节点只当值与事件来源 */
+.ssd-dp-nsel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 30px;
+  font-family: inherit;
+  text-align: left;
+}
+/* 补回下拉三角：原生 select 隐藏后没地方借这个形状 */
+.ssd-dp-nsel-btn::after {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 4.5px solid currentColor;
+  opacity: 0.55;
+}
+.ssd-dp-nsel-panel {
+  position: fixed;
+  z-index: 30000;   /* 高于 .ssd-dp-modal 覆盖层(20000)，低于图片预览(99999) */
+  overflow: auto;
+  padding: 4px;
+  /* 面板挂在 body 上，不在 .ssd-dp-page 里 → 拿不到那里统一设的 border-box，
+     宽度必须自己按 border-box 算，否则 JS 算出的 45px 实际渲染成 55px */
+  box-sizing: border-box;
+  /* 兜底色：面板挂在 body 上，主题变量由 JS 从页面根内联过来；
+     万一读不到（插件还没注入 scope）也不至于透明 */
+  background: var(--sx-ui2, #343331);
+  border: 1px solid var(--sx-ui3, #403E3C);
+  color: var(--sx-tx, #cecdc3);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+}
+.ssd-dp-nsel-opt {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--sx-tx);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ssd-dp-nsel-opt.on { color: var(--sx-acc); font-weight: 600; }
+.ssd-dp-nsel-opt.act,
+.ssd-dp-nsel-opt:hover { background: var(--sx-ui3); }
 .ssd-dp-btn.sm { padding: 4px 9px; font-size: 12px; }
 /* 设置页的入口按钮（已忽略管理 / 入库字段的场景·演员）要和同一行的下拉框
    一样大（用户 2026-10-29）：下拉实测 30px 高，按钮基础样式是 34px（7px

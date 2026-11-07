@@ -937,7 +937,8 @@
     latest.sort(function (a, b) { return String(b.scene.release_date || "").localeCompare(String(a.scene.release_date || "")); });
     preview.sort(function (a, b) { return String(a.scene.release_date || "").localeCompare(String(b.scene.release_date || "")); });
 
-    // 每人上限 2（§4.3：总览模块 + 最新钻取保留；热门不受限）
+    // 每人 capPerActor()（§4.3：总览模块 + 最新/预告钻取；热门与过滤页不受限）。
+    // 非严格上限：多演员同场整条保留，单人实际可出现更多（见设置页注释）
     function capByActor(list) {
       var n = {};
       return list.filter(function (it) {
@@ -1224,7 +1225,8 @@
         if (b.items.length !== a.items.length) return b.items.length - a.items.length;
         return String(b.newest).localeCompare(String(a.newest));
       });
-      // §4.6 每工作室上限 2（总览模块 + 钻取均保留；分组计数不受限）
+      // 每工作室 capPerStudio()（总览模块与工作室钻取列表按它截断；
+      // 分组计数与工作室过滤页不受限）
       var n = {};
       var capped = items.filter(function (it) {
         var stId2 = it.scene.studio ? String(it.scene.studio.id) : "";
@@ -2579,10 +2581,10 @@
       return;
     }
     if (id === "latest") {
-      // 模块：最新发布（原生场景卡，每人 cap 2）
+      // 模块：最新发布（原生场景卡，按 capPerActor() 截断）
       var s2 = sec(parent, {
         icon: I.latest, title: tc("最新发布", "Latest"), mod: "latest",
-        count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 2 部", (d.latest || []).length + " unowned · max 2 per performer") : "",
+        count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 " + capPerActor() + " 部", (d.latest || []).length + " unowned · max " + capPerActor() + " per performer") : "",
         more: function () { switchView("latest"); },
       });
       if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
@@ -2616,7 +2618,7 @@
     if (id === "preview") {
       var s4 = sec(parent, {
         icon: I.preview, title: tc("即将发布", "Upcoming"), mod: "preview",
-        count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length) : "",
+        count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部 · 每人最多 " + capPerActor() + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length + " · max " + capPerActor() + " per performer") : "",
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
@@ -2631,10 +2633,10 @@
       return;
     }
     if (id === "studios") {
-      // 模块：工作室新发布（收藏工作室，cap 2/工作室）
+      // 模块：工作室新发布（收藏工作室，按 capPerStudio() 截断）
       var s5 = sec(parent, {
         icon: I.studios, title: tc("工作室新发布", "Studio releases"), mod: "studios",
-        count: st ? tc((st.studioCount || 0) + " 个收藏工作室 · 每工作室最多 2 部", (st.studioCount || 0) + " favorites · max 2 per studio") : "",
+        count: st ? tc((st.studioCount || 0) + " 个收藏工作室 · 每工作室最多 " + capPerStudio() + " 部", (st.studioCount || 0) + " favorites · max " + capPerStudio() + " per studio") : "",
         more: function () { switchView("studios"); },
       });
       if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", _dp.err.studios ? errText(_dp.err.studios) : null, function () { retryDataset("studios"); });
@@ -4620,6 +4622,172 @@
     else backId = SSD.modalBack.hold(close);
   }
 
+  // ── 设置页下拉增强（用户 2026-11-07 截图反馈）──────────────────────────
+  // 原生 <select> 的弹层不受页面控制：控件靠近视口底部时，列表整块跑到屏幕外，
+  // 既不会自动向上翻、也不会被裁进可视区，最后几项点不到。
+  // 做法：包成「按钮 + fixed 浮层」，下方空间不够就向上展开，并且高度限制在
+  // 可用空间内、内部滚动。原生 select 仍留在 DOM 当值与事件的唯一来源
+  // （sel.value 读写、dispatchEvent("change") 照旧），只是 display:none。
+  var _nsel = null;   // 打开中的面板 { panel, btn, sel, onDoc, onKey }
+
+  function nselClose() {
+    var o = _nsel;
+    if (!o) return;
+    _nsel = null;
+    if (o.panel.parentNode) o.panel.parentNode.removeChild(o.panel);
+    o.btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", o.onDoc, true);
+    window.removeEventListener("resize", o.onDoc, true);
+    window.removeEventListener("scroll", o.onDoc, true);
+    document.removeEventListener("keydown", o.onKey, true);
+  }
+
+  // 按钮宽度按「最长选项文本」算。原先照抄原生 select 的宽度 +20，纯数字
+  // （1～10 / 行数 1～3）那种下拉会继承 select 自带的箭头留白，框比文字宽一倍；
+  // 换成隐藏原生节点后反而没有可参考的宽度了，所以直接量文本。
+  var _nselCv = null;
+  function nselFit(sel, btn) {
+    var cs = getComputedStyle(btn);
+    var max = 0;
+    _nselCv = _nselCv || document.createElement("canvas");
+    var ctx = _nselCv.getContext ? _nselCv.getContext("2d") : null;
+    if (ctx) {
+      ctx.font = (cs.fontWeight || "400") + " " + (cs.fontSize || "12.5px") + " " +
+        (cs.fontFamily || "sans-serif");
+    }
+    Array.prototype.forEach.call(sel.options, function (op) {
+      var t = op.textContent || "";
+      var w = ctx ? ctx.measureText(t).width : t.length * 7;
+      if (w > max) max = w;
+    });
+    // 文字 + 左右 padding(8×2) + 三角(7) + gap(6) + 边框(2)
+    btn.style.minWidth = Math.max(44, Math.ceil(max) + 31) + "px";
+  }
+
+  function enhanceSettingSelects(root) {
+    nselClose();   // 页面重建 → 旧面板指向已移除的节点
+    Array.prototype.forEach.call(root.querySelectorAll("select"), function (sel) {
+      if (sel._nselSync) return;
+      var btn = el("button", "ssd-dp-setsel ssd-dp-nsel-btn");
+      btn.type = "button";
+      var aria = sel.getAttribute("aria-label");
+      if (aria) btn.setAttribute("aria-label", aria);
+      btn.setAttribute("aria-haspopup", "listbox");
+      btn.setAttribute("aria-expanded", "false");
+
+      var sync = function () {
+        var op = sel.options[sel.selectedIndex];
+        btn.textContent = op ? op.textContent : "";
+      };
+      sel._nselSync = sync;
+      sync();
+
+      function open() {
+        nselClose();
+        sync();
+        var rect = btn.getBoundingClientRect();
+        var panel = el("div", "ssd-dp-nsel-panel");
+        panel.setAttribute("role", "listbox");
+        if (aria) panel.setAttribute("aria-label", aria);
+        var opts = [];
+        Array.prototype.forEach.call(sel.options, function (op) {
+          var it = el("button", "ssd-dp-nsel-opt" + (op.value === sel.value ? " on" : ""));
+          it.type = "button";
+          it.textContent = op.textContent;
+          it.setAttribute("role", "option");
+          it.setAttribute("aria-selected", op.value === sel.value ? "true" : "false");
+          it.addEventListener("click", function () {
+            var changed = sel.value !== op.value;
+            nselClose();
+            if (changed) {
+              sel.value = op.value;
+              sel.dispatchEvent(new Event("change"));
+            }
+            sync();
+          });
+          opts.push(it);
+          panel.appendChild(it);
+        });
+        // 面板挂在 body 上，不在 .ssd-dp-page 里 → 那套 --sx-* 主题变量取不到
+        // （弹窗也是这么挂的，所以 .ssd-modal 里单独补了一份）。这里从页面根
+        // 读实际值再内联到面板，深浅主题都不用再复制一份变量表。
+        // 只带面板样式中真正用到的那几个（底色/边框、正文色、强调色）。
+        var themeRoot = document.querySelector(".ssd-dp-page") || document.body;
+        var trs = getComputedStyle(themeRoot);
+        ["--sx-ui2", "--sx-ui3", "--sx-tx", "--sx-acc"].forEach(function (k) {
+          var v = trs.getPropertyValue(k);
+          if (v && v.trim()) panel.style.setProperty(k, v.trim());
+        });
+        document.body.appendChild(panel);
+
+        // 定位：默认向下；下方不足 140px 且上方更宽裕时向上翻
+        var gap = 6, edge = 8;
+        var below = window.innerHeight - rect.bottom - gap - edge;
+        var above = rect.top - gap - edge;
+        var up = below < 140 && above > below;
+        // 高度上限 340：设置页最长的是 1～10 的数值列表（10×31+8≈318），
+        // 一屏放得下就不用滚；放不下时由 maxHeight + overflow 兜住
+        var maxH = Math.min(340, Math.max(90, up ? above : below));
+        panel.style.maxHeight = maxH + "px";
+        var pw = Math.min(Math.round(rect.width), window.innerWidth - edge * 2);
+        panel.style.width = pw + "px";
+        var ph = Math.min(panel.scrollHeight, maxH);
+        // 横向贴按钮左缘：面板宽度恒等于按钮宽度（见 nselFit），贴着左缘就等于
+        // 桌面那种「右缘对齐」；窄屏控件整行左排，这个方向也正好是想要的方向。
+        // 只有按钮本身宽过视口（理论上的超长选项文案）才会被 clamp 挪进来。
+        var left = Math.max(edge, Math.min(rect.left, window.innerWidth - pw - edge));
+        var top = up ? rect.top - ph - 4 : rect.bottom + 4;
+        top = Math.max(edge, Math.min(top, window.innerHeight - ph - edge));
+        panel.style.left = Math.round(left) + "px";
+        panel.style.top = Math.round(top) + "px";
+
+        var idx = -1;
+        opts.forEach(function (o, i) { if (o.classList.contains("on")) idx = i; });
+        var act = function (n) {
+          if (!opts.length) return;
+          idx = (n + opts.length) % opts.length;
+          opts.forEach(function (o, i) { o.classList.toggle("act", i === idx); });
+          opts[idx].scrollIntoView({ block: "nearest" });
+        };
+        if (idx >= 0) opts[idx].scrollIntoView({ block: "nearest" });
+
+        // 点外部 / 滚动 / 改窗口大小 → 关。面板自身滚动不算（里面的列表要能滚）
+        var onDoc = function (ev) {
+          if (ev.type === "scroll") {
+            if (!panel.contains(ev.target)) nselClose();
+            return;
+          }
+          if (panel.contains(ev.target) || btn.contains(ev.target)) return;
+          nselClose();
+        };
+        var onKey = function (ev) {
+          if (ev.key === "Escape") { nselClose(); btn.focus(); return; }
+          if (ev.key === "ArrowDown") { ev.preventDefault(); act(idx + 1); return; }
+          if (ev.key === "ArrowUp") { ev.preventDefault(); act(idx - 1); return; }
+          if ((ev.key === "Enter" || ev.key === " ") && idx >= 0 && opts[idx]) {
+            ev.preventDefault();
+            opts[idx].click();
+          }
+        };
+        document.addEventListener("mousedown", onDoc, true);
+        window.addEventListener("resize", onDoc, true);
+        window.addEventListener("scroll", onDoc, true);
+        document.addEventListener("keydown", onKey, true);
+        _nsel = { panel: panel, btn: btn, sel: sel, onDoc: onDoc, onKey: onKey };
+        btn.setAttribute("aria-expanded", "true");
+      }
+
+      btn.addEventListener("click", function () {
+        if (_nsel && _nsel.sel === sel) { nselClose(); return; }
+        open();
+      });
+
+      sel.parentNode.insertBefore(btn, sel.nextSibling);
+      sel.classList.add("ssd-dp-nsel-off");
+      nselFit(sel, btn);
+    });
+  }
+
   function renderSettings(c) {
     var prefs = dpPrefs();
     var wrap = el("div", "ssd-dp-settings");
@@ -4859,6 +5027,8 @@
     function syncBadgeSelects() {
       selStudio.value = dpStudioBadge();
       selPos.value = dpBadgePos();
+      // 自定义下拉的按钮文字要跟着走：直接改 value 不会触发 change
+      [selStudio, selPos].forEach(function (s) { if (s._nselSync) s._nselSync(); });
     }
 
     // 段末范围说明：这条讲的是上面三项的生效范围，不是「显示时长角标」的注释
@@ -4869,9 +5039,15 @@
     wrap.appendChild(secB);
 
     // ── 总览与列表上限（每位演员 / 每个工作室）— 用户 2026-10-25 第七轮 ──
-    // 标题不再叫「显示上限」（用户 2026-11-07）：那两个「最多场景」不只管总览模块，
-    // 最新 / 工作室钻取、演员与工作室过滤页都按它截断，光写「显示上限」会被当成
-    // 全局条数开关。也不写「总览显示上限」——那会漏掉钻取与过滤页。
+    // 作用范围（2026-11-07 实测，别再照着旧注释想）：
+    //   生效 —— 总览「最新发布 / 即将发布 / 工作室新发布」三个模块，以及最新（含预告子
+    //           tab）、工作室两个钻取列表；
+    //   不生效 —— 点开某位演员 / 某个工作室的过滤页显示全部（那里是「看这个人全部新作」
+    //           的地方，再截断就失去意义），热门榜、发现演员也不受它管。
+    // 命名：不写「显示上限」会被当成全局条数开关；不写「总览显示上限」又会漏掉两个钻取列表，
+    // 所以取「总览与列表上限」。
+    // 口径：不是严格上限 —— 多演员同场只保留一次整条场景，单人实际可能多于设定值
+    // （实测 cap=2 时单个演员最多出现 7～8 部）。保留该算法是为了不误删别人的唯一作品。
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("总览与列表上限", "Overview and list limits")));
     var secC = el("div", "ssd-dp-set-box");
     [
@@ -5024,6 +5200,26 @@
       render();
     });
     wrap.appendChild(reset);
+
+    // 无障碍：设置页下拉统一补 aria-label —— 屏幕阅读器只念 value（「2」「左上」），
+    // 听不出是哪个设置。名称取同行标题（设置项 .ssd-dp-setname / 模块行 .ssd-dp-settoggle
+    // 的文字），同一行有多列控件时再拼该列的 .ssd-dp-tool-label（如「行数」）。
+    // 一次性遍历覆盖全部下拉，新增设置项不必再单独加（用户 2026-11-07）。
+    Array.prototype.forEach.call(wrap.querySelectorAll("select"), function (sel) {
+      if (sel.getAttribute("aria-label")) return;
+      var row = sel.closest(".ssd-dp-setrow");
+      if (!row) return;
+      var nameEl = row.querySelector(".ssd-dp-setname") || row.querySelector(".ssd-dp-settoggle span");
+      var ctl = sel.closest(".ssd-dp-setctl");
+      var ctlLabel = ctl && ctl.querySelector(".ssd-dp-tool-label");
+      var nm = [
+        nameEl ? nameEl.textContent.replace(/\s+/g, " ").trim() : "",
+        ctlLabel ? ctlLabel.textContent.replace(/\s+/g, " ").trim() : "",
+      ].filter(Boolean).join(" ");
+      if (nm) sel.setAttribute("aria-label", nm);
+    });
+    // 下拉增强放在 aria 之后：enhance 会把 aria-label 复制到按钮上
+    enhanceSettingSelects(wrap);
 
     c.appendChild(wrap);
   }

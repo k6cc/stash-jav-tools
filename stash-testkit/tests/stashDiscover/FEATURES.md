@@ -203,3 +203,20 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
   改为按 `modalBody().scrollTop` 算最小位移，只在加载行落到视口外时动。不做悬浮、不贴顶。
 - **实测**（发现页真实卡片 + 真 Jackett 搜索，连搜两次）：`alts` 恒为 1 且 `altsInBox=1`；
   搜索中 `goDisabled=true`；点备选按钮后 `loading=true`、`visible=yes`、`alts=0`、输入框自动变成该词。
+
+## Whisparr 质量档案改显式选择（2026-11-09 实测）
+
+- **为什么改**：原来 `next(允许 Unknown 的档案, 第一个)` 是给 JAV 兜底的，但会静默覆盖用户自己的档案。
+  用户只要列表里存在任一允许 Unknown 的档案，选中的就不是他配的那个，而且不提示。
+- **新行为**：发现页 → 设置 → 「推送质量档案」下拉，列出 `GET /api/v3/qualityprofile` 的真实档案
+  （不硬编码 720p/1080p）；值存 `prefs.whisparrProfile`（档案 id）；空 = 自动 → `Any` → id 最小。
+  找不到用户选的那个（改名/删档）按同一回退，并在 toast 里写明用了哪个。
+- **显隐**：Whisparr 未配置时整组不显示（与场景弹窗那颗按钮同判据）；接口失败则显示并给「重试」，
+  不整组消失。
+- **实测**（假 Whisparr + 真 Stash 页面）：
+  - 下拉渲染：`自动（Any）| 1:Any | 3:HD-720p | 4:HD-1080p | 15:JAV (allow Unknown)`
+  - 选中 4 → `localStorage SSD:dp:prefs.whisparrProfile === "4"`；归零后可回到 `""`
+  - stashdb 场景弹窗点「Whisparr」→ POST 体 `qualityProfileId: 4`，按钮变「已发送」，
+    toast = `已发送到 Whisparr（HD-1080p）`（390px 宽下自动折两行，不截断）
+  - 单元（假服务）覆盖：auto→Any、指定 8→8、指定 99→回退 Any 且 `fallback:true`、
+    无 Any 档案→id 最小、英文文案

@@ -4822,6 +4822,112 @@
     });
   }
 
+  // ─── Whisparr 推送质量档案（用户 2026-11-09）──────────────────────────────
+  // 选项来自 Whisparr 自己的档案列表，不硬编码 720p/1080p：Whisparr 的清晰度
+  // 是档案内容的一部分，写死档位就得猜「1080p 对应哪个档案名」，猜不中只能
+  // 静默回退；列真档案则改啥名跟啥名。值（档案 id）存 prefs.whisparrProfile，
+  // 场景弹窗（主 JS）同源读同一份，发现页关掉也照旧生效。
+  var _wsp = { loading: false, fetched: false, configured: false, profiles: [], error: "" };
+
+  function whisparrProfileId() {
+    var p = dpPrefs();
+    return p.whisparrProfile ? String(p.whisparrProfile) : "";
+  }
+
+  function loadWhisparrProfiles(cb) {
+    if (_wsp.loading) return;
+    _wsp.loading = true;
+    function done(out, err) {
+      _wsp.loading = false;
+      _wsp.fetched = true;
+      if (err) {
+        // 调用失败 ≠ 没配置：显示出来并报错，别整组消失让人以为功能没了
+        _wsp.configured = true;
+        _wsp.profiles = [];
+        _wsp.error = err;
+      } else {
+        _wsp.configured = !!(out && out.configured);
+        _wsp.profiles = (out && out.profiles) || [];
+        _wsp.error = (out && out.error) || "";
+      }
+      if (cb) cb();
+    }
+    if (!SSD.runPluginOp) { done(null, tc("插件未就绪，刷新页面再试", "Plugin not ready — reload the page")); return; }
+    SSD.runPluginOp({ mode: "whisparr_profiles" }).then(function (r) {
+      var out = r;
+      if (typeof out === "string") { try { out = JSON.parse(out); } catch (_) { out = null; } }
+      done(out || {}, "");
+    }).catch(function (e) {
+      done(null, (e && e.message) || String(e));
+    });
+  }
+
+  function fillWhisparrSettings(host) {
+    if (!host) return;
+    function paint() {
+      host.innerHTML = "";
+      if (_wsp.fetched && !_wsp.configured) { host.style.display = "none"; return; }
+      host.style.display = "";
+      host.appendChild(el("h3", "ssd-dp-set-h", "Whisparr"));
+      var box = el("div", "ssd-dp-set-box");
+      var row = el("div", "ssd-dp-setrow");
+      row.appendChild(el("span", "ssd-dp-setname", tc("推送质量档案", "Quality profile for pushes")));
+
+      if (!_wsp.fetched) {
+        row.appendChild(el("span", "ssd-dp-sethint", tc("读取中…", "Loading…")));
+        box.appendChild(row);
+        host.appendChild(box);
+        return;
+      }
+      if (_wsp.error) {
+        var retry = el("button", "ssd-dp-btn solid ssd-dp-setbtn", tc("重试", "Retry"));
+        retry.type = "button";
+        retry.addEventListener("click", function () {
+          _wsp.fetched = false;
+          paint();
+          loadWhisparrProfiles(paint);
+        });
+        row.appendChild(retry);
+        box.appendChild(row);
+        box.appendChild(el("div", "ssd-dp-sethint",
+          tc("读不到档案列表：", "Could not read the profile list: ") + _wsp.error));
+        host.appendChild(box);
+        return;
+      }
+
+      var sel = document.createElement("select");
+      sel.className = "ssd-dp-setsel";
+      var auto = document.createElement("option");
+      auto.value = "";
+      // 「自动」= 后端回退链：先找名字叫 Any 的档案，再退到 id 最小的那个
+      auto.textContent = tc("自动（Any）", "Automatic (Any)");
+      sel.appendChild(auto);
+      _wsp.profiles.forEach(function (p) {
+        var op = document.createElement("option");
+        op.value = String(p.id);
+        op.textContent = p.name || ("#" + p.id);
+        sel.appendChild(op);
+      });
+      var cur = whisparrProfileId();
+      sel.value = cur && _wsp.profiles.some(function (p) { return String(p.id) === cur; }) ? cur : "";
+      sel.addEventListener("change", function () {
+        if (!dpSetPrefs({ whisparrProfile: sel.value })) {
+          settingsWarn(host.parentNode || host, tc(
+            "保存失败：本地存储已满，请先在设置里「重置」清出空间。",
+            "Could not save: local storage is full — reset the settings to free space first."));
+        }
+      });
+      row.appendChild(sel);
+      box.appendChild(row);
+      box.appendChild(el("div", "ssd-dp-sethint", tc(
+        "仅对 stashdb.org 源的场景生效。清晰度由 Whisparr 的档案决定；列表里没有想要的档案，先去 Whisparr 里建。",
+        "Only for scenes from stashdb.org. Quality comes from the Whisparr profile — add the profile in Whisparr first if it's missing here.")));
+      host.appendChild(box);
+    }
+    paint();
+    if (!_wsp.fetched && !_wsp.loading) loadWhisparrProfiles(paint);
+  }
+
   function renderSettings(c) {
     var prefs = dpPrefs();
     var wrap = el("div", "ssd-dp-settings");
@@ -4978,6 +5084,15 @@
     rowI.appendChild(makeImportButton());
     secG.appendChild(rowI);
     wrap.appendChild(secG);
+
+    // ── Whisparr（用户 2026-11-09）──────────────────────────────────────────
+    // 只对 stashdb.org 源的场景生效。Whisparr 加片必须带 qualityProfileId ——
+    // 它的「清晰度」是档案的一部分，插件没法单独指定 720p/1080p，所以这一项的
+    // 实质是「挑哪个档案」。没配置 Whisparr 时整组不显示，判据与场景弹窗里那颗
+    // 发送按钮一致（都看 URL/Key 有没有填）。
+    var wspHost = el("div", "ssd-dp-set-wrap");
+    wrap.appendChild(wspHost);
+    fillWhisparrSettings(wspHost);
 
     // ── 场景卡角标（用户 2026-10-28）─────────────────────────────────────
     // 三项都只切 CSS 属性，改完立即生效，不必重建卡片（重建会打断弹层与滚动位置）

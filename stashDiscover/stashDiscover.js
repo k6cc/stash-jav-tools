@@ -5399,6 +5399,24 @@
     setActLabel(btn, tc("已发送", "Sent"));
   }
 
+  // 推送要用的质量档案 = 发现页-设置里选的那个（值是档案 id）。读不到就留空，
+  // 后端按「Any → id 最小」回退。演员详情「发现」tab 同源，读的是同一份 prefs。
+  function whisparrProfilePref() {
+    try {
+      var p = JSON.parse(localStorage.getItem(DP_PREFS_KEY) || "null") || {};
+      return p.whisparrProfile ? String(p.whisparrProfile) : "";
+    } catch (_) { return ""; }
+  }
+
+  // 弹窗内的提示条只存在于「找资源」区里。Whisparr 推送不一定会先开搜索区，
+  // 那时 querySelector 拿不到宿主、文案会静默丢掉，所以退回底部 toast。
+  function noticeOrToast(text, type) {
+    var host = document.querySelector("[data-ssd-search-results]")
+      || document.querySelector("[data-ssd-search]");
+    if (host) { showModalNotice(text, type); return; }
+    dpToast(text, { duration: type === "error" ? 6000 : 4000, title: text });
+  }
+
   function handlePushWhisparr(item, btn) {
     var scene = (item && item.scene) || {};
     if (!scene.id || !btn || btn.disabled) return;
@@ -5409,14 +5427,18 @@
       stash_id: scene.id,
       title: scene.title || "",
       year: (scene.date || "").slice(0, 4),
+      profile: whisparrProfilePref(),
     }).then(function (r) {
       markWhisparrDone(btn);
-      if (r && r.message) showModalNotice(r.message, "info");
+      // 档案名放底部 toast，不进按钮：按钮上只留「已发送」，长档案名会顶出边框
+      if (r && r.message) {
+        dpToast(r.message, { duration: (r && r.fallback) ? 6000 : 4000, title: r.message });
+      }
     }).catch(function (e) {
       btn.disabled = false;
       setActLabel(btn, tc("发送失败", "Failed"));
       btn.classList.add("err");
-      showModalNotice((e && e.message) || tc("发送失败", "Send failed"), "error");
+      noticeOrToast((e && e.message) || tc("发送失败", "Send failed"), "error");
       setTimeout(function () {
         setActLabel(btn, tc("Whisparr", "Whisparr"));
         btn.classList.remove("err");
@@ -9109,6 +9131,8 @@
     version: PLUGIN_VERSION,
     // GraphQL
     callGQL: callGQL,
+    // 插件操作（自动带 lang）。发现页设置要拉 Whisparr 档案列表，复用它
+    runPluginOp: runPluginOp,
     // internal URL builder (respects sub-path deployments — see appUrl)
     appUrl: appUrl,
     callBoxGQL: callBoxGQL,

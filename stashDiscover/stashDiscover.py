@@ -768,19 +768,42 @@ def _whisparr_find(base, key, stash_id):
     return None, None
 
 
-def _allows_unknown(profile):
-    """质量档案是否显式允许 Unknown（JAV 种子只会解析成它）。"""
-    def walk(items):
-        for it in items or []:
-            if not isinstance(it, dict):
-                continue
-            q = it.get("quality") or {}
-            if (q.get("name") or "").lower() == "unknown" and it.get("allowed"):
-                return True
-            if walk(it.get("items")):
-                return True
-        return False
-    return walk(profile.get("items"))
+def _whisparr_profiles_fetch(base, key):
+    """GET /qualityprofile → (profiles, err)，profiles 按 id 升序。
+
+    原先这里有段「挑第一个允许 Unknown 的档案」的启发式，是给 JAV 用的；但它会
+    静默覆盖用户自己的档案（用户 2026-11-09 要求改成显式设置），已删。
+    档案现在由用户在发现页设置里选，值就是这里的 id。
+    """
+    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/qualityprofile")
+    if status != 200:
+        return [], (status, body)
+    try:
+        arr = json.loads(body) or []
+    except ValueError:
+        return [], (status, body)
+    out = []
+    for p in arr:
+        if not isinstance(p, dict) or p.get("id") is None:
+            continue
+        out.append({"id": p.get("id"), "name": (p.get("name") or "").strip()})
+    out.sort(key=lambda x: x["id"])
+    return out, None
+
+
+def do_whisparr_profiles(stash, zh=True):
+    """发现页设置用：列出可选的质量档案。没配置 Whisparr 时 configured=False。"""
+    base, key = _whisparr_cfg(stash.get_plugin_config())
+    if not base or not key:
+        emit_result({"mode": "whisparr_profiles", "configured": False, "profiles": []})
+        return
+    profiles, err = _whisparr_profiles_fetch(base, key)
+    if err:
+        emit_result({"mode": "whisparr_profiles", "configured": True, "ok": False,
+                     "profiles": [], "error": _whisparr_err(err[0], err[1], zh)})
+        return
+    emit_result({"mode": "whisparr_profiles", "configured": True, "ok": True,
+                 "profiles": profiles})
 
 
 def do_whisparr_status(stash, stash_id, zh=True):
@@ -802,7 +825,7 @@ def do_whisparr_status(stash, stash_id, zh=True):
                  "has_file": bool((movie or {}).get("hasFile"))})
 
 
-def do_push_whisparr(stash, stash_id, title, year, zh=True):
+def do_push_whisparr(stash, stash_id, title, year, profile_id, zh=True):
     base, key = _whisparr_cfg(stash.get_plugin_config())
     if not base or not key:
         emit_error(_t(zh, "Whisparr 未配置。设置里填 URL 和 API Key。",
@@ -835,24 +858,28 @@ def do_push_whisparr(stash, stash_id, title, year, zh=True):
         return
     root = (folders[0].get("path") or "")
 
-    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/qualityprofile")
-    profiles = []
-    if status == 200:
-        try:
-            profiles = json.loads(body) or []
-        except ValueError:
-            profiles = []
+    profiles, perr = _whisparr_profiles_fetch(base, key)
+    if perr:
+        emit_error(_whisparr_err(perr[0], perr[1], zh))
+        return
     if not profiles:
         emit_error(_t(zh, "Whisparr 里没有质量档案。", "No quality profile in Whisparr."))
         return
-    profile = next((p for p in profiles if _allows_unknown(p)), profiles[0])
+    # 档案由发现页设置指定（值 = 档案 id）。没指定就回退：先找名字叫 Any 的，
+    # 再退到 id 最小的那个。指定了但已不存在（用户改名/删档）也走同一回退，
+    # 并在结果里说明用了哪个，免得他以为设置生效了。
+    wanted = str(profile_id or "").strip()
+    chosen = next((p for p in profiles if str(p["id"]) == wanted), None) if wanted else None
+    missing = wanted if (wanted and not chosen) else ""
+    if not chosen:
+        chosen = next((p for p in profiles if p["name"].lower() == "any"), None) or profiles[0]
 
     payload = {
         "title": title or stash_id,
         "stashId": stash_id,
         "foreignId": stash_id,
         "monitored": True,
-        "qualityProfileId": profile.get("id"),
+        "qualityProfileId": chosen["id"],
         "rootFolderPath": root,
         "addOptions": {"searchForMovie": True},
     }
@@ -864,9 +891,16 @@ def do_push_whisparr(stash, stash_id, title, year, zh=True):
 
     status, body, _ = _whisparr_req(base, key, "POST", "/api/v3/movie", payload)
     if status in (200, 201, 202):
-        log_info(f"Sent scene {stash_id} to Whisparr (profile {profile.get('id')})")
+        log_info(f"Sent scene {stash_id} to Whisparr (profile {chosen['id']} {chosen['name']})")
+        if missing:
+            msg = _t(zh, "未找到档案 " + missing + "，已用「" + chosen["name"] + "」发送",
+                         "Profile " + missing + " not found — sent with " + chosen["name"])
+        else:
+            msg = _t(zh, "已发送到 Whisparr（" + chosen["name"] + "）",
+                         "Sent to Whisparr (" + chosen["name"] + ")")
         emit_result({"mode": "whisparr", "ok": True, "exists": False,
-                     "message": _t(zh, "已发送到 Whisparr", "Sent to Whisparr")})
+                     "profile": chosen, "fallback": bool(missing),
+                     "message": msg})
         return
     # 并发或重复点：校验器比查一次快，按「已在里面」处理
     if "MovieExistsValidator" in (body or ""):
@@ -1010,8 +1044,11 @@ def main():
                 _safe_text(stash.get_arg("stash_id", "")),
                 _safe_text(stash.get_arg("title", "")),
                 _safe_text(stash.get_arg("year", "")),
+                _safe_text(stash.get_arg("profile", "")),
                 zh,
             )
+        elif mode == "whisparr_profiles":
+            do_whisparr_profiles(stash, zh)
         elif mode == "test":
             do_test(stash, zh)
         else:

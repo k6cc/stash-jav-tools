@@ -4645,6 +4645,8 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 .ssd-test-mark { font-weight: 700; line-height: 1.5; }
 .ssd-test-row.is-ok .ssd-test-mark { color: var(--ssd-success); }
 .ssd-test-row.is-bad .ssd-test-mark { color: var(--ssd-danger); }
+/* 可选集成未配置（Whisparr）：中性短横线 —— 不是通过也不是失败（用户 2026-11-09） */
+.ssd-test-row.is-skip .ssd-test-mark { color: var(--ssd-modal-muted); }
 .ssd-test-body { min-width: 0; }
 .ssd-test-name { font-size: 13px; font-weight: 600; }
 .ssd-test-detail { font-size: 12px; color: var(--ssd-modal-muted); word-break: break-word; }

@@ -9862,8 +9862,11 @@
 
     function TestRow(props) {
       var it = props.item || {};
-      return React.createElement("div", { className: "ssd-test-row " + (it.ok ? "is-ok" : "is-bad") },
-        React.createElement("span", { className: "ssd-test-mark" }, it.ok ? "✓" : "✗"),
+      // 三态：ok ✓ / bad ✗ / skip –（可选集成没配：既没通过也没失败，不该挂绿勾）
+      var st = it.state || (it.ok ? "ok" : "bad");
+      return React.createElement("div", { className: "ssd-test-row is-" + st },
+        React.createElement("span", { className: "ssd-test-mark" },
+          st === "skip" ? "–" : (st === "ok" ? "✓" : "✗")),
         React.createElement("div", { className: "ssd-test-body" },
           React.createElement("div", { className: "ssd-test-name" }, String(it.label || "")),
           React.createElement("div", { className: "ssd-test-detail" }, String(it.detail || "")),

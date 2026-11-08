@@ -879,9 +879,11 @@ def do_push_whisparr(stash, stash_id, title, year, zh=True):
 def _test_whisparr(cfg, zh=True):
     item = {"key": "whisparr", "label": "Whisparr", "ok": False, "detail": "", "hint": ""}
     base, key = _whisparr_cfg(cfg)
-    # 没配不算失败：这是可选集成，配了才会出现发送按钮
+    # 没配不算失败：这是可选集成，配了才会出现发送按钮。但也别挂绿勾 ——
+    # 绿勾意味着「测过了、通的」，未配置只是「用不上」，前端按三态渲染成短横线。
     if not base or not key:
         item["ok"] = True
+        item["state"] = "skip"
         item["detail"] = _t(zh, "未配置（可选）", "Not configured (optional)")
         item["hint"] = _t(zh, "填 URL 与 API Key 后，stashdb 场景弹窗会出现发送按钮",
                           "Fill in the URL and API key to get the send button on stashdb scenes")

@@ -6039,8 +6039,12 @@
     }
     // 管理页有自己的搜索行（§7.1），全局筛选栏在这里只会误导 —— 它过滤的是
     // 发现页的 _dp.q，对已忽略记录无效。整行收掉，别让用户在里面白搜。
+    // 设置页同理（用户 2026-11-09）：搜索/排序/数据源/每页/卡片大小没有一项
+    // 作用于设置项，留着只是一排点了没反应的控件。多选态不用管 ——
+    // switchView 进来前已 exitSel()，不存在「工具栏被藏起来退不出去」。
     if (refs.bar) {
-      refs.bar.style.display = _dp.view === "ignored" ? "none" : "";
+      var hideBar = _dp.view === "ignored" || _dp.view === "settings";
+      refs.bar.style.display = hideBar ? "none" : "";
       // 多选态：同一行原地变身（§13.3）。选择模式里没有「收进更多」的概念，
       // 一律摊平，否则窄屏会连多选按钮组一起收进面板
       refs.bar.classList.toggle("is-selecting", !!_dp.sel.on);

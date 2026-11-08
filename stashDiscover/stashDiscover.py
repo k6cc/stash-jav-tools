@@ -181,6 +181,15 @@ def http_request(url, method="GET", data=None, headers=None, timeout=30):
         return 0, str(e), {}
 
 
+def _post_json(url, payload, headers=None, timeout=15):
+    """POST 一段 JSON。http_request 只把 dict 编成表单，JSON 走这里。"""
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return http_request(url, method="POST", data=body, headers=h, timeout=timeout)
+
+
 def _parse_torznab(xml_text):
     results = []
     try:
@@ -353,12 +362,14 @@ def do_push_download(stash, magnet, savepath="", zh=True):
         emit_error(_t(zh, "没有拿到磁力链接。", "No magnet link provided."))
         return
 
-    if dl_type == "qbittorrent":
+    if dl_type in ("qbittorrent", "qb", "qbit"):
         _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, savepath, zh)
+    elif dl_type in ("motrix", "motrix2", "aria2"):
+        _push_motrix(dl_url, dl_pass, magnet, zh)
     else:
         emit_error(_t(zh,
-                      f"暂不支持下载器类型 {dl_type}，目前只支持 qBittorrent。",
-                      f"Unsupported downloader type: {dl_type}. Currently only qbittorrent is supported."))
+                      f"暂不支持下载器类型 {dl_type}，可选 qbittorrent 或 motrix。",
+                      f"Unsupported downloader type: {dl_type}. Use qbittorrent or motrix."))
 
 
 def _session_cookie(headers):
@@ -429,6 +440,120 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath, zh=True):
                       f"qBittorrent add failed (HTTP {status}): {body[:200]}"))
 
 
+# ─── Motrix ────────────────────────────────────────────────────────────────
+# 桌面版与 Server 版是两套通道，插件按探测结果走，用户只填「地址 + 密钥」：
+#   桌面版 → POST {base}/jsonrpc              aria2 JSON-RPC（密钥见 高级 → RPC）
+#   Server → POST {base}/rpc/<kind>/<name>    Bearer operator-token
+# 不读 endpoint.json / settings.json：那是别的软件的私有状态，里面的 localToken
+# 还是鉴权凭据，插件去翻等于翻密码本（用户 2026-11-09 明确拒绝）。代价是密钥
+# 得用户自己复制一次；好处是两套 token 都持久化，配一次长期有效。
+# 保存目录两边都不用配：aria2 不传 dir 就用全局默认，Server 的目录从
+# query:getSettings 读 —— 都是 Motrix 自己的设置，插件不替用户猜。
+
+def _aria2_call(base, secret, method, params, timeout=15):
+    args = (["token:" + secret] if secret else []) + list(params)
+    status, body, _ = _post_json(
+        base + "/jsonrpc",
+        {"jsonrpc": "2.0", "id": PLUGIN_ID, "method": method, "params": args},
+        timeout=timeout,
+    )
+    try:
+        obj = json.loads(body)
+    except ValueError:
+        return status, None, body[:200]
+    if obj.get("error"):
+        err = obj["error"]
+        # aria2 给 {"code":..,"message":..}，但别的服务可能直接塞字符串
+        if isinstance(err, dict):
+            return status or 500, None, err.get("message") or str(err)
+        return status or 500, None, str(err)
+    return status, obj.get("result"), ""
+
+
+def _rpc_call(base, secret, name, args, timeout=15):
+    """name 形如 command:createTask，路径是 /rpc/<kind>/<name>。
+
+    响应是裸 JSON（listTasks 直接给数组，createTask 给 {outcome,...}），
+    没有 {"result": ...} 外壳 —— 和 aria2 不一样。
+    """
+    kind = name.split(":", 1)[0]
+    status, body, _ = _post_json(
+        f"{base}/rpc/{kind}/{name}", {"args": args},
+        headers={"Authorization": "Bearer " + secret}, timeout=timeout,
+    )
+    try:
+        obj = json.loads(body)
+    except ValueError:
+        return status, None, body[:200]
+    if isinstance(obj, dict) and obj.get("error"):
+        return status or 500, None, str(obj["error"])[:200]
+    return status, obj, ""
+
+
+def _motrix_probe(base, secret):
+    """返回 (kind, version, why)。kind = "aria2" | "web" | ""。"""
+    status, res, err = _aria2_call(base, secret, "aria2.getVersion", [], timeout=10)
+    if status == 200 and isinstance(res, dict):
+        return "aria2", res.get("version") or "", ""
+    # auth/status 比 listTasks 轻，任务多的时候不会拖慢
+    status, body, _ = http_request(
+        base + "/rpc/auth/status",
+        headers={"Authorization": "Bearer " + secret}, timeout=10,
+    )
+    try:
+        obj = json.loads(body)
+    except ValueError:
+        obj = {}
+    if status == 200 and obj.get("authed"):
+        return "web", "", ""
+    return "", "", (err or body[:120] or f"HTTP {status}")
+
+
+def _push_motrix(base_url, secret, magnet, zh=True):
+    kind, _ver, why = _motrix_probe(base_url, secret)
+    if not kind:
+        emit_error(_t(zh,
+                      f"连不上 Motrix（{why}）。桌面版地址填 http://127.0.0.1:16800，密钥在 高级 → RPC。",
+                      f"Can't reach Motrix ({why}). Desktop: use http://127.0.0.1:16800 and the key from Advanced → RPC."))
+        return
+
+    if kind == "aria2":
+        status, res, err = _aria2_call(base_url, secret, "aria2.addUri", [[magnet]])
+        if res:
+            log_info(f"Pushed magnet to Motrix: {magnet[:60]}...")
+            emit_result({"mode": "push_download", "ok": True, "message": "Pushed to downloader"})
+            return
+        # 同一磁力重复推送：aria2 报 already registered，对用户来说任务已在队列里
+        low = (err or "").lower()
+        if "already registered" in low or "duplicate" in low:
+            emit_result({"mode": "push_download", "ok": True,
+                         "message": "Already in downloader"})
+            return
+        emit_error(_t(zh, f"Motrix 添加任务失败：{err}", f"Motrix add failed: {err}"))
+        return
+
+    # Server：createTask 的 saveDir 是必填，用 Motrix 自己的默认目录
+    save_dir = ""
+    _, settings, _ = _rpc_call(base_url, secret, "query:getSettings", [{}])
+    if isinstance(settings, dict):
+        save_dir = ((settings.get("app") or {}).get("defaultSaveDir") or "").strip()
+    if not save_dir:
+        emit_error(_t(zh,
+                      "读不到 Motrix 的默认下载目录，请先在 Motrix 里设置一个。",
+                      "Couldn't read Motrix's default download folder — set one in Motrix first."))
+        return
+    task = {"type": "bt", "payload": {"kind": "magnet", "uri": magnet}, "saveDir": save_dir}
+    status, res, err = _rpc_call(base_url, secret, "command:createTask", [task])
+    outcome = (res or {}).get("outcome") if isinstance(res, dict) else ""
+    if outcome in ("created", "conflict"):
+        log_info(f"Pushed magnet to Motrix server ({outcome}): {magnet[:60]}...")
+        emit_result({"mode": "push_download", "ok": True,
+                     "message": "Pushed to downloader" if outcome == "created" else "Already in downloader"})
+        return
+    emit_error(_t(zh, f"Motrix 添加任务失败：{err or res}",
+                  f"Motrix add failed: {err or res}"))
+
+
 # ─── 连接测试（设置页「测试」按钮，用户 2026-11-02）─────────────────────
 # 三项各自返回一行结果，前端只负责画勾叉，不判断成败：
 #   jackett      → Torznab t=caps（最轻的请求，但 Jackett 对 caps 同样校验 key）
@@ -482,14 +607,48 @@ def _test_jackett(cfg, zh=True):
     return item
 
 
+def _test_motrix(url, secret, zh=True):
+    item = {"key": "motrix", "label": "Motrix", "ok": False, "detail": "", "hint": ""}
+    if not url:
+        item["detail"] = _t(zh, "RPC 地址未填写", "RPC address is missing")
+        item["hint"] = _t(zh, "桌面版填 http://127.0.0.1:16800，服务端填 Web 地址",
+                          "Desktop: http://127.0.0.1:16800. Server: the Web UI address")
+        return item
+    kind, ver, why = _motrix_probe(url, secret)
+    host = _host_of(url)
+    if kind == "aria2":
+        item["ok"] = True
+        item["detail"] = f"{host} · aria2 {ver or '?'}"
+        item["hint"] = _t(zh, "桌面版，保存目录用 Motrix 的默认设置",
+                          "Desktop build; downloads use Motrix's default folder")
+        return item
+    if kind == "web":
+        item["ok"] = True
+        item["detail"] = _t(zh, f"{host} · 服务端", f"{host} · server")
+        _, settings, _ = _rpc_call(url, secret, "query:getSettings", [{}])
+        save_dir = ""
+        if isinstance(settings, dict):
+            save_dir = ((settings.get("app") or {}).get("defaultSaveDir") or "")
+        if save_dir:
+            item["hint"] = _t(zh, f"默认保存路径 {save_dir}", f"Default save path {save_dir}")
+        return item
+    item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
+    item["hint"] = (why or "")[:150]
+    return item
+
+
 def _test_downloader(cfg, zh=True):
-    item = {"key": "qbittorrent", "label": "qBittorrent", "ok": False, "detail": "", "hint": ""}
+    dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
     url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
     user = (cfg.get("downloaderUsername") or "").strip()
     pwd = (cfg.get("downloaderPassword") or "").strip()
-    dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
-    if dl_type and dl_type != "qbittorrent":
-        item["detail"] = _t(zh, f"暂不支持 {dl_type}", f"{dl_type} is not supported yet")
+
+    if dl_type in ("motrix", "motrix2", "aria2"):
+        return _test_motrix(url, pwd, zh)
+
+    item = {"key": "qbittorrent", "label": "qBittorrent", "ok": False, "detail": "", "hint": ""}
+    if dl_type not in ("qbittorrent", "qb", "qbit"):
+        item["detail"] = _t(zh, f"暂不支持 {dl_type}", f"{dl_type} is not supported")
         return item
     if not url:
         item["detail"] = _t(zh, "URL 未填写", "URL is missing")
@@ -545,6 +704,214 @@ def _test_downloader(cfg, zh=True):
     return item
 
 
+# ─── Whisparr ──────────────────────────────────────────────────────────────
+# 只对 stashdb 源开放（前端判断），因为 Whisparr 那边靠 stash_id 反查 TPDB
+# 元数据；javstash 的 ID 它不认，加进去只会得到一条空壳记录。
+# 加片必须带 qualityProfileId + rootFolderPath（实测缺任一项 400），两项都由
+# 插件自己取：根目录用第一个，质量档案优先挑允许 Unknown 的 —— JAV 种子标题
+# 里没有分辨率，aria2/Whisparr 一律解析成 Unknown，而默认的 Any 会拒它。
+# 重复添加返回 400 + MovieExistsValidator，对用户来说等于「已经加过」。
+
+def _whisparr_cfg(cfg):
+    return ((cfg.get("whisparrUrl") or "").strip().rstrip("/"),
+            (cfg.get("whisparrApiKey") or "").strip())
+
+
+def _whisparr_req(base, key, method, path, payload=None, timeout=25):
+    headers = {"X-Api-Key": key}
+    if payload is None:
+        return http_request(base + path, headers=headers, timeout=timeout)
+    return _post_json(base + path, payload, headers=headers, timeout=timeout)
+
+
+def _whisparr_err(status, body, zh):
+    """400 的 body 是 [{propertyName,errorMessage,errorCode}]，翻成一句话。"""
+    detail = ""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, list):
+        parts = []
+        for e in parsed[:3]:
+            if not isinstance(e, dict):
+                continue
+            msg = (e.get("errorMessage") or "").strip()
+            prop = (e.get("propertyName") or "").strip()
+            # Whisparr 把 propertyName 填成 "Path" 之类的字面量，拼上去反而更难读
+            if prop and prop.lower() != "path" and prop not in msg:
+                parts.append(f"{prop}: {msg}")
+            else:
+                parts.append(msg)
+        detail = "; ".join(p for p in parts if p)
+    elif isinstance(parsed, dict):
+        detail = parsed.get("message") or ""
+    detail = detail or (body or "")[:160]
+    if status == 401:
+        return _t(zh, "Whisparr 的 API Key 不对", "Whisparr rejected the API key")
+    return _t(zh, f"Whisparr 返回 {status}：{detail}",
+              f"Whisparr returned {status}: {detail}")
+
+
+def _whisparr_find(base, key, stash_id):
+    """按 stashId 查已添加的影片。返回 (movie|None, (status, body)|None)。"""
+    q = urllib.parse.quote(stash_id, safe="")
+    status, body, _ = _whisparr_req(base, key, "GET", f"/api/v3/movie?stashId={q}")
+    if status != 200:
+        return None, (status, body)
+    try:
+        arr = json.loads(body)
+    except ValueError:
+        return None, (status, body)
+    if isinstance(arr, list) and arr:
+        return arr[0], None
+    return None, None
+
+
+def _allows_unknown(profile):
+    """质量档案是否显式允许 Unknown（JAV 种子只会解析成它）。"""
+    def walk(items):
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            q = it.get("quality") or {}
+            if (q.get("name") or "").lower() == "unknown" and it.get("allowed"):
+                return True
+            if walk(it.get("items")):
+                return True
+        return False
+    return walk(profile.get("items"))
+
+
+def do_whisparr_status(stash, stash_id, zh=True):
+    base, key = _whisparr_cfg(stash.get_plugin_config())
+    if not base or not key:
+        emit_result({"mode": "whisparr", "configured": False})
+        return
+    if not stash_id:
+        emit_result({"mode": "whisparr", "configured": True, "ok": False,
+                     "message": _t(zh, "这条场景没有 stash-box ID", "This scene has no stash-box ID")})
+        return
+    movie, err = _whisparr_find(base, key, stash_id)
+    if err:
+        emit_result({"mode": "whisparr", "configured": True, "ok": False,
+                     "message": _whisparr_err(err[0], err[1], zh)})
+        return
+    emit_result({"mode": "whisparr", "configured": True, "ok": True,
+                 "exists": bool(movie),
+                 "has_file": bool((movie or {}).get("hasFile"))})
+
+
+def do_push_whisparr(stash, stash_id, title, year, zh=True):
+    base, key = _whisparr_cfg(stash.get_plugin_config())
+    if not base or not key:
+        emit_error(_t(zh, "Whisparr 未配置。设置里填 URL 和 API Key。",
+                      "Whisparr is not configured — set the URL and API key."))
+        return
+    if not stash_id:
+        emit_error(_t(zh, "这条场景没有 stash-box ID，无法交给 Whisparr。",
+                      "This scene has no stash-box ID, so Whisparr can't match it."))
+        return
+
+    movie, err = _whisparr_find(base, key, stash_id)
+    if err:
+        emit_error(_whisparr_err(err[0], err[1], zh))
+        return
+    if movie:
+        emit_result({"mode": "whisparr", "ok": True, "exists": True,
+                     "message": _t(zh, "已在 Whisparr 里", "Already in Whisparr")})
+        return
+
+    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/rootfolder")
+    folders = []
+    if status == 200:
+        try:
+            folders = json.loads(body) or []
+        except ValueError:
+            folders = []
+    if not folders:
+        emit_error(_t(zh, "Whisparr 里没有根目录。先在 Whisparr 设置 → 媒体管理 里加一个。",
+                      "No root folder in Whisparr. Add one under Settings → Media Management."))
+        return
+    root = (folders[0].get("path") or "")
+
+    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/qualityprofile")
+    profiles = []
+    if status == 200:
+        try:
+            profiles = json.loads(body) or []
+        except ValueError:
+            profiles = []
+    if not profiles:
+        emit_error(_t(zh, "Whisparr 里没有质量档案。", "No quality profile in Whisparr."))
+        return
+    profile = next((p for p in profiles if _allows_unknown(p)), profiles[0])
+
+    payload = {
+        "title": title or stash_id,
+        "stashId": stash_id,
+        "foreignId": stash_id,
+        "monitored": True,
+        "qualityProfileId": profile.get("id"),
+        "rootFolderPath": root,
+        "addOptions": {"searchForMovie": True},
+    }
+    if year:
+        try:
+            payload["year"] = int(year)
+        except (TypeError, ValueError):
+            pass
+
+    status, body, _ = _whisparr_req(base, key, "POST", "/api/v3/movie", payload)
+    if status in (200, 201, 202):
+        log_info(f"Sent scene {stash_id} to Whisparr (profile {profile.get('id')})")
+        emit_result({"mode": "whisparr", "ok": True, "exists": False,
+                     "message": _t(zh, "已发送到 Whisparr", "Sent to Whisparr")})
+        return
+    # 并发或重复点：校验器比查一次快，按「已在里面」处理
+    if "MovieExistsValidator" in (body or ""):
+        emit_result({"mode": "whisparr", "ok": True, "exists": True,
+                     "message": _t(zh, "已在 Whisparr 里", "Already in Whisparr")})
+        return
+    emit_error(_whisparr_err(status, body, zh))
+
+
+def _test_whisparr(cfg, zh=True):
+    item = {"key": "whisparr", "label": "Whisparr", "ok": False, "detail": "", "hint": ""}
+    base, key = _whisparr_cfg(cfg)
+    # 没配不算失败：这是可选集成，配了才会出现发送按钮
+    if not base or not key:
+        item["ok"] = True
+        item["detail"] = _t(zh, "未配置（可选）", "Not configured (optional)")
+        item["hint"] = _t(zh, "填 URL 与 API Key 后，stashdb 场景弹窗会出现发送按钮",
+                          "Fill in the URL and API key to get the send button on stashdb scenes")
+        return item
+    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/system/status")
+    if status != 200:
+        item["detail"] = _whisparr_err(status, body, zh)
+        return item
+    ver = ""
+    try:
+        ver = (json.loads(body) or {}).get("version") or ""
+    except ValueError:
+        pass
+    item["ok"] = True
+    item["detail"] = f"{_host_of(base)} · Whisparr {ver or '?'}"
+    status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/rootfolder")
+    root = ""
+    if status == 200:
+        try:
+            arr = json.loads(body) or []
+            root = (arr[0].get("path") or "") if arr else ""
+        except (ValueError, IndexError, AttributeError):
+            root = ""
+    if root:
+        item["hint"] = _t(zh, f"根目录 {root}", f"Root folder {root}")
+    else:
+        item["hint"] = _t(zh, "还没有根目录，发送会失败", "No root folder yet — sending will fail")
+    return item
+
+
 def _test_stashboxes(stash, zh=True):
     """只读配置 + 本地库统计：不发任何 stash-box 请求（用户 2026-11-02）。"""
     try:
@@ -596,7 +963,7 @@ def _test_stashboxes(stash, zh=True):
 
 def do_test(stash, zh=True):
     cfg = stash.get_plugin_config()
-    items = [_test_jackett(cfg, zh), _test_downloader(cfg, zh)]
+    items = [_test_jackett(cfg, zh), _test_downloader(cfg, zh), _test_whisparr(cfg, zh)]
     items.extend(_test_stashboxes(stash, zh))
     log_info("connection test → " + ", ".join(
         f"{i['label']}={'ok' if i['ok'] else 'fail'}" for i in items))
@@ -633,6 +1000,16 @@ def main():
             magnet = _safe_text(stash.get_arg("magnet", ""))
             savepath = _safe_text(stash.get_arg("savepath", ""))
             do_push_download(stash, magnet, savepath, zh)
+        elif mode == "whisparr_status":
+            do_whisparr_status(stash, _safe_text(stash.get_arg("stash_id", "")), zh)
+        elif mode == "whisparr_push":
+            do_push_whisparr(
+                stash,
+                _safe_text(stash.get_arg("stash_id", "")),
+                _safe_text(stash.get_arg("title", "")),
+                _safe_text(stash.get_arg("year", "")),
+                zh,
+            )
         elif mode == "test":
             do_test(stash, zh)
         else:

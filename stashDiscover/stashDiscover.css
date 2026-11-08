@@ -1514,10 +1514,30 @@
     max-height: 100dvh !important;
   }
   .ssd-carousel-hero { max-height: 280px; }
-  /* 窄屏：四颗按 2×2 铺开。挤成一行会短到「搜索资源」贴边，放开又会
-     剩一颗半宽的忽略挂在末尾 —— 网格最稳，换中英文案都不破。 */
+  /* 窄屏：按可见按钮数分列（数目由 syncActCols() 写到 data-n）。4 颗（javstash）
+     走 2×2；5 颗（stashdb 多一颗 Whisparr）挤成 2 列就是 3 行，太高 —— 改 3+2：
+     6 列网格里前 3 颗各占 2 列、后 2 颗各占 3 列，两行都刚好铺满，中英文都不破。 */
   .ssd-modal-acts { display: grid; grid-template-columns: 1fr 1fr; }
   .ssd-modal-acts .ssd-dp-btn { justify-content: center; }
+  .ssd-modal-acts[data-n="5"] { grid-template-columns: repeat(6, 1fr); }
+  .ssd-modal-acts[data-n="5"] > .ssd-dp-btn {
+    grid-column: span 2;
+    min-width: 0;
+    padding: 7px 8px;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .ssd-modal-acts[data-n="5"] > .ssd-dp-btn:nth-child(n+4) { grid-column: span 3; }
+}
+
+/* 极窄屏（≤359，320 宽的老机器）：三列会把「Add to Library」挤出按钮，
+   这里退回两列 —— 宁可多一行，也不要字压到边框上。 */
+@media (max-width: 359px) {
+  .ssd-modal-acts[data-n="5"] { grid-template-columns: 1fr 1fr; }
+  .ssd-modal-acts[data-n="5"] > .ssd-dp-btn,
+  .ssd-modal-acts[data-n="5"] > .ssd-dp-btn:nth-child(n+4) { grid-column: auto; }
+  /* 落到第三行的那颗单独铺满，别留半个空位 */
+  .ssd-modal-acts[data-n="5"] > .ssd-dp-btn:last-child { grid-column: span 2; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

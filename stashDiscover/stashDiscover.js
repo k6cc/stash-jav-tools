@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.7.0";
+  var PLUGIN_VERSION = "2.7.1";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -3201,10 +3201,14 @@
   // ─── 场景详情弹窗的动作按钮（用户 2026-10-30）────────────────────────────
   // 原来这三颗用旧版 .ssd-btn 三件套（4px 圆角 + text-shadow + 写死的 --ssd-*
   // 色），跟「演员详情弹层」「已忽略管理」不是一套。现在统一走 .ssd-dp-btn：
-  // primary 实心（加入库）/ 描边（在源站打开）/ tonal 淡底（搜索资源），
-  // 忽略仍是 solid 中性实心（见上方 ssdBanButton）——四颗各自可分辨，
+  // primary 实心（加入库）/ 描边（在源站打开）/ tonal 淡底（搜索、Whisparr），
+  // 忽略仍是 solid 中性实心（见上方 ssdBanButton）——各自可分辨，
   // 又都是同一套圆角、字号、间距与主题 token。
   // 文案单独一层 span：状态切换（准备中… / 搜索中…）只改字，不会把图标抹掉。
+  // 文案要短（用户 2026-11-09）：窄屏一行要放三颗，「搜索资源」「发送到
+  // Whisparr」会被挤到贴边，改成「找资源」「Whisparr」，完整说明放 title。
+  // 「找资源」而不是「搜索」：搜索区自己有个「搜索」小按钮（重搜当前词），
+  // 两个同名按钮并排会分不清；「找资源」也跟结果区的「未找到资源」对得上。
   var ACT_ADD_SVG =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
     'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
@@ -3212,6 +3216,12 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/>' +
     '<path d="M16.5 16.5L21 21"/></svg>';
+  // 发送到 Whisparr：向上的箭头 + 托盘，和「加入库」的加号区分开
+  var ACT_SEND_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M12 16V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/>' +
+    '<path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>';
 
   function ssdActButton(o) {
     var btn = document.createElement("button");
@@ -3241,6 +3251,17 @@
     var t = btn.querySelector("[data-ssd-lbl]");
     if (t) t.textContent = txt;
     else btn.textContent = txt;
+  }
+
+  // 窄屏每行放几颗由可见按钮数决定（4 颗 2×2，5 颗 3+2），这里只把数目写到
+  // 行上，分列规则在 CSS。Whisparr 按钮会被状态查询隐藏，隐藏后要重算一次。
+  function syncActCols(row) {
+    if (!row) return;
+    var n = 0;
+    for (var i = 0; i < row.children.length; i++) {
+      if (row.children[i].style.display !== "none") n++;
+    }
+    row.setAttribute("data-n", String(n));
   }
 
   // ─── Actions: Link (append) / Overwrite (source wins) ─────────────────────
@@ -5257,13 +5278,30 @@
     var searchBtn = ssdActButton({
       tone: "tonal",
       icon: ACT_FIND_SVG,
-      label: tc("搜索资源", "Search Resources"),
+      label: tc("找资源", "Find"),
       title: tc("用番号/标题在 Jackett 里搜资源", "Search Jackett by code/title"),
       on: function () { handleSearchResources(item, searchBtn); },
     });
     btnRow.appendChild(searchBtn);
 
-    // 忽略（§C8）：主按钮区最右，二次点击确认。图标 + 文字并存 —— 三个大按钮
+    // Whisparr（用户 2026-11-09）：只对 stashdb 源出现 —— Whisparr 拿 stash_id
+    // 去反查 TPDB 元数据，javstash 的 ID 它不认，加进去只是空壳记录。
+    // 是否真的显示还要看配置：后端没填 URL/Key 时 status 返回 configured:false，
+    // 挂载后自己摘掉，前端不需要读 yml。
+    var whisperBtn = null;
+    if (isStashdbEndpoint(item.endpoint)) {
+      whisperBtn = ssdActButton({
+        tone: "tonal",
+        icon: ACT_SEND_SVG,
+        label: tc("Whisparr", "Whisparr"),
+        title: tc("让 Whisparr 搜索并下载这条场景",
+                 "Let Whisparr search for and download this scene"),
+        on: function () { handlePushWhisparr(item, whisperBtn); },
+      });
+      btnRow.appendChild(whisperBtn);
+    }
+
+    // 忽略（§C8）：主按钮区最右，二次点击确认。图标 + 文字并存 —— 几颗大按钮
     // 旁边一个纯图标认不出来；arm 态把文字换成「确认忽略？」才不至于误按。
     // 外观与「演员详情弹层」的忽略按钮同源（用户 2026-10-30）。
     var banBtn = ssdBanButton({
@@ -5273,6 +5311,8 @@
       onConfirm: function () { toggleIgnoreScene(item); },
     });
     btnRow.appendChild(banBtn);
+    // 窄屏分列要看实际有几颗（stashdb 源多一颗 Whisparr），数目交给 CSS
+    syncActCols(btnRow);
 
     actionSection.appendChild(btnRow);
     body.appendChild(actionSection);
@@ -5329,6 +5369,59 @@
     bindModalNavLayout();
     placeModalNav(overlay);
     guardScrollChain(overlay);
+    if (whisperBtn) refreshWhisparrState(item.scene, whisperBtn, seq);
+  }
+
+  // ─── Whisparr ─────────────────────────────────────────────────────────────
+  // 状态查询独立于渲染：查到就禁用按钮，查不到/失败就保持可点（真推的时候
+  // 再报错），绝不因为一次查询把弹窗卡住。
+  function isStashdbEndpoint(ep) {
+    return String(ep || "").toLowerCase().indexOf("stashdb.org") >= 0;
+  }
+
+  function refreshWhisparrState(scene, btn, seq) {
+    var sid = (scene || {}).id;
+    function hide() {
+      btn.style.display = "none";
+      syncActCols(btn.parentNode);
+    }
+    if (!sid) { hide(); return; }
+    runPluginOp({ mode: "whisparr_status", stash_id: sid }).then(function (r) {
+      if (seq !== _modalSeq) return;       // 已经翻到别的场景了
+      if (!r || r.configured === false) { hide(); return; }
+      if (r.exists) markWhisparrDone(btn);
+    }).catch(function () { /* 查询失败不影响手动推送 */ });
+  }
+
+  function markWhisparrDone(btn) {
+    btn.disabled = true;
+    btn.classList.add("ok");
+    setActLabel(btn, tc("已发送", "Sent"));
+  }
+
+  function handlePushWhisparr(item, btn) {
+    var scene = (item && item.scene) || {};
+    if (!scene.id || !btn || btn.disabled) return;
+    btn.disabled = true;
+    setActLabel(btn, tc("发送中…", "Sending…"));
+    runPluginOp({
+      mode: "whisparr_push",
+      stash_id: scene.id,
+      title: scene.title || "",
+      year: (scene.date || "").slice(0, 4),
+    }).then(function (r) {
+      markWhisparrDone(btn);
+      if (r && r.message) showModalNotice(r.message, "info");
+    }).catch(function (e) {
+      btn.disabled = false;
+      setActLabel(btn, tc("发送失败", "Failed"));
+      btn.classList.add("err");
+      showModalNotice((e && e.message) || tc("发送失败", "Send failed"), "error");
+      setTimeout(function () {
+        setActLabel(btn, tc("Whisparr", "Whisparr"));
+        btn.classList.remove("err");
+      }, 3000);
+    });
   }
 
   // 翻条箭头停位（用户 2026-11-01）：封面里已经有一套圆形图集箭头，翻条再压在
@@ -7881,7 +7974,7 @@
 
     runPluginOp({ mode: "search", query: query }).then(function (result) {
       btn.disabled = false;
-      setActLabel(btn, tc("搜索资源", "Search Resources"));
+      setActLabel(btn, tc("找资源", "Find"));
       // 结果渲染完由 renderSearchPage 统一把抬头对齐到可视区（见 scrollResultsToTop）
       // 排序要用实际下发的搜索词；后端老版本没回 query 时用本次的兜底
       var payload = result || {};
@@ -7891,7 +7984,7 @@
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
       btn.disabled = false;
-      setActLabel(btn, tc("搜索资源", "Search Resources"));
+      setActLabel(btn, tc("找资源", "Find"));
       results.innerHTML = "";
       var err = document.createElement("div");
       err.className = "ssd-search-error";

@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.7.0：总览「发现演员」的共同出演计数改按场景去重——旧版一条群像片会按同场库内演员数重复计（「×80」实际只有 8 部），弹窗文案改为「与 X 等 N 位在库演员 · 共演 M 部」；预告角标去掉「上映」，即将发布副标题去掉「未来 N 天」。
+> v2.7.1：新增 Motrix 下载器（桌面版走 RPC 端口、Docker 版走 Web RPC）与「推送到 Whisparr」（仅 stashdb.org 源，需 Whisparr v3）；弹窗按钮文案缩短为「找资源」「Whisparr」，窄屏 5 颗改按 3+2 排。
 
 在 Stash 演员页与工作室页插入「发现」分页，并提供主导航「发现」页：找出已配置 stash-box 实例上存在、本地库未拥有的场景。可浏览封面剧照与元数据、加入库、在 stash-box 查看，也可搜索资源并复制磁力或推送到下载器。
 
@@ -19,12 +19,12 @@
 - **原生筛选条**：搜索（标题、番号、简介、工作室、演员、标签）、日期排序下拉、升降序切换、每页个数（默认 40，发现页内调整）、网格/列表显示切换（记忆选择）、卡片大小滑块（仅网格）；结果计数位于筛选条与卡片之间，底部分页为原生样式
 - **详情弹窗**：
   - 封面 / 剧照轮播（左右翻页 + 计数器）；JAV 场景额外按番号 / r18 链接探测 DMM 官方剧照（欧美源仅有封面），打开时自动通过 `findScene` 获取完整详情（含导演、制作日期、URL 站点名等）
-  - 三个主要操作按钮
+  - 主要操作按钮：加入库 / 在源站打开 / 找资源 / Whisparr / 忽略（后两颗只在对应配置或源支持时出现）
   - 完整元数据（标题、番号、发行/制作日期、时长、导演、工作室、演员、标签、简介、链接）；点击演员名在上方悬浮纯头像卡（左下角年龄、右下角国籍国旗），点击头像打开 stash-box 演员页，点击空白处关闭
 - **加入库**：将 stash-box 场景元数据创建为本地场景（两段式确认防误操作）。自动按 stash_id 映射所有演员和工作室，查找/创建标签，stash_id 直接随创建提交；已在库的按下 stash_id + 番号判重跳过，按钮显示「在库中」。封面在入库落地后由后台串行补写，不占用等待时间，失败不影响其余字段
 - **在 stash-box 查看**：新标签页打开该场景在对应 box 上的页面。已知源显示品牌名（javstash.org → JAVStash、stashdb.org → StashDB、theporndb.net → TPDB、fansdb.cc → FansDB），未知源回退显示主机名
 - **Jackett 资源搜索**：通过 Jackett Torznab API 搜索（URL 只填根地址即可自动补全），带磁力的结果优先、按做种数排序，再按标题与搜索词的匹配度重排（匹配度低的折叠在列表末尾，点「显示」展开）；搜索词按场景自动推断——番号优先，无番号时用「YY MM DD + 首位女演员」，两者都没有才用标题，搜索框右侧标注当前用的是哪一种；结果为 0 时给「标题」按钮一键换词；每条结果标注来源索引器；点击搜索时弹窗自动滚动到底，结果返回后对齐结果抬头
-- **复制磁力链接** / **推送 qBittorrent 下载**
+- **复制磁力链接** / **推送下载**（qBittorrent、Motrix）/ **推送到 Whisparr**（仅 stashdb 源，仅支持 Whisparr v3）
 - **双语界面** + **响应式设计**
 
 ## 发现页（主导航「发现」）
@@ -122,7 +122,7 @@
 - Python 3.8+
 - 已配置至少一个 stash-box 实例（设置 → 元数据提供者）
 - 演员 / 工作室已关联对应 stash-box ID
-- （可选）Jackett 实例 / qBittorrent
+- （可选）Jackett 实例、qBittorrent / Motrix、Whisparr
 
 ### Docker / Linux 部署
 
@@ -156,13 +156,15 @@ USER stash
 |---|---|---|---|
 | Recent Window (days) | STRING | 180 | 仅显示最近 N 天发行的场景。留空 = 180，0 = 不限制。仅演员/工作室 tab 生效，发现页的回看窗口在发现页「设置」里单独调（默认 30 天） |
 | Preview Window (days) | STRING | 7 | 未来场景的预告窗口，字符串输入以支持 "-1"。-1 = 隐藏全部预告，0 = 不限制，N = N 天内。仅演员/工作室 tab 生效，发现页不过滤 |
-| Jackett API URL | STRING | — | Jackett 根地址（自动补全 Torznab 端点）或完整 Torznab 端点 |
+| Jackett API URL | STRING | — | Jackett 根地址（自动补全 Torznab 端点）或完整 Torznab 端点，如 `http://127.0.0.1:9117` |
 | Jackett API Key | STRING | — | Jackett API Key |
 | Jackett Timeout (seconds) | STRING | 120 | Jackett 搜索超时秒数，留空 = 120，上限 600 |
-| Downloader Type | STRING | — | 目前仅支持 qbittorrent |
-| Downloader URL | STRING | — | qBittorrent Web UI 地址 |
-| Downloader Username | STRING | — | qBittorrent 用户名 |
-| Downloader Password | STRING | — | qBittorrent 密码 |
+| Downloader Type | STRING | qbittorrent | `qbittorrent` 或 `motrix`，留空 = qbittorrent |
+| Downloader URL | STRING | — | qBittorrent Web UI 地址；Motrix 桌面版填 RPC 地址 `http://127.0.0.1:16800`，Docker 版填 Web 地址 |
+| Downloader Username | STRING | — | qBittorrent 用户名，Motrix 留空 |
+| Downloader Password | STRING | — | qBittorrent 密码；Motrix 填「高级 → RPC」里的密钥（桌面版）或 operator-token（Docker 版） |
+| Whisparr URL | STRING | — | Whisparr v3 地址，如 `http://127.0.0.1:6969`。留空则不显示 Whisparr 按钮 |
+| Whisparr API Key | STRING | — | Whisparr 设置 → 通用 → API Key |
 | Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空=查询所有 |
 | Discover page | BOOLEAN | true | 发现页总闸：关闭后导航入口消失、页面停用、discover.js 不加载，关注新作轮询与角标一并停用（演员/工作室页的「发现」tab 不受影响）；需刷新浏览器生效。只想收起导航按钮的话，去 设置 → 界面 → 菜单项目 里取消勾选「发现」即可 |
 
@@ -173,8 +175,11 @@ USER stash
 - 单次最多返回 200 条结果，超出时列表上方提示总数与实际显示条数，改搜索词可缩小范围。
 - **搜索词质量决定结果质量**：Jackett 的查询是自由文本，索引器普遍按词匹配。插件按场景自动推断搜索词：番号（JAV）→ `YY MM DD 首位女演员`（欧美种子文件名就是这种格式，实测 12 条场景命中 9 条，按标题只有 3 条）→ 标题；演员名不是拉丁文的场景不拼日期词。泛匹配仍会带进无关条目，插件按命中率重排并折叠低匹配项，想更精确可直接改搜索框里的词。
 - **qBittorrent 4.x / 5.x**：两者 Web UI API 兼容，实测 5.3.0 的推送下载正常。
+- **Motrix 不用填保存目录**：桌面版走 aria2 的默认下载目录，Docker 版从 Motrix 自己的设置里读。密钥在 Motrix「高级 → RPC」里复制（桌面版），Docker 版是 `operator-token` 文件的内容。
+- **Whisparr 只支持 v3**：走 `/api/v3`，v2 及更早的接口不兼容。按钮也只在 stashdb.org 源的场景出现 —— Whisparr 靠 stash_id 反查 TPDB 元数据，javstash 的 ID 它不认。质量档案自动挑允许 Unknown 的那个（JAV 种子只能解析成 Unknown，默认的 Any 会拒），根目录取 Whisparr 里的第一个。
 - **封面在后台补写**：入库只等场景落地，封面另起一条串行队列去抓（单张最长 10 秒），所以点完「确认入库」立刻就能继续操作。队列没跑完就刷新页面，那几条封面会丢，场景本身不受影响；失败时会在队列排空后提示条数。
 - **发现页数据缓存在浏览器**：12 小时内重进直接复用，右上角刷新强制重取。缓存超出浏览器配额时会裁掉较早条目，此时计数旁标注「缓存不完整」，点击即重新拉取。
+- **更新插件后按 Ctrl+F5 强刷**：前端 JS/CSS 由 Stash 静态下发、不带版本号，浏览器会继续用旧的，界面看着像没更新。
 
 ## stash-box API 说明
 

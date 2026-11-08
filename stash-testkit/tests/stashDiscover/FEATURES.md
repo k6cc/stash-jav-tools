@@ -163,8 +163,10 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
 - **`.ssd-modal` 里补了一套 `--sx-*` 兜底（flexoki 暗色）**。弹窗挂在 body 上，
   发现页关闭时 discover.js 不注入 token；注入的 `<style>` 在 head 末尾、特异性相同，
   会正常覆盖这份兜底。
-- 窄屏（≤480）四颗走 `grid-template-columns: 1fr 1fr` 的 2×2：挤一行「搜索资源」贴边，
-  纯换行又会剩一颗半宽的忽略挂在末尾。
+- 窄屏（≤480）按可见按钮数分列（`syncActCols()` 写 `data-n`）：4 颗（javstash 源）走
+  `1fr 1fr` 的 2×2；5 颗（stashdb 源多一颗 Whisparr）走 3+2 —— 6 列网格里前 3 颗各占 2 列、
+  后 2 颗各占 3 列，两行都铺满。挤一行会贴边，全拆 2 列又是 3 行。
+  ≤359 退回 2 列（三列会把「Add to Library」挤出按钮），末颗单独铺满。
 - 搜索栏的「搜索」小按钮一并换掉（`.ssd-search-bar .ssd-dp-btn` 覆盖 stretch/字号），
   输入框圆角同步 8px。
 - **搜索结果行内按钮也已换**：复制磁力 / 打开链接 / 分页 / 低匹配「显示」用 `ghost sm`，

@@ -1,6 +1,6 @@
 name: stashDiscover
-description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, and look for download sources.
-version: 2.7.0
+description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, find download sources, and push to qBittorrent, Motrix, or Whisparr.
+version: 2.7.1
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -15,7 +15,7 @@ settings:
     type: STRING
   jackettUrl:
     displayName: "Jackett API URL"
-    description: "Jackett base URL or Torznab endpoint, e.g. http://192.168.1.10:9117. In Docker use the host IP or host.docker.internal, not localhost."
+    description: "Jackett base URL or Torznab endpoint, e.g. http://127.0.0.1:9117. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   jackettApiKey:
     displayName: "Jackett API Key"
@@ -27,19 +27,27 @@ settings:
     type: STRING
   downloaderType:
     displayName: "Downloader Type"
-    description: "Torrent downloader for push-to-download. qBittorrent only for now."
+    description: "qbittorrent (default) or motrix. Empty = qbittorrent."
     type: STRING
   downloaderUrl:
     displayName: "Downloader URL"
-    description: "qBittorrent Web UI URL, e.g. http://192.168.1.10:8080. In Docker use the host IP or host.docker.internal, not localhost."
+    description: "qBittorrent: Web UI URL (http://host:8080). Motrix: RPC Port address (http://127.0.0.1:16800) on desktop, or the Web UI URL (http://host:8066) on the server build. In Docker use the host IP or host.docker.internal, not localhost."
     type: STRING
   downloaderUsername:
-    displayName: "Downloader Username"
-    description: "qBittorrent Web UI username"
+    displayName: "qBittorrent Username"
+    description: "qBittorrent only. Leave empty for Motrix."
     type: STRING
   downloaderPassword:
-    displayName: "Downloader Password"
-    description: "qBittorrent Web UI password"
+    displayName: "qBittorrent Password / Motrix Secret"
+    description: "qBittorrent Web UI password. For Motrix: the RPC key from Advanced → RPC on desktop, or the operator token on the server build."
+    type: STRING
+  whisperrUrl:
+    displayName: "Whisparr URL"
+    description: "Whisparr v3 base URL, e.g. http://127.0.0.1:6969. Leave empty to hide the Whisparr button."
+    type: STRING
+  whisperrApiKey:
+    displayName: "Whisparr API Key"
+    description: "Whisparr → Settings → General → API Key."
     type: STRING
   preferredBox:
     displayName: "Preferred stash-box"

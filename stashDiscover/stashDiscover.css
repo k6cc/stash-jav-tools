@@ -3589,6 +3589,14 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   font-weight: 600;
   color: var(--sx-tx1b);
 }
+/* 需要整组隐藏的设置组（目前只有 Whisparr）套一层容器：父级的 14px gap
+   只作用于直接子元素，标题与卡片被包进来后间距就没了，标题会贴住卡片
+   （用户 2026-11-09 截图）。这里补一份同样的 gap。 */
+.ssd-dp-set-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 .ssd-dp-set-box {
   display: flex;
   flex-direction: column;

@@ -1,17 +1,17 @@
 name: stashDiscover
 description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, and look for download sources.
-version: 2.6.21
+version: 2.7.0
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
 settings:
   recentDays:
     displayName: "Recent Window (days)"
-    description: "Only show scenes released in the last N days. 0 = all. Leave empty for the default (180)."
+    description: "Only show scenes released in the last N days. 0 = all. Leave empty for the default (180). Applies to performer/studio tabs only."
     type: STRING
   previewDays:
     displayName: "Preview Window (days)"
-    description: "Future-dated scenes are previews: -1 = hide, 0 = all, N = within N days. Default 7."
+    description: "Future-dated scenes are previews: -1 = hide, 0 = all, N = within N days. Default 7. Applies to performer/studio tabs only."
     type: STRING
   jackettUrl:
     displayName: "Jackett API URL"

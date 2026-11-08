@@ -921,7 +921,7 @@
       var item = shapeBoxItem(box, sc);
       var isFuture = sc.release_date && sc.release_date > today;
       if (isFuture) preview.push(item); else latest.push(item);
-      // 演员分组统计（cap 前的真实计数，§3.2 模块 1 的 "N 部新作品"）
+      // 演员分组统计（cap 前的真实计数，即模块 1 副标题「N 人次」的来源）
       for (var j = 0; j < perfs.length; j++) {
         var pf = perfs[j] && perfs[j].performer;
         if (!pf) continue;
@@ -938,9 +938,12 @@
     preview.sort(function (a, b) { return String(a.scene.release_date || "").localeCompare(String(b.scene.release_date || "")); });
 
     // 每人 capPerActor()（§4.3：总览模块 + 最新/预告钻取；热门与过滤页不受限）。
-    // 非严格上限：多演员同场整条保留，单人实际可出现更多（见设置页注释）
+    // 软上限（用户 2026-11-08 定）：要压的是总览里同一演员的露出频次，不是硬配额 ——
+    // 只要「任一库内演员还有名额」就保留整条、全员 +1，所以单人会超过 N（cap=2 实测 8 条）。
+    // 别改成严格 every：大库无感，小库会把多人共演场景成片砍掉（71 人共演满 1 人就整条丢）。
     function capByActor(list) {
       var n = {};
+      var cap = capPerActor();
       return list.filter(function (it) {
         var keep = false;
         var perfs = (it.scene.performers || []);
@@ -951,7 +954,7 @@
           var lp = linkedByStashId[String(pf.id)];
           if (!lp) continue;
           matched = true;
-          if ((n[lp.localId] || 0) < capPerActor()) keep = true;
+          if ((n[lp.localId] || 0) < cap) keep = true;
         }
         if (!matched) return true; // 无库内演员匹配（理论少见）不丢
         if (keep) {
@@ -990,6 +993,8 @@
       if (!src) throw { ssdKind: "no-box", message: "no stash-box configured" };
       var recentDays = dpRecentDays();
       var since = recentDays > 0 ? SSD.recentCutoffDate(recentDays) : null;
+      // previewDays/previewCutoff 只透出给数据面（控制台核对、测试脚本），
+      // 发现页刻意不做未来窗口过滤：预告 = release_date 晚于今天，多远都算。
       var previewDays = toNum(yml.previewDays, 7);
       var previewCutoff = SSD.previewCutoffDate(previewDays);
       return { boxes: boxes, yml: yml, source: src, since: since, previewCutoff: previewCutoff, recentDays: recentDays, previewDays: previewDays };
@@ -1672,13 +1677,13 @@
       ch.replace(/[<>&]/g, "") + "</text></svg>";
     return "data:image/svg+xml," + encodeURIComponent(svg);
   }
+  // 角标要短：英文原本 "in 3 days"（9 字符）在 217px 的卡上占去四分之一封面，
+  // 压成 "in 3d"；中文同理只留「N 天后」（用户 2026-10-28）。
+  // 调用点（sceneGrid 的 days 分支）只在 release_date 晚于今天时才调，n 恒 >= 1。
   function daysUntilText(dstr) {
     var d1 = new Date(dstr + "T00:00:00"), d0 = new Date(SSD.localDateStr(new Date()) + "T00:00:00");
     var n = Math.round((d1 - d0) / 86400000);
-    // 角标要短：英文原本 "in 3 days" / "out today"（9 字符）在 217px 的卡上
-    // 占去四分之一封面，压成 "in 3d" / "today"（用户 2026-10-28）
-    if (isNaN(n) || n <= 0) return tc("今天上映", "today");
-    return tc(n + " 天后上映", "in " + n + "d");
+    return tc(n + " 天后", "in " + n + "d");
   }
   // 搜索口径（用户 2026-11-05，论坛建议）：主发现页原先漏了 tags，而演员页/工作室页
   // 的「发现」tab（stashDiscover.js getFilteredMissing）一直搜 tags —— 同一个词在两处
@@ -1868,7 +1873,7 @@
     // （buildSceneCard 仅在多源上下文渲染该徽标）— 用户 2026-10-25
     return { zoom: 0, queryBoxes: [], localPerformerMaps: localPerfMaps() };
   }
-  // decorateCard：预告"X 天后上映"绿标（替换 buildSceneCard 的黄色彩点）、
+  // decorateCard：预告"X 天后"绿标（替换 buildSceneCard 的黄色彩点）、
   // 热门榜"库内"小角标（§5）、关注未读红框（§3.4）
   function decorateCard(card, item, opts) {
     opts = opts || {};
@@ -1881,7 +1886,7 @@
       // 角标归拢进一个竖向堆叠的容器：① 多个角标同时出现时（预告 + 库内演员）
       // 不再互相压在同一坐标上；② 位置由容器一处控制，「默认角标位置」才能只切
       // 一个属性（用户 2026-10-28）。发现页的源徽章恒不渲染（cardCtx 传空
-      // queryBoxes），容器里实际是 预告 / 距上映天数 / 库内演员。
+      // queryBoxes），容器里实际是 预告 / 距今天数 / 库内演员。
       var badgeBox = badgeHost.querySelector(".ssd-badges");
       if (!badgeBox) {
         badgeBox = el("div", "ssd-badges");
@@ -2546,7 +2551,7 @@
       var s1 = sec(parent, {
         icon: I.star, title: tc("有新发布的演员", "Performers with releases"), mod: "actors",
         // 副标题长度按窄屏算过（用户 2026-11-08）：口径说明（回看窗口）包进
-        // .ssd-dp-sec-x，≤720px 由 CSS 隐藏，手机上一律单行
+        // .ssd-dp-sec-x，本模块副标题独占一行、放得下，所以只在 ≤340 藏
         count: d ? tc(aw.length + " 位演员 · " + awScenes + " 人次",
           aw.length + " performers · " + awScenes + " appearances") +
           ' <span class="ssd-dp-sec-x">· ' + lookbackText(d.recentDays, SSD.isZh()) + "</span>" : "",
@@ -2589,7 +2594,7 @@
       var s2 = sec(parent, {
         icon: I.latest, title: tc("最新发布", "Latest"), mod: "latest",
         // 不再写「每人最多 N 部」（用户 2026-11-08 决定删除）：那是设置页的回显，
-        // 而且口径不成立 —— 非严格上限，实测 cap=2 时单人也会出现 7 部
+        // 塞进副标题只会撑爆窄屏；而且 capByActor 是软上限，单人实际可超过 N
         count: d ? tc((d.latest || []).length + " 部未拥有", (d.latest || []).length + " unowned") : "",
         more: function () { switchView("latest"); },
       });
@@ -2627,7 +2632,10 @@
     if (id === "preview") {
       var s4 = sec(parent, {
         icon: I.preview, title: tc("即将发布", "Upcoming"), mod: "preview",
-        count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length) : "",
+        // 发现页不做未来窗口过滤（用户 2026-11-08）：预告模块列全部未来场景，
+        // 由卡片「预告」角标标注档期。previewDays 只作用于演员/工作室 tab 的列表，
+        // 不要为了「对齐设置」再把这里收窄 —— 那是刻意不做的。
+        count: d ? tc((d.preview || []).length + " 部", (d.preview || []).length + " scenes") : "",
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
@@ -2720,21 +2728,35 @@
     var lib = {};
     d.linked.forEach(function (p) { lib[String(p.stashId)] = true; });
     var counts = {}, meta = {}, coWith = {};
+    // 一条场景会出现在**每个**同场库内演员的分组里（14 人共演的片就有 14 份），
+    // 所以计数必须按「共演者 + 场景」去重：不去重的话一条群像片按同场演员数重复
+    // 计——实测「×80」实际只有 8 部，弹窗封面同一张重复出现。coWith 再按
+    // 「共演者 + 场景 + 关注演员」去重，保证副标题的 +N 也是部数（用户 2026-11-08）。
+    var seenPair = {}, seenWith = {}, anonSeq = 0;
     (d.actorsWithNew || []).forEach(function (g) {
       // 记住这位共演者是「跟谁同场」的：卡片副标题要说清入选原因，
-      // 只写「共同出演 ×64」看不出这 64 场是和谁演的（用户 2026-10-27）
+      // 只给一个场景数看不出是和谁演的（用户 2026-10-27）
       var srcId = String((g.performer && g.performer.stashId) || "");
       var srcName = (g.performer && g.performer.name) || "";
       g.items.forEach(function (it) {
+        var scId = it.scene && it.scene.id;
+        var sceneKey = scId ? String(scId) : "anon:" + (anonSeq++);
         ((it.scene && it.scene.performers) || []).forEach(function (pp) {
           var pf = pp && pp.performer;
           if (!pf || lib[String(pf.id)]) return;
           var pid = String(pf.id);
           // 头像随场景数据带上（共同出演迷你卡与弹窗即时显示 — 用户 2026-10-25）
           if (!meta[pid]) meta[pid] = { stashId: pid, name: pf.name || "", image: (pf.images && pf.images[0] && pf.images[0].url) || "" };
-          if (!counts[pid]) counts[pid] = { n: 0, items: [] };
-          counts[pid].n++;
-          if (counts[pid].items.length < 12) counts[pid].items.push(it);
+          var pairKey = pid + "|" + sceneKey;
+          if (!seenPair[pairKey]) {
+            seenPair[pairKey] = 1;
+            if (!counts[pid]) counts[pid] = { n: 0, items: [] };
+            counts[pid].n++;
+            if (counts[pid].items.length < 12) counts[pid].items.push(it);
+          }
+          var withKey = pairKey + "|" + srcId;
+          if (seenWith[withKey]) return;
+          seenWith[withKey] = 1;
           if (!coWith[pid]) coWith[pid] = {};
           var w = coWith[pid][srcId] || (coWith[pid][srcId] = { srcId: srcId, name: srcName, n: 0 });
           w.n++;
@@ -2767,7 +2789,7 @@
   }
 
   // 共演卡副标题：说清「跟谁一起演」，而不是只给一个没有指向的场景数
-  // （用户 2026-10-27：「共同出演 ×64」看不出这 64 场是和谁演的）
+  // （用户 2026-10-27）
   function coSub(cs) {
     var list = cs.coWith || [];
     if (!list.length) return tc("共同出演", "Co-star");
@@ -2778,15 +2800,17 @@
   }
 
   // 弹窗里有整行宽度，把「和谁 + 几场」写全
+  // 人数只算库内演员（coWith 的 srcId 恒来自 actorsWithNew 分组），所以写「在库演员」；
+  // 「22 人共同出演 19 部」容易被读成 22 个人同框演了 19 部（用户 2026-11-08）
   function coStat(p) {
     var list = p.coWith || [];
     var n = p.scenes || 0;
-    if (!list.length) return tc("共同出演 " + n + " 部", "in " + n + " scenes");
+    if (!list.length) return tc("共演 " + n + " 部", n + " scenes");
     if (list.length > 1) {
-      return tc("与 " + list[0].name + " 等 " + list.length + " 人共同出演 " + n + " 部",
-                "with " + list[0].name + " and " + (list.length - 1) + " more · " + n + " scenes");
+      return tc("与 " + list[0].name + " 等 " + list.length + " 位在库演员 · 共演 " + n + " 部",
+                "with " + list[0].name + " and " + (list.length - 1) + " more in library · " + n + " scenes");
     }
-    return tc("与 " + list[0].name + " 共同出演 " + n + " 部",
+    return tc("与 " + list[0].name + " 共演 " + n + " 部",
               "with " + list[0].name + " · " + n + " scenes");
   }
   // 热门演员榜迷你卡（§3.5 子源 2；过滤已在库 §3.5）
@@ -4960,7 +4984,7 @@
     wrap.appendChild(el("h3", "ssd-dp-set-h", tc("场景卡角标", "Scene card badges")));
     var secB = el("div", "ssd-dp-set-box");
 
-    // 自定义角标（预告 / 距上映天数 / 库内演员）贴哪一侧。
+    // 自定义角标（预告 / 距今天数 / 库内演员）贴哪一侧。
     // 排在最前（用户 2026-11-07）：与下一行「显示工作室角标」挨着，两者都有
     // 「左上」档且互斥，放一起才看得出是一组、选一个另一个会让位。
     var posLabel = tc("默认角标位置", "Default badge position");

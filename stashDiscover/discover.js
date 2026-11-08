@@ -2382,7 +2382,8 @@
     if (o.mod) s.setAttribute("data-mod", o.mod);
     var h = el("div", "ssd-dp-sec-head");
     h.appendChild(el("h2", "ssd-dp-sec-title", (o.icon || "") + "<span>" + o.title + "</span>"));
-    if (o.count) h.appendChild(el("span", "ssd-dp-sec-count", o.count));
+    // o.x: 副标题是纯口径说明（没有数字）→ 窄屏整条隐藏，别为它折行
+    if (o.count) h.appendChild(el("span", "ssd-dp-sec-count" + (o.x ? " ssd-dp-sec-x" : ""), o.count));
     if (o.more) {
       var m = el("button", "ssd-dp-sec-more", tc("查看更多 →", "More →"));
       m.type = "button";
@@ -2544,8 +2545,11 @@
       var awScenes = aw.reduce(function (n, g) { return n + notifyItems(g).length; }, 0);
       var s1 = sec(parent, {
         icon: I.star, title: tc("有新发布的演员", "Performers with releases"), mod: "actors",
-        count: d ? tc(aw.length + " 位演员 · " + awScenes + " 部新作品 · " + lookbackText(d.recentDays, true),
-          aw.length + " performers · " + awScenes + " new · " + lookbackText(d.recentDays, false)) : "",
+        // 副标题长度按窄屏算过（用户 2026-11-08）：口径说明（回看窗口）包进
+        // .ssd-dp-sec-x，≤720px 由 CSS 隐藏，手机上一律单行
+        count: d ? tc(aw.length + " 位演员 · " + awScenes + " 人次",
+          aw.length + " performers · " + awScenes + " appearances") +
+          ' <span class="ssd-dp-sec-x">· ' + lookbackText(d.recentDays, SSD.isZh()) + "</span>" : "",
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
         more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
@@ -2584,7 +2588,9 @@
       // 模块：最新发布（原生场景卡，按 capPerActor() 截断）
       var s2 = sec(parent, {
         icon: I.latest, title: tc("最新发布", "Latest"), mod: "latest",
-        count: d ? tc((d.latest || []).length + " 部未拥有 · 每人最多 " + capPerActor() + " 部", (d.latest || []).length + " unowned · max " + capPerActor() + " per performer") : "",
+        // 不再写「每人最多 N 部」（用户 2026-11-08 决定删除）：那是设置页的回显，
+        // 而且口径不成立 —— 非严格上限，实测 cap=2 时单人也会出现 7 部
+        count: d ? tc((d.latest || []).length + " 部未拥有", (d.latest || []).length + " unowned") : "",
         more: function () { switchView("latest"); },
       });
       if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
@@ -2600,9 +2606,12 @@
     if (id === "trending") {
       var s3 = sec(parent, {
         icon: I.trending, title: trendingTitle(), mod: "trending",
+        // 口径说明（· 不限库内 / · 按入库时间）窄屏隐藏，主句保留数据源与榜单类型
         count: t ? (trendingOnTPDB()
-          ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 无热度榜 · 按入库时间", "No popularity ranking — newest first")
-          : tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜 · 不限库内", "Site-wide · not library-filtered")) : "",
+          ? tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 无热度榜", "No popularity ranking") +
+            ' <span class="ssd-dp-sec-x">· ' + tc("按入库时间", "newest first") + "</span>"
+          : tc(SSD.brandNameForEndpoint(t.source.endpoint, t.source.name) + " 全站榜", "Site-wide ranking") +
+            ' <span class="ssd-dp-sec-x">· ' + tc("不限库内", "not library-filtered") + "</span>") : "",
         more: function () { switchView("trending"); },
       });
       if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", _dp.err.trending ? errText(_dp.err.trending) : null, function () { retryDataset("trending"); });
@@ -2618,7 +2627,7 @@
     if (id === "preview") {
       var s4 = sec(parent, {
         icon: I.preview, title: tc("即将发布", "Upcoming"), mod: "preview",
-        count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部 · 每人最多 " + capPerActor() + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length + " · max " + capPerActor() + " per performer") : "",
+        count: d ? tc("未来 " + d.previewDays + " 天 · " + (d.preview || []).length + " 部", "next " + d.previewDays + "d · " + (d.preview || []).length) : "",
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
@@ -2636,7 +2645,7 @@
       // 模块：工作室新发布（收藏工作室，按 capPerStudio() 截断）
       var s5 = sec(parent, {
         icon: I.studios, title: tc("工作室新发布", "Studio releases"), mod: "studios",
-        count: st ? tc((st.studioCount || 0) + " 个收藏工作室 · 每工作室最多 " + capPerStudio() + " 部", (st.studioCount || 0) + " favorites · max " + capPerStudio() + " per studio") : "",
+        count: st ? tc((st.studioCount || 0) + " 个工作室", (st.studioCount || 0) + " studios") : "",
         more: function () { switchView("studios"); },
       });
       if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", _dp.err.studios ? errText(_dp.err.studios) : null, function () { retryDataset("studios"); });
@@ -2658,7 +2667,8 @@
       // 模块：发现演员（共同出演 ∥ 热门榜）
       var s6 = sec(parent, {
         icon: I.performers, title: tc("发现演员", "Discover performers"), mod: "performers",
-        count: tc("不在库 · 共同出演 / 热门榜", "Not in library · co-starred / trending"),
+        // 英文标题就有 144px，再加副标题 360 屏必折行 → 窄屏整条隐藏
+        count: tc("不在库", "Not in library"), x: true,
         more: function () { switchView("performers"); },
       });
       if (!d || !tp) secBody(s6, "loading", null);
@@ -5843,10 +5853,17 @@
       if (!d) refs.chips.innerHTML = "";
       else {
         var n = (d.latest || []).length + (d.preview || []).length;
+        // 文案按窄屏算过（用户 2026-11-08）：四位数时「个新场景 / 位关联演员 /
+        // 数据源」会顶到 321px，360 屏（容器 299）直接换行；缩成「个场景 /
+        // 位演员 / 源」后中文 273px。英文用 DS（data source，不是 DB）+ 4px 间距
+        // = 293px，留 6px 余量。完整措辞放 title 里。
+        var srcName = SSD.brandNameForEndpoint(d.source.endpoint, d.source.name);
+        var srcTip = tc("数据源：", "Source: ") + srcName;
         refs.chips.innerHTML =
-          '<span class="ssd-dp-chip"><b>' + n + "</b> " + tc("个新场景", "new scenes") + "</span>" +
-          '<span class="ssd-dp-chip"><b>' + (d.linkedCount || 0) + "</b> " + tc("位关联演员", "linked performers") + "</span>" +
-          '<span class="ssd-dp-chip">' + tc("数据源", "Source") + " <b>" + SSD.brandNameForEndpoint(d.source.endpoint, d.source.name) + "</b></span>";
+          '<span class="ssd-dp-chip"><b>' + n + "</b> " + tc("个场景", "scenes") + "</span>" +
+          '<span class="ssd-dp-chip"><b>' + (d.linkedCount || 0) + "</b> " + tc("位演员", "performers") + "</span>" +
+          '<span class="ssd-dp-chip" title="' + srcTip + '">' +
+            tc("源", "DS") + "<b>" + srcName + "</b></span>";
       }
     }
     // 窄屏刷新反馈：状态文字变「更新中…」+ 标题图标旋转（用户 2026-10-27）

@@ -1575,6 +1575,18 @@
   color: var(--sx-acc);
 }
 
+/* 三条 meta chip 之间的间距。原先靠 HTML 拼接、没有间隙，边框直接相贴；
+   有了 gap 后 360px 屏也要放得下（文案已按窄屏缩过，见 discover.js）。
+   flex-wrap 只是兜底：360 下连 5 位数都单行，只有 ≤320 的极小屏才会折
+   —— 折行总好过把页面撑出横向滚动条 */
+.ssd-dp-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  /* 4px：英文「DS JAVStash」在 360 屏（容器 299）要挤进 293px，6px 只剩 2px 余量 */
+  gap: 4px;
+}
+
 .ssd-dp-chip {
   display: inline-flex;
   align-items: center;
@@ -1845,6 +1857,41 @@
 .ssd-dp-sec[data-mod="performers"] .ssd-dp-sec-title svg { color: color-mix(in srgb, #a78bfa 78%, var(--sx-tx1b)); }
 
 .ssd-dp-sec-count { font-size: 12px; color: var(--sx-tx2); }
+
+/* ─── 窄屏（≤640）模块标题行 ──────────────────────────────────────────────
+   标题行是三段抢一行：标题 + 副标题 + 查看更多(70px)。文案已按窄屏瘦身
+   （见 discover.js），除「有新发布的演员」外都能并排一行。
+   640 而不是 480：英文 actors 带「· lookback 30d」时容器要 478px 才放得下，
+   481～600 实测仍折行（2026-11-08 克隆真实节点量得）。
+   处理：口径说明隐藏；副标题一律 nowrap，排不下时整块折行而不是从中间断开；
+   只有 actors 强制独占一行 —— 它的英文标题 174px 本身就吃掉了大半行宽。 */
+@media (max-width: 640px) {
+  .ssd-dp-sec-x { display: none; }
+  .ssd-dp-sec-count { white-space: nowrap; }
+  .ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-count {
+    order: 3;              /* 排到「查看更多」之后 → 落到第二行 */
+    flex-basis: 100%;
+    /* 与标题文字左缘对齐，不跟标题前的图标对齐（图标 15px + 标题 gap 0.45rem，
+       实测 21px）。用 padding 而不是 margin：flex-basis:100% 再叠 margin 会撑出横向滚动 */
+    padding-left: 21px;
+  }
+  /* actors 独占一行 → 口径放得下（中文 173px / 英文 253px，可用 278~308），
+     不必再像并排模块那样藏掉 */
+  .ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-x { display: inline; }
+}
+
+/* actors 副标题换行时贴近标题。不挂媒体查询：row-gap 只在换行时生效，
+   宽屏与标题同行时无影响，也就不会出现「某个宽度下没生效」的情况。
+   取值 1px 而不是 0 —— baseline 对齐会在两条 flex line 之间垫约 3px，
+   row-gap:1 实测盒间 4px（原 gap:0.7rem 时盒间 13px）。
+   副标题行高同步收到 1.3（原继承 1.5 = 18px），去掉多余的行内空白。 */
+.ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-head { row-gap: 1px; }
+.ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-count { line-height: 1.3; }
+
+/* 320 屏（可用 238）英文全量 253px 放不下 → 只此一档藏口径 */
+@media (max-width: 340px) {
+  .ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-x { display: none; }
+}
 
 .ssd-dp-sec-more {
   margin-left: auto;

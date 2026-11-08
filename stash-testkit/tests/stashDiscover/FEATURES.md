@@ -188,3 +188,18 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
 - 点击 = `doRefresh()`（清该源三族缓存后重拉），重拉成功 chip 自动消失。
 - 老条目没有 `totalSeen` → 当完整、不显示；不需要升 `fmt`。
 - 回归：`probe_cache_trim_setup.js`（把缓存裁到 10 条）→ `probe_cache_trim_chip.js`（出现 → 点击 → 消失）。
+
+## 搜索结果容器统一（2026-11-09 实测）
+
+- **现象**：反复点「找资源 / 搜索」后，底部堆出多行「换个搜索词再试：code」；点其中一颗后动作正确，
+  但看不到「正在搜索」、旧提示也不消失。
+- **根因**：`doSearchResources` 把 `_searchSection` 记成外层 `[data-ssd-search]`，而渲染传的是内层
+  `[data-ssd-search-results]` —— 备选行住在外层，每次只清结果盒，清不到，越点越多。加载行落在结果盒里、
+  又在堆叠的备选行**上面**，`scrollModalToBottom` 滚到最底 → 全被旧提示挡在视口外。
+- **修法**：新增 `searchBox(node)` 统一落到结果盒（自身带 `data-ssd-search-results` 就返回自身，
+  否则找/建子节点）；`renderSearchAlts(section)` 改收参数并先删旧行；`_searchBusy` + 禁用 bar 里的
+  `[data-ssd-search-go]` 挡连点；输入框改由 `doSearchResources` 同步（备选按钮回调里不再直接填）。
+- **滚动**：`scrollIntoView({block:"nearest"})` 在 `fixed` 模态里会把整页一起滚、实测滚不到位，
+  改为按 `modalBody().scrollTop` 算最小位移，只在加载行落到视口外时动。不做悬浮、不贴顶。
+- **实测**（发现页真实卡片 + 真 Jackett 搜索，连搜两次）：`alts` 恒为 1 且 `altsInBox=1`；
+  搜索中 `goDisabled=true`；点备选按钮后 `loading=true`、`visible=yes`、`alts=0`、输入框自动变成该词。

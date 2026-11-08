@@ -5026,8 +5026,8 @@
   var _searchAlts = [];         // 当前场景的备选搜索词（0 结果时给一键换词）
   var _searchCands = [];        // 主词 + 备选，用于判断某次搜索词属于哪种自动判定
   var _searchBarCtx = null;     // { item, btn }：备选按钮重搜时要用
-  var _searchSection = null;    // 当前结果区，备选按钮往这里加
   var _searchCurQuery = "";     // 最近一次实际下发的搜索词
+  var _searchBusy = false;      // 搜索是同步 op：连点会排队发两次请求，直接挡掉
 
   // 翻页的目标序列：不从调用方传列表，而是从触发卡片反查同一容器里的兄弟节点 ——
   // .ssd-scene-card 与 .ssd-scene-table 的 tr 都挂了 __ssdItem，所以演员页 / 工作室页 /
@@ -7893,6 +7893,8 @@
     var goBtn = document.createElement("button");
     goBtn.type = "button";
     goBtn.className = "ssd-dp-btn primary";
+    // 搜索中由 doSearchResources 统一禁用（防连点排队发两次同步请求）
+    goBtn.setAttribute("data-ssd-search-go", "");
     // 文案单独一层，和弹窗其他动作按钮同一套结构（图标不随状态被抹掉）
     goBtn.innerHTML = '<span class="ssd-dp-bico">' + ACT_FIND_SVG + "</span>";
     var goTx = document.createElement("span");
@@ -7922,13 +7924,22 @@
     return document.querySelector(".ssd-modal .ssd-modal-body");
   }
 
-  // Smooth-scroll the modal to its bottom so the search status/results are
-  // visible (the search section sits at the end of the modal).
-  function scrollModalToBottom() {
+  // 把节点推进可视区：已经在视野里就完全不动，不贴顶、也不是悬浮层 ——
+  // 加载中那行就是搜索框下面一行普通文案（用户 2026-11-09：不要「贴到视口
+  // 顶部」的效果），这里只在它落到视口外时滚最小的一段。
+  // 不用 scrollIntoView：外层 modal 是 fixed，它会把整页一起滚，实测滚不到位
+  // （2026-11-09 真机验证 loading 仍在视口外）；直接改滚动容器的 scrollTop。
+  function revealIfNeeded(node) {
     var body = modalBody();
-    if (!body) return;
-    try { body.scrollTo({ top: body.scrollHeight, behavior: "smooth" }); }
-    catch (e) { body.scrollTop = body.scrollHeight; }
+    if (!body || !node) return;
+    var nb = node.getBoundingClientRect();
+    var bb = body.getBoundingClientRect();
+    if (nb.top >= bb.top && nb.bottom <= bb.bottom) return;
+    var top = body.scrollTop;
+    if (nb.bottom > bb.bottom) top += nb.bottom - bb.bottom + 12;
+    else if (nb.top < bb.top) top -= bb.top - nb.top + 12;
+    try { body.scrollTo({ top: top, behavior: "smooth" }); }
+    catch (e) { body.scrollTop = top; }
   }
 
   // 结果渲染出来比那行「搜索中…」高一个数量级，滚动位置却还停在旧底部，
@@ -7943,12 +7954,32 @@
     catch (e) { body.scrollTop = top; }
   }
 
+  // 结果盒统一入口（用户 2026-11-09 反馈的「多个换个搜索词再试」就出在这里）：
+  // 从动作按钮进来传的是外层 [data-ssd-search]，从备选按钮回调进来传的是结果盒
+  // 自身 —— 两种都得落到同一个节点。以前备选行挂在 _searchSection（外层）上，
+  // 每次搜索只清结果盒，备选行越攒越多，点完也不消失。
+  function searchBox(node) {
+    if (!node) return null;
+    if (node.hasAttribute("data-ssd-search-results")) return node;
+    var box = node.querySelector("[data-ssd-search-results]");
+    if (!box) {
+      box = document.createElement("div");
+      box.setAttribute("data-ssd-search-results", "");
+      node.appendChild(box);
+    }
+    return box;
+  }
+
   function doSearchResources(section, item, btn, query, kind) {
-    if (!query) return;
+    if (!query || _searchBusy) return;
+    var box = searchBox(section);
+    if (!box) return;
+    // chip / 输入框 / 搜索小按钮都在搜索栏里，不在结果盒里
+    var outer = box.closest("[data-ssd-search]") || box.parentElement || box;
 
     // 搜索来源标签：让用户知道这词是按番号 / 日期+演员 / 标题生成的。
     // kind 为空（用户自己改过的词）就清空，不假装知道。
-    var chip = section.querySelector("[data-ssd-search-src]");
+    var chip = outer.querySelector("[data-ssd-search-src]");
     if (chip) {
       var lbl = kind && SEARCH_KIND_LABEL[kind] ? SEARCH_KIND_LABEL[kind]() : "";
       chip.textContent = lbl ? tc("按" + lbl, lbl) : "";
@@ -7956,40 +7987,55 @@
       chip.title = query;
     }
 
-    var results = section.querySelector("[data-ssd-search-results]");
-    if (!results) {
-      results = document.createElement("div");
-      results.setAttribute("data-ssd-search-results", "");
-      section.appendChild(results);
-    }
-    results.innerHTML = "";
+    // 输入框与实际下发的词保持一致：点备选按钮也走这里（以前在按钮回调里填，
+    // 万一被 busy 挡掉，输入框会留下一个根本没搜过的词）
+    var input = outer.querySelector("[data-ssd-search-input]");
+    if (input && input.value !== query) input.value = query;
 
-    btn.disabled = true;
-    setActLabel(btn, tc("搜索中...", "Searching..."));
+    // 备选行现在住在结果盒里（清 box 就没了），这句只是防御：万一以后又有谁
+    // 把它挂到外层，也不会重新攒成一片。
+    var stale = outer.querySelectorAll(".ssd-search-alts");
+    for (var i = 0; i < stale.length; i++) stale[i].remove();
+
+    box.innerHTML = "";
+
+    _searchBusy = true;
+    var go = outer.querySelector("[data-ssd-search-go]");
+    if (go) go.disabled = true;
+    if (btn) {
+      btn.disabled = true;
+      setActLabel(btn, tc("搜索中...", "Searching..."));
+    }
     var loading = document.createElement("div");
     loading.className = "ssd-search-loading";
     loading.textContent = tc("正在通过 Jackett 搜索: ", "Searching via Jackett: ") + query;
-    results.appendChild(loading);
-    scrollModalToBottom();
+    box.appendChild(loading);
+    revealIfNeeded(loading);
+
+    function done() {
+      _searchBusy = false;
+      if (go) go.disabled = false;
+      if (btn) {
+        btn.disabled = false;
+        setActLabel(btn, tc("找资源", "Find"));
+      }
+    }
 
     runPluginOp({ mode: "search", query: query }).then(function (result) {
-      btn.disabled = false;
-      setActLabel(btn, tc("找资源", "Find"));
-      // 结果渲染完由 renderSearchPage 统一把抬头对齐到可视区（见 scrollResultsToTop）
+      done();
       // 排序要用实际下发的搜索词；后端老版本没回 query 时用本次的兜底
+      // （结果抬头对齐由 renderSearchPage 统一处理，见 scrollResultsToTop）
       var payload = result || {};
       if (!payload.query) payload.query = query;
-      _searchSection = section;
-      renderSearchResults(results, payload);
+      renderSearchResults(box, payload);
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
-      btn.disabled = false;
-      setActLabel(btn, tc("找资源", "Find"));
-      results.innerHTML = "";
+      done();
+      box.innerHTML = "";
       var err = document.createElement("div");
       err.className = "ssd-search-error";
       err.textContent = tc("搜索失败: ", "Search failed: ") + (e.message || String(e));
-      results.appendChild(err);
+      box.appendChild(err);
     });
   }
 
@@ -8124,10 +8170,14 @@
   // 0 结果时给一键换词：自动判定可能恰好撞上「种子还没出」，而换一种形态
   // （标题 / 日期+演员 / 番号）经常能搜到。只给按钮、不自动重试 —— 搜索是
   // 同步 op，反代 60s 会切，翻倍请求不可控，而且用户往往想自己看看词。
-  function renderSearchAlts() {
-    var section = _searchSection;
+  // section 是结果盒：调用方传进来，不再读全局 —— 混用容器就是「多行备选」
+  // 的源头（用户 2026-11-09）。
+  function renderSearchAlts(section) {
     var ctx = _searchBarCtx;
     if (!section || !ctx) return;
+    // 幂等：同一份结果只留一行
+    var old = section.querySelector(".ssd-search-alts");
+    if (old) old.remove();
     var rest = (_searchCands || []).filter(function (c) { return c.q && c.q !== _searchCurQuery; });
     if (!rest.length) return;
     var row = document.createElement("div");
@@ -8140,8 +8190,6 @@
       b.textContent = SEARCH_KIND_LABEL[alt.kind] ? SEARCH_KIND_LABEL[alt.kind]() : alt.kind;
       b.title = alt.q;
       b.onclick = function () {
-        var input = section.querySelector("[data-ssd-search-input]");
-        if (input) input.value = alt.q;
         doSearchResources(section, ctx.item, ctx.btn, alt.q, alt.kind);
       };
       row.appendChild(b);
@@ -8181,7 +8229,7 @@
       empty.className = "ssd-search-empty";
       empty.textContent = tc("未找到资源", "No resources found");
       section.appendChild(empty);
-      renderSearchAlts();
+      renderSearchAlts(section);
       return;
     }
 

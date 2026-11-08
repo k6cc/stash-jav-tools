@@ -41,11 +41,11 @@ settings:
     displayName: "qBittorrent Password / Motrix Secret"
     description: "qBittorrent Web UI password. For Motrix: the RPC key from Advanced → RPC on desktop, or the operator token on the server build."
     type: STRING
-  whisperrUrl:
+  whisparrUrl:
     displayName: "Whisparr URL"
     description: "Whisparr v3 base URL, e.g. http://127.0.0.1:6969. Leave empty to hide the Whisparr button."
     type: STRING
-  whisperrApiKey:
+  whisparrApiKey:
     displayName: "Whisparr API Key"
     description: "Whisparr → Settings → General → API Key."
     type: STRING

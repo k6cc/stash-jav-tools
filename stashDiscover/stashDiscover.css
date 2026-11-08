@@ -7,7 +7,6 @@
   --ssd-primary: #0ca678;
   --ssd-primary-hover: #099268;
   --ssd-accent: #f76707;
-  --ssd-accent-hover: #e8590c;
   --ssd-secondary: #495057;
   --ssd-secondary-hover: #868e96;
   /* 演员名 pill 的兜底色（拿到 gender 时改由 .pf-* 覆盖，见 .ssd-pill-performer）。
@@ -103,8 +102,6 @@
 .ssd-btn-primary:hover:not(:disabled) { background: var(--ssd-primary-hover); }
 .ssd-btn-secondary { background: var(--ssd-secondary); color: #fff; }
 .ssd-btn-secondary:hover:not(:disabled) { background: var(--ssd-secondary-hover); }
-.ssd-btn-accent { background: var(--ssd-accent); color: #fff; }
-.ssd-btn-accent:hover:not(:disabled) { background: var(--ssd-accent-hover); }
 .ssd-btn-info { background: var(--ssd-info); color: #fff; }
 .ssd-btn-info:hover:not(:disabled) { background: var(--ssd-info-hover); }
 .ssd-btn-success { background: var(--ssd-success) !important; color: #fff; }
@@ -4484,7 +4481,6 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 
 .ssd-tab-pane {
   --ssd-sel-acc: #137cbd; /* = 原生 .btn-primary 底色，选中态和按钮同一色系 */
-  --ssd-sel-line: rgba(128, 128, 128, 0.4);
 }
 .ssd-tab-pane .ssd-dp-selbox { border-color: #fff; background: rgba(0, 0, 0, 0.45); }
 .ssd-tab-pane .scene-card.is-sel .ssd-dp-selbox,

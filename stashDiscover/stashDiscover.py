@@ -707,9 +707,8 @@ def _test_downloader(cfg, zh=True):
 # ─── Whisparr ──────────────────────────────────────────────────────────────
 # 只对 stashdb 源开放（前端判断），因为 Whisparr 那边靠 stash_id 反查 TPDB
 # 元数据；javstash 的 ID 它不认，加进去只会得到一条空壳记录。
-# 加片必须带 qualityProfileId + rootFolderPath（实测缺任一项 400），两项都由
-# 插件自己取：根目录用第一个，质量档案优先挑允许 Unknown 的 —— JAV 种子标题
-# 里没有分辨率，aria2/Whisparr 一律解析成 Unknown，而默认的 Any 会拒它。
+# 加片必须带 qualityProfileId + rootFolderPath（实测缺任一项 400）：根目录取第
+# 一个；质量档案由用户在发现页设置里选，没选则回退到 Any / id 最小。
 # 重复添加返回 400 + MovieExistsValidator，对用户来说等于「已经加过」。
 
 def _whisparr_cfg(cfg):
@@ -771,9 +770,7 @@ def _whisparr_find(base, key, stash_id):
 def _whisparr_profiles_fetch(base, key):
     """GET /qualityprofile → (profiles, err)，profiles 按 id 升序。
 
-    原先这里有段「挑第一个允许 Unknown 的档案」的启发式，是给 JAV 用的；但它会
-    静默覆盖用户自己的档案（用户 2026-11-09 要求改成显式设置），已删。
-    档案现在由用户在发现页设置里选，值就是这里的 id。
+    档案 id 就是发现页设置里存的值；插件不替用户挑档案。
     """
     status, body, _ = _whisparr_req(base, key, "GET", "/api/v3/qualityprofile")
     if status != 200:

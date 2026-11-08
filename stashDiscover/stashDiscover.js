@@ -7976,10 +7976,9 @@
     catch (e) { body.scrollTop = top; }
   }
 
-  // 结果盒统一入口（用户 2026-11-09 反馈的「多个换个搜索词再试」就出在这里）：
-  // 从动作按钮进来传的是外层 [data-ssd-search]，从备选按钮回调进来传的是结果盒
-  // 自身 —— 两种都得落到同一个节点。以前备选行挂在 _searchSection（外层）上，
-  // 每次搜索只清结果盒，备选行越攒越多，点完也不消失。
+  // 结果盒统一入口：调用方可能传外层 [data-ssd-search]（动作按钮），也可能直接
+  // 传结果盒（备选按钮回调）—— 两种都要归一到同一个节点，否则「换个搜索词再试」
+  // 这类行会挂到不同的父节点上，清不干净、越攒越多。
   function searchBox(node) {
     if (!node) return null;
     if (node.hasAttribute("data-ssd-search-results")) return node;

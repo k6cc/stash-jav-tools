@@ -6256,12 +6256,15 @@
   // the stash-box performer page; click anywhere else (or scroll) → dismiss.
 
   var _performerCardEl = null;
+  var _performerCardHost = null;   // 挂 scroll 监听的滚动容器，hide 时按原样摘掉
 
   function hidePerformerCard() {
     if (_performerCardEl) { _performerCardEl.remove(); _performerCardEl = null; }
     document.removeEventListener("click", hidePerformerCard);
-    var modalEl = document.querySelector(".ssd-modal");
-    if (modalEl) modalEl.removeEventListener("scroll", hidePerformerCard);
+    if (_performerCardHost) {
+      _performerCardHost.removeEventListener("scroll", hidePerformerCard);
+      _performerCardHost = null;
+    }
   }
 
   function showPerformerCard(pill, item, performer) {
@@ -6331,11 +6334,14 @@
     card.style.top = top + "px";
 
     _performerCardEl = card;
-    // Dismiss on outside click / modal scroll (the card is fixed-positioned
-    // and would drift if the modal scrolls under it)
+    // 卡片 fixed 定位，名字所在的内容一滚它就留在原地、和名字脱开，所以滚动
+    // 即关。监听要挂在真正滚动的容器上：场景弹窗里是 .ssd-modal-body，
+    // .ssd-modal 自己 overflow:hidden，永远不会派发 scroll（用户 2026-11-11
+    // 反馈「翻页不关闭、头像框定在原地」就是这个）。
     document.addEventListener("click", hidePerformerCard);
-    var modalEl = document.querySelector(".ssd-modal");
-    if (modalEl) modalEl.addEventListener("scroll", hidePerformerCard);
+    _performerCardHost = document.querySelector(".ssd-modal .ssd-modal-body") ||
+      document.querySelector(".ssd-modal");
+    if (_performerCardHost) _performerCardHost.addEventListener("scroll", hidePerformerCard);
 
     // Age + country are fetched on demand (async, backfilled when ready)
     fetchPerformerAgeCountry(item, performer, lp).then(function (info) {

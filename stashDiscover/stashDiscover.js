@@ -9539,40 +9539,8 @@
       });
     }
 
-    // 设置项类型从 NUMBER 改成 STRING 后的一次性清理：旧版 Stash 会把「没填」的
-    // NUMBER 存成 0 —— 用户在设置页点过一次保存就落盘了。类型改了之后这个 0 还留着，
-    // 设置页继续显示 0（正是要消除的误导），后端还会把 Jackett 超时压到 10 秒下限。
-    // 只认 JSON number 的 0：用户手动输入的是字符串 "0"，那个 0 有语义
-    //（Recent Window 里 0 = 不限），不能动。
-    var LEGACY_ZERO_KEYS = ["recentDays", "jackettTimeout"];
-    var CFG_MIGRATED_KEY = "SSD:cfgMigrated.v2";
-    function dropLegacyZeros() {
-      var done = false;
-      try { done = localStorage.getItem(CFG_MIGRATED_KEY) === "1"; } catch (_) {}
-      if (done) return;
-      callGQL("query{configuration{plugins}}").then(function (data) {
-        var mine = (((data || {}).configuration || {}).plugins || {})[NAV_ID] || {};
-        var next = Object.assign({}, mine), changed = false;
-        LEGACY_ZERO_KEYS.forEach(function (k) {
-          if (typeof next[k] === "number" && next[k] === 0) { delete next[k]; changed = true; }
-        });
-        if (!changed) return null;
-        // configurePlugin 是整体替换（同 seedNavOnce）：必须带上读回来的完整 map
-        return callGQL(
-          "mutation($id:ID!,$input:Map!){configurePlugin(plugin_id:$id,input:$input)}",
-          { id: NAV_ID, input: next }
-        );
-      }).then(function () {
-        try { localStorage.setItem(CFG_MIGRATED_KEY, "1"); } catch (_) {}
-      }).catch(function (e) {
-        // 非致命：最坏情况设置页继续显示 0，后端已把 0 当默认值处理
-        console.warn("[SSD] legacy setting cleanup skipped:", e);
-      });
-    }
-
-    // 串行：两者都读 plugins 再整体写回，并行会互相覆盖
     try {
-      Promise.resolve(seedNavOnce()).then(dropLegacyZeros, dropLegacyZeros);
+      Promise.resolve(seedNavOnce());
     } catch (e) { console.warn("[SSD] nav seed skipped:", e); }
 
     // 入口是否显示：以 Stash 的 menuItems 为准（和内置项同一判据）。读不到

@@ -1,5 +1,5 @@
 /**
- * Scene Translate Plugin v2.9.4
+ * Scene Translate Plugin v2.9.5
  *
  * Adds one-click translate buttons to scene & image edit pages.
  * Settings (translateTool/targetLanguage/idleTimeout/proxyPort) are stored in

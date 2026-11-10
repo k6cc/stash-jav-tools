@@ -59,6 +59,41 @@
 - `tasks` / `hooks` 的 description 同为英文（Stash 任务页、日志可见）。
 - yml 里的中文注释只有维护者看得到，不受此限。
 
+## 插件设置项类型（yml `settings`）
+
+Stash 只有 `BOOLEAN` / `STRING` / `NUMBER` 三种类型。`STRING` 与 `NUMBER` 在设置页都是「只读值 + 编辑按钮 + 弹窗」，**没有常驻输入框** —— 换类型不会让界面变简单，只是换了弹窗里的控件。
+
+**默认用 `STRING`**，数值项也一样：
+
+- `NUMBER` 无法表达「未设置」：只读态显示 `0`、编辑框预填 `0`，用户点开编辑再确认就把 `0` 写进 config.yml；还会 `parseInt` 截断小数（`threshold` 的 `0.9` 会变 `0`）。
+- 现状：其余 11 个插件的数值项均为 `STRING`；`javstashAutofill+` 的两个 delay 曾是 `NUMBER`，v1.3.3 起改回 `STRING`。
+
+Python 侧解析（数值项统一这个形状）：
+
+```python
+raw = settings.get(key)
+if raw is None or (isinstance(raw, str) and not raw.strip()):
+    return DEFAULT          # 空 = 默认
+try:
+    v = int(float(raw))     # 兼容 "3" 与 "3.0"
+except (TypeError, ValueError):
+    return DEFAULT          # 非数字 = 默认
+return max(LO, min(HI, v))
+```
+
+**不要用 `x or DEFAULT` 判断「未设置」** —— `0` 是 falsy，会把合法的 0 吞掉（`_scene_fill_delay` 曾因此无法设 0 秒）。
+
+`0` 的处理按业务语义分三类：
+
+| 0 的业务含义 | 做法 | 例子 |
+|---|---|---|
+| 无意义 | 并入默认，description 写 `Empty or 0 = N` | `sceneFillDelay`、`jackettTimeout`、`timeoutPerSource` |
+| 有意义 | 单独分支，description 写明 `0 = …` | `recentDays` `0 = all`；`idleTimeout` `0 = 不自动关闭` |
+| **负数有意义（例外）** | **别套 `<= 0 → 默认`**，按具体值分支，且 description 写清每个值的含义 | `previewDays`：`-1 = 隐藏 / 0 = 全部 / N = 最近 N 天` |
+
+- 前端读 yml 数值用 `toNum(v, dflt)`（`parseInt` + `isNaN` 兜底），不要直接 `Number(v)`。
+- 改了设置项类型要提醒用户「重载插件 + Ctrl+F5」，旧页面会按旧控件渲染。
+
 ## 专题规范（按需 Read，不每次必读）
 
 - **改带 UI 的插件 `.js` 前**：读 `docs/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。

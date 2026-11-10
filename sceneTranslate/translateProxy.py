@@ -791,7 +791,10 @@ def main():
         if port:
             port_source = "Stash plugin settings"
     if not port:
-        port = int(_settings.get("proxyPort", 9998))
+        try:
+            port = int(_settings.get("proxyPort", 9998))
+        except (ValueError, TypeError):
+            port = 9998
         port_source = "config.json"
 
     # ── Launcher mode (exec or task): start background child and exit ──

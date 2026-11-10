@@ -18,11 +18,11 @@ settings:
     type: BOOLEAN
   sceneFillDelay:
     displayName: Scene fill delay (s)
-    description: Delay (s) before filling a new scene, so NFO plugins write first. Empty or 0 = 20.
+    description: Seconds to wait before filling a new scene, so NFO plugins write first. 0 = fill immediately. Empty = 20.
     type: STRING
   performerFillDelay:
     displayName: Performer fill delay (s)
-    description: Delay (s) before filling a new performer. Empty or 0 = 2.
+    description: Seconds to wait before filling a new performer. 0 = fill immediately. Empty = 2.
     type: STRING
   threshold:
     displayName: Name-match threshold (0-1)

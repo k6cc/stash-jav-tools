@@ -53,8 +53,8 @@
 | Scraper (Identify) / (manual) | 演员刮削源，按创建来源区分。URL 或 scraper_id。空 = javstash。Identify 项已废弃不再读取。 |
 | Use scraper name (Identify) / (manual) | Identify 项已废弃不再读取；manual 开 = 手动创建也用 scraper 名为主名，关（默认）= 保留创建名。 |
 | Name-match threshold | 名字相似度阈值（0-1），默认 0.9。 |
-| Performer fill delay (s) | 演员延迟填充等待秒数（留空或 0 = 默认 2）。钩子立即返回，仅填充延迟。 |
-| Scene fill delay (s) | 场景延迟填充等待秒数（留空或 0 = 默认 20），等 NFO 解析器先写入 title/details/cover。 |
+| Performer fill delay (s) | 演员延迟填充等待秒数（留空 = 默认 2；填 0 = 立即填充）。钩子立即返回，仅填充延迟。 |
+| Scene fill delay (s) | 场景延迟填充等待秒数（留空 = 默认 20；填 0 = 立即填充），等 NFO 解析器先写入 title/details/cover。 |
 | Overwrite: *field* | 演员各字段是否覆盖已有值。默认关 = 只填空。 |
 | Overwrite scene title | 开 = 标题已有值也写；关（默认）= 标题交给 NFO/文件名。 |
 

@@ -933,13 +933,12 @@ def spawn_fill_later(conn, sid):
         log(f"scene {sid}: delayed fill spawn failed ({e})")
 
 def _delay_setting(settings, key, default):
-    """Delay in seconds. Empty, 0, negative or non-numeric = default.
+    """Delay in seconds; 0 = fill immediately.
 
-    STRING setting (AGENTS.md「插件设置项类型」): with NUMBER, an unset value shows
-    as 0 and gets written to config.yml the moment the user opens the edit dialog
-    and confirms. 0 is therefore treated as "unset" here rather than as "fill
-    immediately" — leftovers from the old NUMBER build are mostly not intentional,
-    and a 0s delay re-reads the scene before the NFO plugin has written anything.
+    STRING setting (AGENTS.md「插件设置项类型」): NUMBER cannot express "unset" —
+    an untouched value renders as 0 and lands in config.yml as soon as the user
+    opens the edit dialog and confirms — so the type is STRING and an empty value
+    means "use the default". 0 is a real value here, not a stand-in for unset.
     """
     raw = (settings or {}).get(key)
     if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -948,7 +947,7 @@ def _delay_setting(settings, key, default):
         value = int(float(raw))
     except (TypeError, ValueError):
         return default
-    return default if value <= 0 else value
+    return value if value >= 0 else default
 
 def _scene_fill_delay(settings):
     return _delay_setting(settings, "sceneFillDelay", 20)

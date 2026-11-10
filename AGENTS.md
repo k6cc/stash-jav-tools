@@ -81,14 +81,16 @@ except (TypeError, ValueError):
 return max(LO, min(HI, v))
 ```
 
+0 有意义（或负数有意义）的项，末行换成按值分支，负数一律当无效输入回落 `DEFAULT` —— 不要套 `max(LO, …)`，那会把 0 顶到下限。
+
 **不要用 `x or DEFAULT` 判断「未设置」** —— `0` 是 falsy，会把合法的 0 吞掉（`_scene_fill_delay` 曾因此无法设 0 秒）。
 
 `0` 的处理按业务语义分三类：
 
 | 0 的业务含义 | 做法 | 例子 |
 |---|---|---|
-| 无意义 | 并入默认，description 写 `Empty or 0 = N` | `sceneFillDelay`、`jackettTimeout`、`timeoutPerSource` |
-| 有意义 | 单独分支，description 写明 `0 = …` | `recentDays` `0 = all`；`idleTimeout` `0 = 不自动关闭` |
+| 无意义 | 并入默认，description 写 `Empty or 0 = N` | `jackettTimeout`、`timeoutPerSource` |
+| 有意义 | 按值生效，description 写明 `0 = …` | `sceneFillDelay` `0 = 立即填充`；`recentDays` `0 = all`；`idleTimeout` `0 = 不自动关闭` |
 | **负数有意义（例外）** | **别套 `<= 0 → 默认`**，按具体值分支，且 description 写清每个值的含义 | `previewDays`：`-1 = 隐藏 / 0 = 全部 / N = 最近 N 天` |
 
 - 前端读 yml 数值用 `toNum(v, dflt)`（`parseInt` + `isNaN` 兜底），不要直接 `Number(v)`。

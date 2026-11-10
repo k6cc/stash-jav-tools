@@ -932,11 +932,26 @@ def spawn_fill_later(conn, sid):
     except Exception as e:
         log(f"scene {sid}: delayed fill spawn failed ({e})")
 
-def _scene_fill_delay(settings):
+def _delay_setting(settings, key, default):
+    """Delay in seconds. Empty, 0, negative or non-numeric = default.
+
+    STRING setting (AGENTS.md「插件设置项类型」): with NUMBER, an unset value shows
+    as 0 and gets written to config.yml the moment the user opens the edit dialog
+    and confirms. 0 is therefore treated as "unset" here rather than as "fill
+    immediately" — leftovers from the old NUMBER build are mostly not intentional,
+    and a 0s delay re-reads the scene before the NFO plugin has written anything.
+    """
+    raw = (settings or {}).get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
     try:
-        return max(0, int((settings or {}).get("sceneFillDelay") or 20))
+        value = int(float(raw))
     except (TypeError, ValueError):
-        return 20
+        return default
+    return default if value <= 0 else value
+
+def _scene_fill_delay(settings):
+    return _delay_setting(settings, "sceneFillDelay", 20)
 
 def fill_scene_later_mode(sid):
     """Delayed worker entry: wait for the NFO parser (sceneFillDelay, default 20s),
@@ -1026,10 +1041,7 @@ def handle_scene_backfill(payload, conn, gql):
 
 # ---------- performer create: async fill (stash-id reverse lookup first) ----------
 def _performer_fill_delay(settings):
-    try:
-        return max(0, int((settings or {}).get("performerFillDelay") or 2))
-    except (TypeError, ValueError):
-        return 2
+    return _delay_setting(settings, "performerFillDelay", 2)
 
 def handle_performer_create(payload, conn, gql):
     """Performer.Create.Post hook: spawn a detached worker and return immediately.

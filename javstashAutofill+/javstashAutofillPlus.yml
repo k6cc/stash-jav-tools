@@ -18,12 +18,12 @@ settings:
     type: BOOLEAN
   sceneFillDelay:
     displayName: Scene fill delay (s)
-    description: Delay (s) before filling a new scene, so NFO plugins write first. Default 20.
-    type: NUMBER
+    description: Delay (s) before filling a new scene, so NFO plugins write first. Empty or 0 = 20.
+    type: STRING
   performerFillDelay:
     displayName: Performer fill delay (s)
-    description: Delay (s) before filling a new performer. Default 2.
-    type: NUMBER
+    description: Delay (s) before filling a new performer. Empty or 0 = 2.
+    type: STRING
   threshold:
     displayName: Name-match threshold (0-1)
     description: Name-match threshold (0-1) for lookups without a stash_id. Default 0.9.

@@ -1,6 +1,6 @@
 name: Javstash Autofill+
 description: Autofills new scenes and performers from JAVStash, matching scenes by file hash. A manual task backfills existing scenes.
-version: 1.3.2
+version: 1.3.3
 url: https://discourse.stashapp.cc/t/javstash-autofill/17003
 errLog: info
 exec:

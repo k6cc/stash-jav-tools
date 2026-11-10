@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Javstash Autofill+ v1.3.2
+Javstash Autofill+ v1.3.3
 Stash plugin: Performer.Create.Post hook + Scene.Create.Post hook.
 Unified performer resolution (scene fill, backfill task and manual creation share it):
   - stash-id first: reverse-lookup the local performer carrying (endpoint, stash_id);
@@ -479,17 +479,6 @@ def scrape_scene_full(gql, sid, source_url, scene=None, use_fallback=True):
             return oshash_hits
     return hits
 
-def _find_by_name(q_by_name, name, id_key):
-    """Shared find-or-create: q_by_name(name) -> list of {id...}; caller does create."""
-    try:
-        rows = q_by_name(name)
-    except Exception:
-        return None
-    for r in rows:
-        if nfc(r.get("name") or "") == nfc(name):
-            return str(r["id"])
-    return None
-
 def find_or_create_studio(gql, name):
     if not name: return None
     q = ("query($n:String!){ findStudios(studio_filter:{name:{value:$n,modifier:EQUALS}},filter:{per_page:5}){ studios{ id name } } }")
@@ -726,8 +715,6 @@ def find_or_create_group(gql, name):
         return str((r.get("groupCreate") or {}).get("id"))
     except Exception:
         return None
-def _first_or_none(x):
-    return (x or [None])[0]
 
 def _shot_is_auto(scene):
     """True when the scene still uses the auto-generated screenshot (no custom cover).

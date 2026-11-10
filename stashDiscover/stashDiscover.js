@@ -1970,10 +1970,11 @@
     if (!pid) return;
     _state.entityType = studioPage ? "studio" : "performer";
 
+    // 演员 / 工作室详情的 tab 条：父容器分别是 .performer-tabs / .studio-tabs。
+    // 最后那条泛选择留给换了包裹层类名的版本 —— 详情页只有一条 .nav-tabs，
+    // 不会误命中。
     var nav = document.querySelector(".performer-tabs .nav-tabs")
-      || document.querySelector(".performer-page .nav-tabs")
       || document.querySelector(".studio-tabs .nav-tabs")
-      || document.querySelector(".main-content .nav-tabs")
       || document.querySelector(".nav-tabs");
     if (!nav) return;
 
@@ -1999,19 +2000,20 @@
     tabItem.appendChild(tabLink);
     nav.appendChild(tabItem);
 
-    var tabContent = document.querySelector(".tab-content")
-      || nav.closest(".performer-tabs")
-      || nav.parentElement;
-    if (tabContent && !tabContent.classList.contains("tab-content")) {
-      var existing = document.querySelector(".tab-content");
-      if (existing) tabContent = existing;
+    // 详情页的 tab 内容区，唯一且必在。面板必须挂进它 —— 挂到 tab 条旁边的
+    // 任何一层，Bootstrap 切 tab 都找不到这块（挂错比没挂更难查）。取不到就
+    // 只留日志、不置 _tabInjected，下一次 DOM 变动会再试。
+    var tabContent = document.querySelector(".tab-content");
+    if (!tabContent) {
+      tabItem.remove();
+      console.warn("[SSD] tab pane: .tab-content missing, Discover tab skipped");
+      return;
     }
 
     var pane = document.createElement("div");
     pane.className = "tab-pane ssd-tab-pane";
     pane.style.display = "none";
-    if (tabContent) tabContent.appendChild(pane);
-    else nav.parentElement.appendChild(pane);
+    tabContent.appendChild(pane);
 
     _tabInjected = true;
     _tabPerformerId = pid;
@@ -3697,8 +3699,10 @@
                      "Selected " + already + " scenes are already ignored"), { duration: 4000 });
         return;
       }
-      showModalNotice(tc("忽略失败：浏览器存储写不进去（可能已满）",
-        "Ignore failed: browser storage rejected the write"), "error");
+      // 这里是演员页的批量忽略，没有场景弹窗 → 弹窗内的提示条没有宿主，
+      // 必须走底部 toast，否则这句错误会静默消失（同上一分支）。
+      SSD.toast(tc("忽略失败：浏览器存储写不进去（可能已满）",
+        "Ignore failed: browser storage rejected the write"), { duration: 6000 });
       return;
     }
     var msg = tc("已忽略 " + keys.length + " 部场景", keys.length + " scenes ignored") +
@@ -5408,13 +5412,10 @@
     } catch (_) { return ""; }
   }
 
-  // 弹窗内的提示条只存在于「找资源」区里。Whisparr 推送不一定会先开搜索区，
-  // 那时 querySelector 拿不到宿主、文案会静默丢掉，所以退回底部 toast。
-  function noticeOrToast(text, type) {
-    var host = document.querySelector("[data-ssd-search-results]")
+  // 提示条宿主：结果盒渲染后用它，搜索还没跑过时就落到搜索区（建弹窗时就有）。
+  function noticeHost() {
+    return document.querySelector("[data-ssd-search-results]")
       || document.querySelector("[data-ssd-search]");
-    if (host) { showModalNotice(text, type); return; }
-    dpToast(text, { duration: type === "error" ? 6000 : 4000, title: text });
   }
 
   function handlePushWhisparr(item, btn) {
@@ -5438,7 +5439,10 @@
       btn.disabled = false;
       setActLabel(btn, tc("发送失败", "Failed"));
       btn.classList.add("err");
-      noticeOrToast((e && e.message) || tc("发送失败", "Send failed"), "error");
+      // 推送结果一律走底部 toast：搜索区在弹窗最下方、多数时候还没展开，
+      // 提示条插进去用户根本看不到（成功提示本来也是 toast，两边保持一致）
+      dpToast((e && e.message) || tc("发送失败", "Send failed"),
+        { duration: 6000, title: (e && e.message) || tc("发送失败", "Send failed") });
       setTimeout(function () {
         setActLabel(btn, tc("Whisparr", "Whisparr"));
         btn.classList.remove("err");
@@ -6339,9 +6343,12 @@
     // .ssd-modal 自己 overflow:hidden，永远不会派发 scroll（用户 2026-11-11
     // 反馈「翻页不关闭、头像框定在原地」就是这个）。
     document.addEventListener("click", hidePerformerCard);
-    _performerCardHost = document.querySelector(".ssd-modal .ssd-modal-body") ||
-      document.querySelector(".ssd-modal");
+    // 滚动容器就是 .ssd-modal-body（.ssd-modal 自己 overflow:hidden，不派发
+    // scroll）。取不到只可能是 DOM 结构变了 —— 留日志，别换别的元素顶上：
+    // 挂上去一样不滚，还会让"已挂监听"看起来成立。
+    _performerCardHost = document.querySelector(".ssd-modal .ssd-modal-body");
     if (_performerCardHost) _performerCardHost.addEventListener("scroll", hidePerformerCard);
+    else console.warn("[SSD] performer card: .ssd-modal-body missing, scroll will not dismiss");
 
     // Age + country are fetched on demand (async, backfilled when ready)
     fetchPerformerAgeCountry(item, performer, lp).then(function (info) {
@@ -6417,9 +6424,8 @@
     var sc = item.scene || {};
     var name = sc.title || sc.code || String(sc.id);
     if (!r.ok) {
-      // 写失败必须说出来（§3.2）：不能让 UI 显示"已忽略"而实际没落库
-      showModalNotice(tc("忽略失败：浏览器存储写不进去（可能已满）",
-                         "Ignore failed: browser storage rejected the write"), "error");
+      // 写失败必须说出来（§3.2）：不能让 UI 显示"已忽略"而实际没落库。
+      // 只走 toast —— 弹窗里那一栏是空的（没搜过），插进去看不见。
       SSD.toast(tc("忽略失败：记录只保留在本次会话", "Ignore failed: kept in memory only"),
         { duration: 6000 });
       return;
@@ -6587,8 +6593,10 @@
     }).catch(function (e) {
       console.error("[SSD] import plan failed:", e);
       restore();
-      showModalNotice(tc("读取本地库失败：", "Could not read the library: ") +
-        (e && e.message ? e.message : String(e)), "error");
+      // 同「找资源」：这一幕还没渲染结果区，提示条落进去看不见 → 走 toast
+      var msg = tc("读取本地库失败：", "Could not read the library: ") +
+        (e && e.message ? e.message : String(e));
+      dpToast(msg, { duration: 6000, title: msg });
     });
   }
 
@@ -7864,7 +7872,10 @@
     var sc = _state.modalDetail ? _state.modalDetail.scene : item.scene;
     var pick = searchQueryFor(sc);
     if (!pick) {
-      showModalNotice(tc("无法构建搜索词（无番号、日期或标题）", "Cannot build search query (no code, date or title)"), "error");
+      // 这一步还没建搜索栏，提示条没有可落的位置（搜索区是空的、还在弹窗最下面）
+      dpToast(tc("无法构建搜索词（无番号、日期或标题）",
+        "Cannot build search query (no code, date or title)"),
+        { duration: 6000, title: tc("无法构建搜索词", "Cannot build search query") });
       return;
     }
 
@@ -7975,7 +7986,9 @@
   function scrollResultsToTop(section) {
     var body = modalBody();
     if (!body || !section) return;
-    var anchor = section.querySelector(".ssd-search-header") || section;
+    // 抬头紧跟结果列表，就在 renderSearchResults 里建好，直接量它
+    var anchor = section.querySelector(".ssd-search-header");
+    if (!anchor) return;
     var delta = anchor.getBoundingClientRect().top - body.getBoundingClientRect().top;
     var top = body.scrollTop + delta - 8;
     try { body.scrollTo({ top: top, behavior: "smooth" }); }
@@ -8001,8 +8014,8 @@
     if (!query || _searchBusy) return;
     var box = searchBox(section);
     if (!box) return;
-    // chip / 输入框 / 搜索小按钮都在搜索栏里，不在结果盒里
-    var outer = box.closest("[data-ssd-search]") || box.parentElement || box;
+    // 结果盒一定在搜索区里（searchBox 只在区里建）—— 直接取，不再两级退回
+    var outer = box.closest("[data-ssd-search]");
 
     // 搜索来源标签：让用户知道这词是按番号 / 日期+演员 / 标题生成的。
     // kind 为空（用户自己改过的词）就清空，不假装知道。
@@ -8050,11 +8063,9 @@
 
     runPluginOp({ mode: "search", query: query }).then(function (result) {
       done();
-      // 排序要用实际下发的搜索词；后端老版本没回 query 时用本次的兜底
-      // （结果抬头对齐由 renderSearchPage 统一处理，见 scrollResultsToTop）
-      var payload = result || {};
-      if (!payload.query) payload.query = query;
-      renderSearchResults(box, payload);
+      // 后端 do_search 一定回 query（同一份插件包里，不存在版本对不上的后端），
+      // 抬头排序直接用它
+      renderSearchResults(box, result || {});
     }).catch(function (e) {
       console.error("[SSD] search error:", e);
       done();
@@ -8438,9 +8449,9 @@
     return row;
   }
 
+  // 弹窗内的提示条只存在于「找资源」区里，找资源 / 推送下载这类就地反馈用它。
   function showModalNotice(text, type) {
-    var host = document.querySelector("[data-ssd-search-results]")
-      || document.querySelector("[data-ssd-search]");
+    var host = noticeHost();
     if (!host) return;
     var notice = document.createElement("div");
     notice.className = "ssd-notice ssd-notice-" + (type || "info");
@@ -8454,13 +8465,16 @@
   var _observerTimer = null;
 
   function setupObservers() {
-    var target = document.querySelector(".main-content") || document.querySelector("#root") || document.body;
-    var observer = new MutationObserver(function () {
-      if (!isPerformerPage() && !isStudioPage()) { _tabInjected = false; _tabPerformerId = null; return; }
-      clearTimeout(_observerTimer);
-      _observerTimer = setTimeout(ensureTabInjected, 200);
-    });
-    observer.observe(target, { childList: true, subtree: true });
+    // React 挂载点。没有它说明 React 没起来，也就没有可观察的东西。
+    var target = document.querySelector("#root");
+    if (target) {
+      var observer = new MutationObserver(function () {
+        if (!isPerformerPage() && !isStudioPage()) { _tabInjected = false; _tabPerformerId = null; return; }
+        clearTimeout(_observerTimer);
+        _observerTimer = setTimeout(ensureTabInjected, 200);
+      });
+      observer.observe(target, { childList: true, subtree: true });
+    }
 
     var origPush = history.pushState;
     var origReplace = history.replaceState;
@@ -9791,7 +9805,7 @@
   // 编译进 CSS（Dark rgb(32,43,51) / Light 另一份同值产物），盖上去反而会在切
   // 主题后停在旧色（用户 2026-10-30 指出）。
   function syncStickyEnv() {
-    var nav = document.querySelector("nav.top-nav") || document.querySelector("nav.navbar");
+    var nav = document.querySelector("nav.top-nav");
     if (!nav) return;
     var r = nav.getBoundingClientRect();
     // 高度 0 = 脚本比 SPA 先就绪，还没布局。这时不要写，免得把上次量到的

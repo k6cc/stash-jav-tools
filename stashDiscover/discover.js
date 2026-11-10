@@ -4746,12 +4746,16 @@
         // （弹窗也是这么挂的，所以 .ssd-modal 里单独补了一份）。这里从页面根
         // 读实际值再内联到面板，深浅主题都不用再复制一份变量表。
         // 只带面板样式中真正用到的那几个（底色/边框、正文色、强调色）。
-        var themeRoot = document.querySelector(".ssd-dp-page") || document.body;
-        var trs = getComputedStyle(themeRoot);
-        ["--sx-ui2", "--sx-ui3", "--sx-tx", "--sx-acc"].forEach(function (k) {
-          var v = trs.getPropertyValue(k);
-          if (v && v.trim()) panel.style.setProperty(k, v.trim());
-        });
+        // 下拉本身就在页面里，.ssd-dp-page 必然存在。变量只定义在这个页面上，
+        // 取不到就跳过 —— 拿 body 顶替只会读到空值、把面板画成透明。
+        var themeRoot = document.querySelector(".ssd-dp-page");
+        if (themeRoot) {
+          var trs = getComputedStyle(themeRoot);
+          ["--sx-ui2", "--sx-ui3", "--sx-tx", "--sx-acc"].forEach(function (k) {
+            var v = trs.getPropertyValue(k);
+            if (v && v.trim()) panel.style.setProperty(k, v.trim());
+          });
+        }
         document.body.appendChild(panel);
 
         // 定位：默认向下；下方不足 140px 且上方更宽裕时向上翻

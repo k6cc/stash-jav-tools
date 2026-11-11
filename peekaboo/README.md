@@ -8,17 +8,22 @@
 
 把 `peekaboo/` 复制到 Stash 插件目录（Windows `%USERPROFILE%\.stash\plugins\`，Docker `~/.stash/plugins/`），重载插件后在「设置 → 插件」能看到 Peekaboo 即成功。
 
-开关三处等价：导航栏眼睛按钮、`Shift+Alt+B`、设置页的 Shield on。状态存进库配置，换浏览器也保持。
+开关三处等价：导航栏眼睛按钮（可用 Show navbar button 关掉）、`Shift+Alt+B`、设置页的 Shield on。状态存进库配置，换浏览器也保持。
+
+## 兼容性
+
+实测 Stash v0.31.0 与 v0.32.0：插件加载、图片与视频遮挡、文字打码、快捷键、设置项都正常。v0.32 起 UI 升到 React 18，插件只用公开的 `PluginApi`，不碰 React 内部结构，所以两个版本表现一致；v0.31.0 之前的版本未实测。
 
 ## 设置
 
 | 设置项 | 默认 | 说明 |
 |---|---|---|
 | Shield on | OFF | 总开关 |
+| Show navbar button | ON | OFF 时导航栏不出现眼睛按钮，只剩快捷键 |
 | Reveal on hover | ON | 悬停片刻把整张卡片（含悬停才出现的预览视频）露出来，移开恢复；按住 Shift 则整页临时全露 |
 | Let videos keep playing | OFF | OFF 时播放器暂停且禁止播放；卡片预览不受影响（本就静音循环） |
 | Mask text | ON | 遮标题、简介、工作室/演员/标签名、别名、标签、详情值；按钮、页签、筛选器不遮 |
-| Text mask style | sunny | 五种，见下表 |
+| Text mask style | sunny | 六种，见下表 |
 
 | Text mask style | 效果 |
 |---|---|
@@ -26,7 +31,8 @@
 | `symbol` | 灰色等长方块 |
 | `black` | 纯黑等长方块 |
 | `white` | 纯白等长方块 |
-| `char` | 逐字符换成小写字母，长度与原文一致 |
+| `glyph` | 逐字符换成单色符号（✦ ✸ ❃ ※ § ¶ † ‡ ◈ ❖ ♪ ♫ ⌘ …），长度与原文一致 |
+| `letters` | 逐字符换成小写字母，长度与原文一致 |
 
 设置页改完立即生效，不用刷新。
 

@@ -11,6 +11,10 @@ settings:
     displayName: Shield on
     description: "Replace every image and video frame with SVG art. Shortcut Shift+Alt+B."
     type: BOOLEAN
+  navButton:
+    displayName: Show navbar button
+    description: "ON = an eye button in the navbar. OFF = hotkey only (Shift+Alt+B)."
+    type: BOOLEAN
   hoverPeek:
     displayName: Reveal on hover
     description: "Hover an image for a moment to see the original, it hides again when you leave. Hold Shift to reveal everything at once. Card previews play muted."
@@ -25,5 +29,5 @@ settings:
     type: BOOLEAN
   textStyle:
     displayName: Text mask style
-    description: "sunny = English words such as sunflower / mint (default). symbol = grey blocks. black / white = solid blocks. char = one random letter per character. Type one of those five names."
+    description: "sunny = English words such as sunflower / mint (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. Type one of those six names."
     type: STRING

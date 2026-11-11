@@ -16,6 +16,7 @@
   var PLUGIN_VERSION = "0.1.0";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
+  var WRAP_ID = "plugin-peekaboo-wrap";
   var DEFS_ID = "peekaboo-defs";
   var ON = "peekaboo-on";
   var PEEK = "peekaboo-peek";
@@ -96,9 +97,13 @@
     "cherry blossom", "clover", "caramel", "star candy", "peach tea", "rainbow",
     "honeydew", "sunshine"];
 
-  // 五种文字样式：阳光词 / 灰块 / 纯黑块 / 纯白块 / 逐字符字母
-  var TEXT_STYLES = ["sunny", "symbol", "black", "white", "char"];
+  // 六种文字样式：阳光词 / 灰块 / 纯黑块 / 纯白块 / 逐字符符号 / 逐字符字母
+  var TEXT_STYLES = ["sunny", "symbol", "black", "white", "glyph", "letters"];
   var DEFAULT_TEXT_STYLE = "sunny";
+  // 逐字符替换用的池子：只取单色文字符号。✳✽✻❉❋✤ 这类在 Unicode 里带 emoji 属性，
+  // 会被彩色字体接管成绿/黄色小方块；框、圆点、字母看着像「加载失败」，同样不用
+  var GLYPHS = "✦✧✶✷✸✹⋆❃❂✢✣※§¶†‡◈❖⁂‖♪♫♭♯∞≈≠∆∇⌘✕✖✚⚑";
+  var LETTERS = "abcdefghijklmnopqrstuvwxyz";
 
   // 列表页标签页的名字，出现在浏览器标题里不算泄漏
   var UI_TITLE = ["短片", "图库", "演员", "工作室", "标签", "集合", "标记", "发现", "设置",
@@ -106,7 +111,10 @@
     "Discover", "Settings", "Stash", "Stash UI"];
 
   var state = { on: false, reveal: false };
-  var cfg = { enabled: false, hoverPeek: true, allowVideo: false, maskText: true, textStyle: DEFAULT_TEXT_STYLE };
+  var cfg = {
+    enabled: false, hoverPeek: true, allowVideo: false,
+    maskText: true, textStyle: DEFAULT_TEXT_STYLE, navButton: true
+  };
   var cfgLoaded = false;
   var cfgSig = "";
 
@@ -302,13 +310,13 @@
     return n;
   }
 
-  // 逐字符换小写字母，空格照留，替换后与原文一样长
-  function letterize(s, seed) {
+  // 逐字符换掉，空格照留，替换后与原文一样长
+  function perChar(s, seed, pool) {
     var r = rng(seed >>> 0);
-    var pool = "abcdefghijklmnopqrstuvwxyz";
     var out = "";
     for (var i = 0; i < s.length; i++) {
-      out += /\s/.test(s.charAt(i)) ? s.charAt(i) : pool.charAt(Math.floor(r() * pool.length));
+      var ch = s.charAt(i);
+      out += /\s/.test(ch) ? ch : pool.charAt(Math.floor(r() * pool.length));
     }
     return out;
   }
@@ -321,7 +329,8 @@
       for (var i = 0; i < n; i++) out.push(SUNNY[(base + i * 7) % SUNNY.length]);
       return out.join(" ");
     }
-    if (cfg.textStyle === "char") return letterize(s, seed || 0);
+    if (cfg.textStyle === "glyph") return perChar(s, seed || 0, GLYPHS);
+    if (cfg.textStyle === "letters") return perChar(s, seed || 0, LETTERS);
     // symbol / black / white 都是等长块，差别只在颜色，颜色由 CSS 按 data-peekaboo-text 给
     var len = Math.max(1, Math.min(80, Math.round(visualLen(s))));
     var buf = "";
@@ -771,7 +780,8 @@
         hoverPeek: cfg.hoverPeek,
         allowVideo: cfg.allowVideo,
         maskText: cfg.maskText,
-        textStyle: cfg.textStyle
+        textStyle: cfg.textStyle,
+        navButton: cfg.navButton
       });
     }).catch(function (e) {
       console.warn("[peekaboo] 保存状态失败：", e);
@@ -803,7 +813,10 @@
 
   // 插件设置没有「默认值」字段，新装的插件读到的全是 false / ""。
   // 用 textStyle 是否为空判断「从没保存过」，此时把默认值写回去，设置页才和实际行为一致
-  var DEFAULTS = { hoverPeek: true, allowVideo: false, maskText: true, textStyle: DEFAULT_TEXT_STYLE };
+  var DEFAULTS = {
+    hoverPeek: true, allowVideo: false, maskText: true,
+    textStyle: DEFAULT_TEXT_STYLE, navButton: true
+  };
 
   function loadConfig() {
     return gql("{configuration{plugins}}").then(function (data) {
@@ -815,6 +828,7 @@
       cfg.hoverPeek = first ? DEFAULTS.hoverPeek : s.hoverPeek !== false;
       cfg.allowVideo = first ? DEFAULTS.allowVideo : s.allowVideo === true;
       cfg.maskText = first ? DEFAULTS.maskText : s.maskText !== false;
+      cfg.navButton = first ? DEFAULTS.navButton : s.navButton !== false;
       cfg.textStyle = normalizeStyle(raw) || DEFAULTS.textStyle;
       if (first) {
         saveConfig({
@@ -822,7 +836,8 @@
           hoverPeek: cfg.hoverPeek,
           allowVideo: cfg.allowVideo,
           maskText: cfg.maskText,
-          textStyle: cfg.textStyle
+          textStyle: cfg.textStyle,
+          navButton: cfg.navButton
         });
       }
       // 配置读到时页面可能已经遮过一轮（那时用的还是默认样式），块的颜色靠这个属性取
@@ -835,7 +850,7 @@
   }
 
   function signature() {
-    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.maskText, cfg.textStyle].join("|");
+    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.maskText, cfg.textStyle, cfg.navButton].join("|");
   }
 
   // 设置页改完立刻生效，不用刷新
@@ -857,6 +872,7 @@
         }
         updateButton();
       }
+      syncButton();
     });
   }
 
@@ -881,8 +897,9 @@
 
   // ===== 导航栏按钮 =====
   function createButton() {
-    if (document.getElementById(BTN_ID)) return;
+    if (document.getElementById(WRAP_ID)) return;
     var wrap = document.createElement("a");
+    wrap.id = WRAP_ID;
     wrap.className = "mr-2";
     wrap.innerHTML =
       '<button id="' + BTN_ID + '" type="button" class="minimal d-flex align-items-center h-100 btn btn-primary">' +
@@ -899,14 +916,28 @@
       var bar = document.querySelector(".navbar-buttons");
       if (bar) {
         clearInterval(timer);
-        if (!document.getElementById(BTN_ID)) bar.insertBefore(wrap, bar.firstChild);
+        if (!document.getElementById(WRAP_ID)) bar.insertBefore(wrap, bar.firstChild);
         var btn = document.getElementById(BTN_ID);
-        if (btn) btn.addEventListener("click", function () { setState(!state.on, true); });
+        if (btn && !btn.__peekabooBound) {
+          btn.__peekabooBound = true;
+          btn.addEventListener("click", function () { setState(!state.on, true); });
+        }
         updateButton();
         return;
       }
       if (++tries > 100) clearInterval(timer);
     }, 100);
+  }
+
+  function removeButton() {
+    var wrap = document.getElementById(WRAP_ID);
+    if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+  }
+
+  // 关掉「显示眼睛按钮」时只留快捷键，页面上的按钮要跟着消失
+  function syncButton() {
+    if (cfg.navButton) createButton();
+    else removeButton();
   }
 
   function updateButton() {
@@ -931,7 +962,7 @@
   // ===== 启动 =====
   function boot() {
     injectDefs();
-    createButton();
+    syncButton();
     // 先用本浏览器的缓存值上屏，再用 Stash 设置校正。
     // 缓存为空（换设备、清过站点数据）时按“开”处理：宁可多遮一瞬，也别先露一帧原图
     var cached = null;
@@ -947,6 +978,7 @@
       cfgSig = signature();
       if (cfg.enabled !== state.on) setState(cfg.enabled, false);
       else updateButton();
+      syncButton();
     });
 
     console.log("[peekaboo] v" + PLUGIN_VERSION);

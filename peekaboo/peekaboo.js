@@ -32,7 +32,7 @@
   var MEDIA_BG = /\/(scene|image|gallery|performer|studio|group)s?\//;
 
   // 悬停露原图按“卡片”整块生效：Stash 悬停后会插入预览视频盖住封面，只露 img 是看不见的
-  var HOST_SEL = ".scene-card, .image-card, .gallery-card, .group-card, .studio-card, .performer-card, .wall-item";
+  var HOST_SEL = ".scene-card, .image-card, .gallery-card, .group-card, .studio-card, .performer-card, .tag-card, .wall-item";
 
   // 文字打码只碰“字段”，页签 / 按钮 / 筛选器 / 表单里的字一律不动
   var TEXT_SEL = [
@@ -745,7 +745,11 @@
     var t = e.target;
     if (!t || !t.closest) return null;
     var card = t.closest(HOST_SEL);
-    if (card && card.querySelector("img, video, [" + ART_ATTR + "]")) return card;
+    if (card) {
+      if (card.querySelector("img, video, [" + ART_ATTR + "]")) return card;
+      // 标签列表这类卡片没有封面，悬停只为露文字，没有可露的图就不必计时
+      if (cfg.revealText && !cfg.textReadable) return card;
+    }
     return t.closest("[data-peekaboo-art], img, video");
   }
 

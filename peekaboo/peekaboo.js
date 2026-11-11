@@ -101,8 +101,8 @@
   var TEXT_STYLES = ["sunny", "symbol", "black", "white", "glyph", "letters"];
   var DEFAULT_TEXT_STYLE = "sunny";
   // 逐字符替换用的池子：只取单色文字符号。✳✽✻❉❋✤ 这类在 Unicode 里带 emoji 属性，
-  // 会被彩色字体接管成绿/黄色小方块；框、圆点、字母看着像「加载失败」，同样不用
-  var GLYPHS = "✦✧✶✷✸✹⋆❃❂✢✣※§¶†‡◈❖⁂‖♪♫♭♯∞≈≠∆∇⌘✕✖✚⚑";
+  // 会被彩色字体接管成绿/黄色小方块；✕ 同样会被接管，框、圆点、字母看着像「加载失败」
+  var GLYPHS = "✦✧✶✷✸✹⋆❃❂✢✣※§¶†‡◈❖⁂‖♪♫♭♯∞≈≠∆∇⌘✚⚑";
   var LETTERS = "abcdefghijklmnopqrstuvwxyz";
 
   // 列表页标签页的名字，出现在浏览器标题里不算泄漏

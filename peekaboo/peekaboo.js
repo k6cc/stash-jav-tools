@@ -3,7 +3,8 @@
  * 实现：<html> 上挂一个 class，CSS 把 img/video 的 filter 指向只输出 feImage 的
  * SVG 滤镜 —— 元素原始像素被整块丢弃，src 不动，关掉时无需还原任何东西。
  *
- * 另外三件事：悬停露原图、按住 Shift 图与文字一起露；标题/人名/标签等文字按字段打码；
+ * 另外三件事：悬停露原图、按住 Shift 整页临时全露（文字要不要跟着露由设置决定）；
+ * 标题/人名/标签等文字按字段打码，大小写跟 Stash 原生一致（单词首字母大写，简介句首大写）；
  * title、alt、浏览器标题、复制内容一并不留原字。
  */
 (function () {
@@ -68,6 +69,9 @@
     ".group-head"
   ].join(",");
 
+  // 描述是整句，遮罩文字按句首大写；其余（标题、人名、标签、字段值）按单词首字母大写
+  var DESC_SEL = ".scene-description, .gallery-description, .expandable-text, .pre";
+
   // 这些元素各自算“一个单位”：整块只出一条替换结果，内部被拆成多个文本节点也不拆词
   var UNIT_SEL = ".detail-item-title, .detail-item-value, .performer-name, .performer-disambiguation, .alias-head, " +
     ".group-name, .tag-name, .studio-name";
@@ -112,8 +116,8 @@
 
   var state = { on: false, reveal: false };
   var cfg = {
-    enabled: false, hoverPeek: true, allowVideo: false, maskText: true,
-    textStyle: DEFAULT_TEXT_STYLE, navButton: true, keepTextMasked: false
+    enabled: false, hoverPeek: true, allowVideo: false, textReadable: false,
+    textStyle: DEFAULT_TEXT_STYLE, navButton: true, revealText: false
   };
   var cfgLoaded = false;
   var cfgSig = "";
@@ -321,16 +325,31 @@
     return out;
   }
 
-  function maskValue(s, seed, words) {
+  // 标题、人名、标签是单词首字母大写（跟 Stash 原生与 StashDB 一致），描述是句首大写
+  function titleCase(s) {
+    return s.replace(/(^|\s)(\S)/g, function (m, sp, ch) { return sp + ch.toUpperCase(); });
+  }
+
+  function sentenceCase(s) {
+    var i = s.search(/[a-zA-Z]/);
+    if (i < 0) return s;
+    return s.slice(0, i) + s.charAt(i).toUpperCase() + s.slice(i + 1);
+  }
+
+  function applyCase(s, sentence) {
+    return sentence ? sentenceCase(s) : titleCase(s);
+  }
+
+  function maskValue(s, seed, words, sentence) {
     if (cfg.textStyle === "sunny") {
       var base = (seed || 0) >>> 0;
       var n = words > 0 ? words : (s.length > 60 ? 3 : (s.length > 14 ? 2 : 1));
       var out = [];
       for (var i = 0; i < n; i++) out.push(SUNNY[(base + i * 7) % SUNNY.length]);
-      return out.join(" ");
+      return applyCase(out.join(" "), sentence);
     }
     if (cfg.textStyle === "glyph") return perChar(s, seed || 0, GLYPHS);
-    if (cfg.textStyle === "letters") return perChar(s, seed || 0, LETTERS);
+    if (cfg.textStyle === "letters") return applyCase(perChar(s, seed || 0, LETTERS), sentence);
     // symbol / black / white 都是等长块，差别只在颜色，颜色由 CSS 按 data-peekaboo-text 给
     var len = Math.max(1, Math.min(80, Math.round(visualLen(s))));
     var buf = "";
@@ -341,6 +360,10 @@
   function normalizeStyle(v) {
     var s = String(v || "").trim().toLowerCase();
     return TEXT_STYLES.indexOf(s) >= 0 ? s : "";
+  }
+
+  function isSentenceText(el) {
+    return !!(el && el.closest && el.closest(DESC_SEL));
   }
 
   // 一条替换结果里的词数：0 = 按原文长度自动。项名固定一个词，主名 1–2 个，别名可多几个
@@ -389,7 +412,8 @@
       prefix = m[1];
     }
     var body = orig.slice(prefix.length);
-    var masked = prefix + maskValue(body, hash((el.getAttribute("class") || el.tagName) + "|" + body), words);
+    var masked = prefix + maskValue(body, hash((el.getAttribute("class") || el.tagName) + "|" + body),
+      words, isSentenceText(el));
     // 英文词要靠空格隔开，否则相邻节点/元素会连成 "mintsunshine"
     if (cfg.textStyle === "sunny") masked += " ";
 
@@ -473,6 +497,30 @@
     }
   }
 
+  // 悬停只露这一张卡片的文字：按范围还原，别动整页
+  function unmaskWithin(root) {
+    var drop = [];
+    textOrig.forEach(function (rec, node) {
+      if (!root.contains(node)) return;
+      if (node.isConnected && node.nodeValue === rec.masked) node.nodeValue = rec.orig;
+      drop.push(node);
+    });
+    for (var i = 0; i < drop.length; i++) textOrig.delete(drop[i]);
+    var els = root.querySelectorAll("[data-peekaboo-masked]");
+    for (var j = 0; j < els.length; j++) {
+      els[j].removeAttribute("data-peekaboo-masked");
+      els[j].__peekabooMasked = false;
+    }
+    var keep = [];
+    for (var k = 0; k < attrOrig.length; k++) {
+      var a = attrOrig[k];
+      if (!root.contains(a.el)) { keep.push(a); continue; }
+      if (a.el.isConnected && a.el.getAttribute(a.name) === a.masked) a.el.setAttribute(a.name, a.orig);
+      a.el.__peekabooAttr = false;
+    }
+    attrOrig = keep;
+  }
+
   function isSettingsPage() {
     return location.pathname.indexOf("/settings") === 0;
   }
@@ -498,8 +546,9 @@
   }
 
   function maskTree(root) {
-    if (!root || !cfg.maskText || !state.on) return;
-    if (state.reveal && !cfg.keepTextMasked) return;                   // 正按 Shift 暂露原图，别遮回去
+    if (!root || cfg.textReadable || !state.on) return;
+    if (state.reveal && cfg.revealText) return;                         // 正按 Shift 全页露原图，别遮回去
+    if (peekTextEl && root !== document.documentElement && peekTextEl.contains(root)) return;
     if (isSettingsPage()) return;                                       // 设置页没有库内容，一律不动
     if (root.nodeType === 3) {                                          // 文本节点被 React 改写
       var p = root.parentElement;
@@ -529,8 +578,8 @@
   }
 
   function maskTitle() {
-    if (!cfg.maskText || !state.on || isSettingsPage()) return;
-    if (state.reveal && !cfg.keepTextMasked) return;
+    if (cfg.textReadable || !state.on || isSettingsPage()) return;
+    if (state.reveal && cfg.revealText) return;
     var t = document.title;
     if (!t) return;
     if (titleState.masked && t === titleState.masked) return;
@@ -547,7 +596,7 @@
   }
 
   function applyTextMasks() {
-    if (!state.on || !cfg.maskText || isSettingsPage()) {
+    if (!state.on || cfg.textReadable || isSettingsPage()) {
       unmaskAll();
       restoreTitle();
       return;
@@ -619,7 +668,7 @@
     });
 
     var titleObs = new MutationObserver(function () {
-      if (state.on && cfg.maskText) maskTitle();
+      if (state.on && !cfg.textReadable) maskTitle();
     });
     var watch = function () {
       var t = document.querySelector("title");
@@ -652,6 +701,7 @@
 
   // ===== 悬停预览 =====
   var peekEl = null;
+  var peekTextEl = null;          // 悬停时被还原了文字的那张卡片
   var peekPending = null;
   var peekTimer = 0;
   var PEEK_DELAY = 280;
@@ -661,15 +711,30 @@
     peekPending = null;
   }
 
+  // 把悬停时露出来的文字重新遮回去
+  function maskPeekText() {
+    var el = peekTextEl;
+    peekTextEl = null;
+    if (el && el.isConnected && state.on && !cfg.textReadable) maskTree(el);
+  }
+
   function peekStart(el) {
     if (!el || !el.isConnected) return;
-    if (peekEl && peekEl !== el) peekEl.classList.remove(PEEK);
+    if (peekEl && peekEl !== el) {
+      peekEl.classList.remove(PEEK);
+      maskPeekText();
+    }
     peekEl = el;
     el.classList.add(PEEK);
+    if (cfg.revealText && !cfg.textReadable && state.on) {
+      unmaskWithin(el);
+      peekTextEl = el;
+    }
   }
 
   function peekEnd() {
     cancelPeek();
+    maskPeekText();
     if (peekEl) {
       peekEl.classList.remove(PEEK);
       peekEl = null;
@@ -700,7 +765,7 @@
     var host = peekHost(e);
     if (!host) return;
     if (host === peekEl || host === peekPending) return;                // 卡片内部移动不重置计时
-    if (peekEl) { peekEl.classList.remove(PEEK); peekEl = null; }
+    if (peekEl) peekEnd();                                              // 换卡：先还原上一张的文字
     schedulePeek(host, PEEK_DELAY);
   }, true);
 
@@ -734,9 +799,9 @@
     if (on) peekEnd();
     document.documentElement.classList.toggle(REVEAL, on);
     // 图片/视频靠 CSS 类换回原图；文字是直接改文本节点的，CSS 还原不了，只能整页跑一遍
-    if (cfg.maskText) {
+    if (!cfg.textReadable) {
       if (on) {
-        if (!cfg.keepTextMasked) {
+        if (cfg.revealText) {
           unmaskAll();
           restoreTitle();
         }
@@ -792,10 +857,10 @@
         enabled: cfg.enabled,
         hoverPeek: cfg.hoverPeek,
         allowVideo: cfg.allowVideo,
-        maskText: cfg.maskText,
+        textReadable: cfg.textReadable,
         textStyle: cfg.textStyle,
         navButton: cfg.navButton,
-        keepTextMasked: cfg.keepTextMasked
+        revealText: cfg.revealText
       });
     }).catch(function (e) {
       console.warn("[peekaboo] 保存状态失败：", e);
@@ -828,8 +893,8 @@
   // 插件设置没有「默认值」字段，新装的插件读到的全是 false / ""。
   // 用 textStyle 是否为空判断「从没保存过」，此时把默认值写回去，设置页才和实际行为一致
   var DEFAULTS = {
-    hoverPeek: true, allowVideo: false, maskText: true,
-    textStyle: DEFAULT_TEXT_STYLE, navButton: true, keepTextMasked: false
+    hoverPeek: true, allowVideo: false, textReadable: false,
+    textStyle: DEFAULT_TEXT_STYLE, navButton: true, revealText: false
   };
 
   function loadConfig() {
@@ -841,19 +906,19 @@
       cfg.enabled = s.enabled === true;
       cfg.hoverPeek = first ? DEFAULTS.hoverPeek : s.hoverPeek !== false;
       cfg.allowVideo = first ? DEFAULTS.allowVideo : s.allowVideo === true;
-      cfg.maskText = first ? DEFAULTS.maskText : s.maskText !== false;
+      cfg.textReadable = first ? DEFAULTS.textReadable : s.textReadable === true;
       cfg.navButton = first ? DEFAULTS.navButton : s.navButton !== false;
-      cfg.keepTextMasked = first ? DEFAULTS.keepTextMasked : s.keepTextMasked === true;
+      cfg.revealText = first ? DEFAULTS.revealText : s.revealText === true;
       cfg.textStyle = normalizeStyle(raw) || DEFAULTS.textStyle;
       if (first) {
         saveConfig({
           enabled: cfg.enabled,
           hoverPeek: cfg.hoverPeek,
           allowVideo: cfg.allowVideo,
-          maskText: cfg.maskText,
+          textReadable: cfg.textReadable,
           textStyle: cfg.textStyle,
           navButton: cfg.navButton,
-          keepTextMasked: cfg.keepTextMasked
+          revealText: cfg.revealText
         });
       }
       // 配置读到时页面可能已经遮过一轮（那时用的还是默认样式），块的颜色靠这个属性取
@@ -866,8 +931,8 @@
   }
 
   function signature() {
-    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.maskText, cfg.textStyle,
-      cfg.navButton, cfg.keepTextMasked].join("|");
+    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.textReadable, cfg.textStyle,
+      cfg.navButton, cfg.revealText].join("|");
   }
 
   // 设置页改完立刻生效，不用刷新

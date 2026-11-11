@@ -24,15 +24,15 @@ settings:
     displayName: Let videos keep playing
     description: "ON = videos keep playing (with sound) behind the placeholder. OFF = playback is paused and blocked while the shield is on."
     type: BOOLEAN
-  maskText:
-    displayName: Mask text
-    description: "Hide titles, descriptions, names, aliases, tags and detail values, plus the tab title, image alt text and copied text. Navigation, tabs, buttons and forms stay readable."
+  textReadable:
+    displayName: Keep text readable
+    description: "OFF (default) = titles, descriptions, names, aliases, tags and detail values are masked, plus the tab title, image alt text and copied text. ON = leave all text untouched. Navigation, tabs, buttons and forms stay readable either way."
     type: BOOLEAN
-  keepTextMasked:
-    displayName: Keep text masked when revealing
-    description: "ON = holding Shift shows the original image but leaves titles, names and tags masked. OFF (default) = holding Shift reveals the text as well."
+  revealText:
+    displayName: Reveal text as well
+    description: "ON = hovering a card or holding Shift also brings the original titles and names back. OFF (default) = only the image is revealed, text stays masked. No effect when Keep text readable is on."
     type: BOOLEAN
   textStyle:
     displayName: Text mask style
-    description: "sunny = English words such as sunflower / mint (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. Type one of those six names."
+    description: "sunny = English words such as Sunflower / Mint Soda (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. sunny and letters are capitalised like Stash itself: every word in titles and names, only the first word in descriptions. Type one of those six names."
     type: STRING

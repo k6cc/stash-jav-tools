@@ -1,0 +1,29 @@
+name: Peekaboo
+description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, names, tags, the tab title and copied text. Nothing in the library is modified."
+version: 0.1.0
+ui:
+  javascript:
+    - peekaboo.js
+  css:
+    - peekaboo.css
+settings:
+  enabled:
+    displayName: Shield on
+    description: "Replace every image and video frame with SVG art. Shortcut Shift+Alt+B."
+    type: BOOLEAN
+  hoverPeek:
+    displayName: Reveal on hover
+    description: "Hover an image for a moment to see the original, it hides again when you leave. Hold Shift to reveal everything at once. Card previews play muted."
+    type: BOOLEAN
+  allowVideo:
+    displayName: Let videos keep playing
+    description: "ON = videos keep playing (with sound) behind the placeholder. OFF = playback is paused and blocked while the shield is on."
+    type: BOOLEAN
+  maskText:
+    displayName: Mask text
+    description: "Hide titles, descriptions, names, aliases, tags and detail values, plus the tab title, image alt text and copied text. Navigation, tabs, buttons and forms stay readable."
+    type: BOOLEAN
+  textStyle:
+    displayName: Text mask style
+    description: "sunny = English words such as sunflower / mint (default). symbol = grey blocks. black / white = solid blocks. char = one random letter per character. Type one of those five names."
+    type: STRING

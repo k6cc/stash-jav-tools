@@ -1,12 +1,12 @@
 # AGENTS.md
 
-本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` / `sceneTranslateAuto` / `javstashAutofill+` / `stashDiscover` / `ImageMetaSync` 共 12 个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
+本仓库是 Stash 插件集合（monorepo）：`sceneTranslate` / `sceneGallerySync` / `studioTools` / `JavStashLinker` / `performerMerge` / `tagMerge` / `studioToolsAuto` / `tagMergeAuto` / `sceneTranslateAuto` / `javstashAutofill+` / `stashDiscover` / `ImageMetaSync` / `peekaboo` 共 13 个插件 + 根 `README.md` 版本表 + `stash-testkit/`（实例测试工具集，非发布物，见末尾「测试工具集」节）。插件版本以各 `<name>.yml` 的 `version:` 为权威，Stash 实际读取该字段。
 
 ## 发版
 
 **权威版本号 = 各插件 `<name>.yml` 的 `version:`**，其余位置必须与之一致。通用同步项：
 
-- 根 `README.md` 版本表（含全部 12 插件，发版必同步）
+- 根 `README.md` 版本表（含全部 13 插件，发版必同步）
 - 各插件 `README.md` 头部 `> vX.Y.Z：` note，**只保留最新一条**；sceneGallerySync 例外：头部无 note，在文末「## 变更历史」新增 `### X.Y.Z` 条目
 - 各插件 `yml` 的 `url:` 指向 Discourse 论坛帖，发布时确认链接正确
 
@@ -20,6 +20,7 @@
 | javstashAutofill+ | `javstash_autofill_plus.py` 头部 docstring banner |
 | stashDiscover | `stashDiscover.js` 顶部 `PLUGIN_VERSION`（console banner 输出） |
 | ImageMetaSync | `ImageMetaSync.py` 头部 docstring banner（`Image Meta Sync vX.Y.Z`） |
+| peekaboo | `peekaboo.js` 顶部 `PLUGIN_VERSION`（console banner 输出） |
 
 ### 流程
 

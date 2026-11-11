@@ -1,0 +1,81 @@
+/* Peekaboo —— 仅在 <html class="peekaboo-on"> 时生效。
+   核心：filter 指向只输出 feImage 的 SVG 滤镜，元素的原始像素被整块替换，
+   不依赖 src 改写，也不需要逐个元素做还原。 */
+
+html.peekaboo-on img,
+html.peekaboo-on video {
+    filter: url(#peekaboo-art-0) !important;
+}
+
+/* 首帧兜底：这些容器是背景图（播放器海报、进度条预览气泡、雪碧图），
+   JS 打标前会先露出原图，先把占位图挂上，具体编号再由下面的规则覆盖。 */
+html.peekaboo-on .vjs-poster,
+html.peekaboo-on .vjs-vtt-thumbnail-display,
+html.peekaboo-on .scrubber-item,
+html.peekaboo-on .sprite-cell,
+html.peekaboo-on .scene-cover,
+html.peekaboo-on .wall-item-media {
+    filter: url(#peekaboo-art-0) !important;
+}
+
+html.peekaboo-on [data-peekaboo-art="1"] { filter: url(#peekaboo-art-1) !important; }
+html.peekaboo-on [data-peekaboo-art="2"] { filter: url(#peekaboo-art-2) !important; }
+html.peekaboo-on [data-peekaboo-art="3"] { filter: url(#peekaboo-art-3) !important; }
+html.peekaboo-on [data-peekaboo-art="4"] { filter: url(#peekaboo-art-4) !important; }
+html.peekaboo-on [data-peekaboo-art="5"] { filter: url(#peekaboo-art-5) !important; }
+html.peekaboo-on [data-peekaboo-art="6"] { filter: url(#peekaboo-art-6) !important; }
+html.peekaboo-on [data-peekaboo-art="7"] { filter: url(#peekaboo-art-7) !important; }
+html.peekaboo-on [data-peekaboo-art="8"] { filter: url(#peekaboo-art-8) !important; }
+html.peekaboo-on [data-peekaboo-art="9"] { filter: url(#peekaboo-art-9) !important; }
+html.peekaboo-on [data-peekaboo-art="10"] { filter: url(#peekaboo-art-10) !important; }
+html.peekaboo-on [data-peekaboo-art="11"] { filter: url(#peekaboo-art-11) !important; }
+html.peekaboo-on [data-peekaboo-art="12"] { filter: url(#peekaboo-art-12) !important; }
+html.peekaboo-on [data-peekaboo-art="13"] { filter: url(#peekaboo-art-13) !important; }
+html.peekaboo-on [data-peekaboo-art="14"] { filter: url(#peekaboo-art-14) !important; }
+html.peekaboo-on [data-peekaboo-art="15"] { filter: url(#peekaboo-art-15) !important; }
+html.peekaboo-on [data-peekaboo-art="16"] { filter: url(#peekaboo-art-16) !important; }
+html.peekaboo-on [data-peekaboo-art="17"] { filter: url(#peekaboo-art-17) !important; }
+html.peekaboo-on [data-peekaboo-art="18"] { filter: url(#peekaboo-art-18) !important; }
+html.peekaboo-on [data-peekaboo-art="19"] { filter: url(#peekaboo-art-19) !important; }
+html.peekaboo-on [data-peekaboo-art="20"] { filter: url(#peekaboo-art-20) !important; }
+html.peekaboo-on [data-peekaboo-art="21"] { filter: url(#peekaboo-art-21) !important; }
+html.peekaboo-on [data-peekaboo-art="22"] { filter: url(#peekaboo-art-22) !important; }
+html.peekaboo-on [data-peekaboo-art="23"] { filter: url(#peekaboo-art-23) !important; }
+html.peekaboo-on [data-peekaboo-art="24"] { filter: url(#peekaboo-art-24) !important; }
+html.peekaboo-on [data-peekaboo-art="25"] { filter: url(#peekaboo-art-25) !important; }
+html.peekaboo-on [data-peekaboo-art="26"] { filter: url(#peekaboo-art-26) !important; }
+html.peekaboo-on [data-peekaboo-art="27"] { filter: url(#peekaboo-art-27) !important; }
+html.peekaboo-on [data-peekaboo-art="28"] { filter: url(#peekaboo-art-28) !important; }
+html.peekaboo-on [data-peekaboo-art="29"] { filter: url(#peekaboo-art-29) !important; }
+html.peekaboo-on [data-peekaboo-art="30"] { filter: url(#peekaboo-art-30) !important; }
+html.peekaboo-on [data-peekaboo-art="31"] { filter: url(#peekaboo-art-31) !important; }
+
+/* 被遮的文字统一中性灰：标签之类原本是深色字，块会和背景混在一起看不见 */
+html.peekaboo-on [data-peekaboo-masked] {
+    color: #8b95a1 !important;
+}
+
+/* 纯黑块 / 纯白块：同一串 █，只换颜色 */
+html.peekaboo-on[data-peekaboo-text="black"] [data-peekaboo-masked] {
+    color: #000 !important;
+}
+
+html.peekaboo-on[data-peekaboo-text="white"] [data-peekaboo-masked] {
+    color: #fff !important;
+}
+
+/* 悬停预览：整张卡片（含 Stash 悬停插入的预览视频）临时露出原图。
+   规则必须排在上面的编号规则之后（同优先级，靠顺序生效）。 */
+html.peekaboo-on .peekaboo-peek,
+html.peekaboo-on .peekaboo-peek img,
+html.peekaboo-on .peekaboo-peek video,
+html.peekaboo-on .peekaboo-peek [data-peekaboo-art] {
+    filter: none !important;
+}
+
+/* 按住 Shift：整页临时露出原图 */
+html.peekaboo-on.peekaboo-reveal img,
+html.peekaboo-on.peekaboo-reveal video,
+html.peekaboo-on.peekaboo-reveal [data-peekaboo-art] {
+    filter: none !important;
+}

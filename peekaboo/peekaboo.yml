@@ -18,7 +18,7 @@ settings:
     type: BOOLEAN
   hoverPeek:
     displayName: Reveal on hover
-    description: "Hover an image for a moment to see the original, it hides again when you leave. Hold Shift to reveal everything at once. Card previews play muted."
+    description: "Hover an image for a moment to see the original, it hides again when you leave. Hold Shift to reveal images and masked text at once. Card previews play muted."
     type: BOOLEAN
   allowVideo:
     displayName: Let videos keep playing

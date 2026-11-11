@@ -20,7 +20,7 @@
 |---|---|---|
 | Shield on | OFF | 总开关 |
 | Show navbar button | ON | OFF 时导航栏不出现眼睛按钮，只剩快捷键 |
-| Reveal on hover | ON | 悬停片刻把整张卡片（含悬停才出现的预览视频）露出来，移开恢复；按住 Shift 则整页临时全露 |
+| Reveal on hover | ON | 悬停片刻把整张卡片（含悬停才出现的预览视频）露出来，移开恢复；按住 Shift 则整页临时全露，图片和文字一起露 |
 | Let videos keep playing | OFF | OFF 时播放器暂停且禁止播放；卡片预览不受影响（本就静音循环） |
 | Mask text | ON | 遮标题、简介、工作室/演员/标签名、别名、标签、详情值；按钮、页签、筛选器不遮 |
 | Text mask style | sunny | 六种，见下表 |

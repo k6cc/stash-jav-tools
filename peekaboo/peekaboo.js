@@ -3,7 +3,7 @@
  * 实现：<html> 上挂一个 class，CSS 把 img/video 的 filter 指向只输出 feImage 的
  * SVG 滤镜 —— 元素原始像素被整块丢弃，src 不动，关掉时无需还原任何东西。
  *
- * 另外三件事：悬停/按住 Shift 临时露原图；标题/人名/标签等文字按字段打码；
+ * 另外三件事：悬停露原图、按住 Shift 图与文字一起露；标题/人名/标签等文字按字段打码；
  * title、alt、浏览器标题、复制内容一并不留原字。
  */
 (function () {
@@ -499,6 +499,7 @@
 
   function maskTree(root) {
     if (!root || !cfg.maskText || !state.on) return;
+    if (state.reveal) return;                                          // 正按 Shift 暂露原图，别遮回去
     if (isSettingsPage()) return;                                       // 设置页没有库内容，一律不动
     if (root.nodeType === 3) {                                          // 文本节点被 React 改写
       var p = root.parentElement;
@@ -528,7 +529,7 @@
   }
 
   function maskTitle() {
-    if (!cfg.maskText || !state.on || isSettingsPage()) return;
+    if (!cfg.maskText || !state.on || state.reveal || isSettingsPage()) return;
     var t = document.title;
     if (!t) return;
     if (titleState.masked && t === titleState.masked) return;
@@ -731,6 +732,15 @@
     state.reveal = on;
     if (on) peekEnd();
     document.documentElement.classList.toggle(REVEAL, on);
+    // 图片/视频靠 CSS 类换回原图；文字是直接改文本节点的，CSS 还原不了，只能整页跑一遍
+    if (cfg.maskText) {
+      if (on) {
+        unmaskAll();
+        restoreTitle();
+      } else {
+        applyTextMasks();
+      }
+    }
   }
 
   document.addEventListener("keydown", function (e) {

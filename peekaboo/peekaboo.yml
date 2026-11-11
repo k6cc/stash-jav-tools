@@ -28,6 +28,10 @@ settings:
     displayName: Mask text
     description: "Hide titles, descriptions, names, aliases, tags and detail values, plus the tab title, image alt text and copied text. Navigation, tabs, buttons and forms stay readable."
     type: BOOLEAN
+  keepTextMasked:
+    displayName: Keep text masked when revealing
+    description: "ON = holding Shift shows the original image but leaves titles, names and tags masked. OFF (default) = holding Shift reveals the text as well."
+    type: BOOLEAN
   textStyle:
     displayName: Text mask style
     description: "sunny = English words such as sunflower / mint (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. Type one of those six names."

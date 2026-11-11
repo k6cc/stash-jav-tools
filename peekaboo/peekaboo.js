@@ -112,8 +112,8 @@
 
   var state = { on: false, reveal: false };
   var cfg = {
-    enabled: false, hoverPeek: true, allowVideo: false,
-    maskText: true, textStyle: DEFAULT_TEXT_STYLE, navButton: true
+    enabled: false, hoverPeek: true, allowVideo: false, maskText: true,
+    textStyle: DEFAULT_TEXT_STYLE, navButton: true, keepTextMasked: false
   };
   var cfgLoaded = false;
   var cfgSig = "";
@@ -499,7 +499,7 @@
 
   function maskTree(root) {
     if (!root || !cfg.maskText || !state.on) return;
-    if (state.reveal) return;                                          // 正按 Shift 暂露原图，别遮回去
+    if (state.reveal && !cfg.keepTextMasked) return;                   // 正按 Shift 暂露原图，别遮回去
     if (isSettingsPage()) return;                                       // 设置页没有库内容，一律不动
     if (root.nodeType === 3) {                                          // 文本节点被 React 改写
       var p = root.parentElement;
@@ -529,7 +529,8 @@
   }
 
   function maskTitle() {
-    if (!cfg.maskText || !state.on || state.reveal || isSettingsPage()) return;
+    if (!cfg.maskText || !state.on || isSettingsPage()) return;
+    if (state.reveal && !cfg.keepTextMasked) return;
     var t = document.title;
     if (!t) return;
     if (titleState.masked && t === titleState.masked) return;
@@ -735,10 +736,12 @@
     // 图片/视频靠 CSS 类换回原图；文字是直接改文本节点的，CSS 还原不了，只能整页跑一遍
     if (cfg.maskText) {
       if (on) {
-        unmaskAll();
-        restoreTitle();
+        if (!cfg.keepTextMasked) {
+          unmaskAll();
+          restoreTitle();
+        }
       } else {
-        applyTextMasks();
+        applyTextMasks();                                              // 松开一律重遮，别停在上次露着的状态
       }
     }
   }
@@ -791,7 +794,8 @@
         allowVideo: cfg.allowVideo,
         maskText: cfg.maskText,
         textStyle: cfg.textStyle,
-        navButton: cfg.navButton
+        navButton: cfg.navButton,
+        keepTextMasked: cfg.keepTextMasked
       });
     }).catch(function (e) {
       console.warn("[peekaboo] 保存状态失败：", e);
@@ -825,7 +829,7 @@
   // 用 textStyle 是否为空判断「从没保存过」，此时把默认值写回去，设置页才和实际行为一致
   var DEFAULTS = {
     hoverPeek: true, allowVideo: false, maskText: true,
-    textStyle: DEFAULT_TEXT_STYLE, navButton: true
+    textStyle: DEFAULT_TEXT_STYLE, navButton: true, keepTextMasked: false
   };
 
   function loadConfig() {
@@ -839,6 +843,7 @@
       cfg.allowVideo = first ? DEFAULTS.allowVideo : s.allowVideo === true;
       cfg.maskText = first ? DEFAULTS.maskText : s.maskText !== false;
       cfg.navButton = first ? DEFAULTS.navButton : s.navButton !== false;
+      cfg.keepTextMasked = first ? DEFAULTS.keepTextMasked : s.keepTextMasked === true;
       cfg.textStyle = normalizeStyle(raw) || DEFAULTS.textStyle;
       if (first) {
         saveConfig({
@@ -847,7 +852,8 @@
           allowVideo: cfg.allowVideo,
           maskText: cfg.maskText,
           textStyle: cfg.textStyle,
-          navButton: cfg.navButton
+          navButton: cfg.navButton,
+          keepTextMasked: cfg.keepTextMasked
         });
       }
       // 配置读到时页面可能已经遮过一轮（那时用的还是默认样式），块的颜色靠这个属性取
@@ -860,7 +866,8 @@
   }
 
   function signature() {
-    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.maskText, cfg.textStyle, cfg.navButton].join("|");
+    return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.maskText, cfg.textStyle,
+      cfg.navButton, cfg.keepTextMasked].join("|");
   }
 
   // 设置页改完立刻生效，不用刷新
@@ -870,6 +877,7 @@
       var sig = signature();
       if (sig === cfgSig) return;
       cfgSig = sig;
+      if (state.reveal) setReveal(false);                               // 设置变了，先退出临时露，免得停在半截状态
       if (cfg.enabled !== state.on) {
         setState(cfg.enabled, false);
       } else {

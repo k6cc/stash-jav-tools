@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.0";
+  var PLUGIN_VERSION = "0.1.1";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";

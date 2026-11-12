@@ -580,6 +580,9 @@
       qs.scenes.forEach(function (s) { out.push(s); });
       if (qs.count != null && out.length >= qs.count) return out;
       if (qs.scenes.length === 0 || qs.hasMore === false) return out;
+      // 与 fetchScenesBatch 同一个硬上限：源忽略 page 参数（每页都回同样的
+      // 满页）时，光靠 count 终止会一直翻下去 —— 界面就是无限转圈
+      if (page >= BOX_MAX_PAGES) return out;
       page++;
       return one().then(next);
     }
@@ -1780,15 +1783,24 @@
       default: return [];
     }
   }
+  // 每次发起领一个号：新的接管后，旧请求回来只丢弃、不覆盖状态。
+  // 否则"重试 → 旧请求超时回来 → 界面又跳回错误"。
+  var _dataSeq = {};
   function ensureData(keys, force) {
+    var started = false;
     keys.forEach(function (k) {
       if (!DATASETS[k]) return;
       if (_dp.d[k] && !force) return;
-      if (_dp.loading[k]) return;
+      // force（点重试 / 刷新）必须能压过上一次还挂着的请求：无条件
+      // `if (_dp.loading[k]) return` 会让"上一次没回来时的重试"变成空操作。
+      if (_dp.loading[k] && !force) return;
       if (_dp.err[k] && !force) return; // 出错后等用户重试，不自动循环
+      var seq = _dataSeq[k] = (_dataSeq[k] || 0) + 1;
       _dp.loading[k] = true; _dp.err[k] = null;
       if (k === "latest") _dp.progress = null;
+      started = true;
       DATASETS[k]({ force: !!force, onProgress: k === "latest" ? updateFetchProgress : null }).then(function (r) {
+        if (_dataSeq[k] !== seq) return;
         _dp.d[k] = r; _dp.loading[k] = false;
         if (k === "latest") _dp.progress = null;
         _dp.fetchedAt = Math.max(_dp.fetchedAt, r.fetchedAt || 0);
@@ -1796,12 +1808,16 @@
         emitUnread();
         render();
       }).catch(function (e) {
+        if (_dataSeq[k] !== seq) return;
         _dp.loading[k] = false;
         if (k === "latest") _dp.progress = null;
         _dp.err[k] = e;
         render();
       });
     });
+    // 重试要立刻有反馈：以前只清 err 不重绘，错误框会原地停到下次超时，
+    // 看起来就是"点了重试毫无反应"（用户 2026-11-12）
+    if (started && force) render();
   }
   // 4a：批量进度只刷新加载态文案；节流避免整页高频重绘（用户 2026-10-26）
   var _progressTimer = 0;
@@ -2679,7 +2695,19 @@
         count: tc("不在库", "Not in library"), x: true,
         more: function () { switchView("performers"); },
       });
-      if (!d || !tp) secBody(s6, "loading", null);
+      // 依赖两份数据：缺任何一份都要么转圈要么报错。以前不看 err 一律转圈，
+      // 上一次加载失败就永远转下去、连重试入口都没有（用户 2026-11-12）
+      if (!d || !tp) {
+        var miss = [];
+        if (!d) miss.push("latest");
+        if (!tp) miss.push("trendingPerf");
+        var e6 = null;
+        for (var mi = 0; mi < miss.length; mi++) {
+          if (_dp.err[miss[mi]]) { e6 = _dp.err[miss[mi]]; break; }
+        }
+        if (e6) secBody(s6, "error", errText(e6), function () { retryDatasets(miss); });
+        else secBody(s6, "loading", null);
+      }
       else {
         var g6 = el("div", "ssd-dp-grid mini");
         // 总览只给每位已关注演员 2 个名额：一行 12 格要覆盖更多人，
@@ -2705,9 +2733,12 @@
   }
 
   function retryLatest() { retryDataset("latest"); }
-  function retryDataset(k) {
-    _dp.err[k] = null;
-    ensureData([k], true);
+  function retryDataset(k) { retryDatasets([k]); }
+  // 一次重试多个数据集（总览"发现演员"同时依赖 latest 与 trendingPerf，
+  // 缺哪个就重试哪个，别只重试一个）
+  function retryDatasets(keys) {
+    keys.forEach(function (k) { _dp.err[k] = null; });
+    ensureData(keys, true);
   }
 
   // 共同出演上限：数据全部来自已在内存的 actorsWithNew（场景缓存），纯本地
@@ -3606,8 +3637,8 @@
     var info = el("div", "ssd-dp-pfinfo");
     info.appendChild(el("div", "ssd-dp-pfname", studio.name || ""));
     var meta = el("div", "ssd-dp-pfmeta");
-    meta.textContent = tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—") + " · 已收藏",
-      g.items.length + " new · newest " + (g.newest || "—") + " · favorited");
+    meta.textContent = tc(g.items.length + " 部新作品 · 最新 " + (g.newest || "—"),
+      g.items.length + " new · newest " + (g.newest || "—"));
     info.appendChild(meta);
     head.appendChild(info);
     // 右上角返回（用户 2026-10-27）：进到工作室详情后比「去 stash-box」更常用的是

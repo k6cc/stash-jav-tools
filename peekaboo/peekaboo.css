@@ -69,6 +69,25 @@ html.peekaboo-on[data-peekaboo-text="white"] [data-peekaboo-masked] {
     color: #fff !important;
 }
 
+/* 卡片悬停预览视频：遮挡时它显示出来也是同一幅图案，下面那张 <img> 已经画好，
+   留着的代价是每帧多一次滤镜栅格化 —— 手机上滚动掉帧就是它。
+   手指点过卡片后 :hover 会一直保持，所以「卡片被选中」的观感会连滚一路卡 */
+html.peekaboo-on .scene-card-preview-video,
+html.peekaboo-on .scene-marker-card-preview-video,
+html.peekaboo-on .gallery-card-preview-video {
+    visibility: hidden !important;
+}
+
+/* 临时露原图时，预览视频要能看见 */
+html.peekaboo-on.peekaboo-reveal .scene-card-preview-video,
+html.peekaboo-on.peekaboo-reveal .scene-marker-card-preview-video,
+html.peekaboo-on.peekaboo-reveal .gallery-card-preview-video,
+html.peekaboo-on .peekaboo-peek .scene-card-preview-video,
+html.peekaboo-on .peekaboo-peek .scene-marker-card-preview-video,
+html.peekaboo-on .peekaboo-peek .gallery-card-preview-video {
+    visibility: visible !important;
+}
+
 /* content 模式（手机快路径）：<img> 的内容直接换成图案，滤镜整条链路跳过。
    必须命中全部 img —— 未打标的也有 0 号图案，留着滤镜就是白做一次离屏栅格化 */
 html.peekaboo-ct.peekaboo-on img {

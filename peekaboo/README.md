@@ -1,6 +1,6 @@
 # Peekaboo 插件使用说明
 
-> v0.1.2：手机端滚动不再卡（封面与缩略图改用 `content` 换图，不再逐个走 SVG 滤镜）；导航栏开关改为 `Hide navbar button`，默认不隐藏
+> v0.1.3：遮挡时不再显示卡片悬停预览视频（显示出来也是图案，却让手机滚动每帧多一次滤镜）；临时露原图时照常可见
 
 把库里的封面、缩略图、播放器画面换成生成的抽象图案，不是高斯模糊。图片本身、数据库、文件一概不动，关掉即恢复。
 
@@ -22,7 +22,7 @@
 | Hide navbar button | OFF | ON 时导航栏不出现眼睛按钮，只剩快捷键 |
 | Reveal on hover | ON | 悬停片刻把整张卡片（含悬停才出现的预览视频）露出来，移开恢复；按住 Shift 则整页临时全露 |
 | Reveal text as well | OFF | ON 时悬停或按住 Shift 连文字一起露出；OFF（默认）只露图片，标题、人名、标签保持遮罩 |
-| Let videos keep playing | OFF | OFF 时播放器暂停且禁止播放；卡片预览不受影响（本就静音循环） |
+| Let videos keep playing | OFF | OFF 时所有视频暂停并阻止播放，卡片悬停预览也不播；ON 则照常播放（画面仍是图案） |
 | Keep text readable | OFF | OFF（默认）遮标题、简介、工作室/演员/标签名、别名、标签、详情值；ON 则完全不动文字。按钮、页签、筛选器始终可读 |
 | Text mask style | sunny | 六种，见下表 |
 

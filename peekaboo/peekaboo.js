@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.2";
+  var PLUGIN_VERSION = "0.1.3";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -757,11 +757,8 @@
     if (!state.on || cfg.allowVideo) return;
     var v = e.target;
     if (!v || v.tagName !== "VIDEO") return;
-    // 卡片预览由 Stash 自己在悬停时播放，本就是静音的一段循环；这里只保证不出声，不拦
-    if (v.classList.contains("scene-card-preview-video")) {
-      v.muted = true;
-      return;
-    }
+    // 卡片预览在 CSS 里已经整块不显示（见 peekaboo.css），还在播就只是白烧解码
+    v.muted = true;
     try { v.pause(); } catch (err) { /* 忽略 */ }
   }, true);
 

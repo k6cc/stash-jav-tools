@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.6";
+  var PLUGIN_VERSION = "0.1.7";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -26,14 +26,40 @@
   var ART_ATTR = "data-peekaboo-art";
   var TEXT_ATTR = "data-peekaboo-text";
 
+  // ===== 其他插件支持 =====
+  // 第三方插件的界面结构各自一段，表在 peekaboo.compat.js（该文件必须排在前面）。
+  // 核心只认下面这些字段，加一个插件不用动这里；只有出现新的“形态”（例如预览视频）
+  // 才需要在核心补一个字段的消费点。
+  var COMPAT = (window.__peekabooCompat || []).filter(function (c) { return c && c.id; });
+
+  function compatList(field) {
+    var out = [];
+    for (var i = 0; i < COMPAT.length; i++) {
+      var v = COMPAT[i][field];
+      if (v) out = out.concat(v);
+    }
+    return out;
+  }
+
+  // 追加到核心选择器后面：没有支持项时是空串，选择器保持原样
+  function compatAdd(field) {
+    var list = compatList(field);
+    return list.length ? "," + list.join(",") : "";
+  }
+
+  var COMPAT_ATTR = compatList("attr").join(",");   // 控件 title/alt 里的库内容
+  var COMPAT_BG = compatList("bg").join(",");       // 背景图画面，命中即遮
+  var COMPAT_TAIL = compatList("tail").join(",");   // 「名字 · 计数」里只遮名字，计数留着
+
   var SEL = "img, video";
   // 背景图形式的画面（播放器海报、进度条预览气泡、拖动预览的雪碧图）不经过 <img>
   var BG_SEL = '[style*="url("], .vjs-poster, .vjs-vtt-thumbnail-display, .wall-item-media, ' +
-    '.scene-cover, .scrubber-item, .sprite-cell';
+    '.scene-cover, .scrubber-item, .sprite-cell' + compatAdd("bg");
   var MEDIA_BG = /\/(scene|image|gallery|performer|studio|group)s?\//;
 
   // 悬停露原图按“卡片”整块生效：Stash 悬停后会插入预览视频盖住封面，只露 img 是看不见的
-  var HOST_SEL = ".scene-card, .image-card, .gallery-card, .group-card, .studio-card, .performer-card, .tag-card, .wall-item";
+  var HOST_SEL = ".scene-card, .image-card, .gallery-card, .group-card, .studio-card, .performer-card, .tag-card, .wall-item" +
+    compatAdd("host");
   // 卡片预览视频：遮挡时整块隐藏（见 peekaboo.css），只在露原图期间放出来并播放
   var PREVIEW_VID = ".scene-card-preview-video, .scene-marker-card-preview-video, .gallery-card-preview-video";
 
@@ -73,17 +99,20 @@
   ].join(",");
 
   // 描述是整句，遮罩文字按句首大写；其余（标题、人名、标签、字段值）按单词首字母大写
-  var DESC_SEL = ".scene-description, .gallery-description, .expandable-text, .pre";
+  var DESC_SEL = ".scene-description, .gallery-description, .expandable-text, .pre" + compatAdd("desc");
 
   // 这些元素各自算“一个单位”：整块只出一条替换结果，内部被拆成多个文本节点也不拆词
   var UNIT_SEL = ".detail-item-title, .detail-item-value, .performer-name, .performer-disambiguation, .alias-head, " +
-    ".group-name, .tag-name, .studio-name";
+    ".group-name, .tag-name, .studio-name" + compatAdd("unit");
 
   // 整块跳过：导航、表单、设置页，以及控件本身（按钮文字不是库里的数据）
   var SAFE_SEL = ".navbar, .nav, .nav-link, .nav-item, .dropdown-menu, .dropdown-toggle, .react-select, " +
     "form, input, textarea, select, button, .btn, .btn-link, " +
     ".settings-container, .modal-header, .vjs-control-bar, .vjs-menu, " +
     ".details-edit, .card-controls, .card-popovers, .filter-button, .tag-select";
+
+  // 会打码的字段全集：判「字段包在控件里」时用（见 inSafeZone）
+  var FIELD_SEL = TEXT_SEL + "," + UNIT_SEL + "," + DESC_SEL;
 
   var ART_COUNT = 32;
   var PALETTES = [
@@ -277,9 +306,12 @@
 
   function markBgEl(el) {
     if (!el || el.__peekabooMarked || el.tagName === "IMG" || el.tagName === "VIDEO") return;
+    // 插件把画面挂在自定义属性上、由伪元素铺出来（工作室头像的模糊铺底）：计算样式的
+    // backgroundImage 是 none，URL 还常是外站直链 —— 只能按选择器认
+    var compat = !!(COMPAT_BG && el.matches(COMPAT_BG));
     var bg = window.getComputedStyle(el).backgroundImage;
-    if (!bg || bg.indexOf("url(") < 0) return;
-    if (!isMediaBackground(el, bg)) return;
+    if (bg.indexOf("url(") < 0 && !compat) return;
+    if (!isMediaBackground(el, bg) && !compat) return;
     mark(el);
   }
 
@@ -398,12 +430,19 @@
     return out;
   }
 
+  // 组标签「名字 · 12」：名字是库内容要遮，末尾计数是插件自己的统计，留着才有用
+  function keepTail(el, text) {
+    if (!COMPAT_TAIL || !el.matches || !el.matches(COMPAT_TAIL)) return "";
+    var m = /^([\s\S]*?)(\s*·\s*\d+)\s*$/.exec(text);
+    return m && m[1].trim() ? m[2] : "";
+  }
+
   // 整块当一个单位替换：像「性别:」这种被 React 拆成两个文本节点的，按节点分头替换会变成两个词
   function maskUnit(el, words) {
     // 只认自己这一层的文字：嵌套的字段/链接/药丸（owner 是自己的后代）各自成块，别被父级吞掉；
     // 反过来，目标只是字段内部的一个普通 span 时（owner 是祖先）仍归自己处理
     var nodes = textNodesOf(el).filter(function (node) {
-      var owner = node.parentElement && node.parentElement.closest(TEXT_SEL + "," + UNIT_SEL);
+      var owner = node.parentElement && node.parentElement.closest(FIELD_SEL);
       return !owner || owner === el || !el.contains(owner);
     });
     if (!nodes.length) return false;
@@ -424,10 +463,13 @@
       prefix = m[1];
     }
     var body = orig.slice(prefix.length);
+    var tail = keepTail(el, body);
+    if (tail) body = body.slice(0, body.length - tail.length);
     var masked = prefix + maskValue(body, hash((el.getAttribute("class") || el.tagName) + "|" + body),
       words, isSentenceText(el));
     // 英文词要靠空格隔开，否则相邻节点/元素会连成 "mintsunshine"
-    if (cfg.textStyle === "sunny") masked += " ";
+    if (cfg.textStyle === "sunny" && !tail) masked += " ";
+    masked += tail;
 
     var target = null;
     for (var t = 0; t < nodes.length; t++) {
@@ -454,13 +496,18 @@
     textOrig.delete(node);
   }
 
+  // 控件里的 title/alt 一律留原样，除非插件把库内容塞在了那儿（见 compat 的 attr）
+  function attrMaskable(n) {
+    return !inSafeZone(n) || !!(COMPAT_ATTR && n.matches(COMPAT_ATTR));
+  }
+
   function maskAttrs(el) {
     var list = el.querySelectorAll("[title]");
     var own = el.hasAttribute && el.hasAttribute("title") ? [el] : [];
     var nodes = own.concat(Array.prototype.slice.call(list));
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
-      if (n.__peekabooAttr || inSafeZone(n)) continue;
+      if (n.__peekabooAttr || !attrMaskable(n)) continue;
       n.__peekabooAttr = true;
       var orig = n.getAttribute("title");
       if (!orig || !orig.trim()) continue;
@@ -473,7 +520,7 @@
       var img = imgs[k];
       var alt = img.getAttribute("alt");
       if (!alt || !alt.trim() || img.__peekabooAttr) continue;
-      if (inSafeZone(img)) continue;
+      if (!attrMaskable(img)) continue;
       img.__peekabooAttr = true;
       var am = maskValue(alt, hash(alt));
       attrOrig.push({ el: img, name: "alt", orig: alt, masked: am });
@@ -491,7 +538,14 @@
   }
 
   function inSafeZone(el) {
-    return !!(el && el.closest && el.closest(SAFE_SEL));
+    if (!el || !el.closest) return false;
+    var safe = el.closest(SAFE_SEL);
+    if (!safe) return false;
+    // 插件把字段放进自己的按钮/链接里（演员名药丸、工作室组标签），控件在外、字段在内；
+    // 也有整颗按钮本身就是一条库内容的。两种都算“字段”，里面的字要遮。
+    // 反过来，字段容器里包着的控件（卡片角标菜单）照旧按控件处理。
+    var field = el.closest(FIELD_SEL);
+    return !(field && safe.contains(field));
   }
 
   // 遮字元素的配色可能与本来的背景一样暗（标签就是深灰字），块会看不见；统一给中性灰
@@ -570,16 +624,23 @@
         if (maskUnit(unit, wordsFor(unit, unit.textContent))) markMasked(unit);
         return;
       }
-      if (!p.closest(TEXT_SEL)) return;                                 // 只处理字段区，别把界面文字也遮了
+      if (!p.closest(FIELD_SEL)) return;                                // 只处理字段区，别把界面文字也遮了
       if (maskUnit(p, 0)) markMasked(p);
       return;
     }
     if (root.nodeType !== 1) return;
     var els = [];
-    if (root.matches && root.matches(TEXT_SEL + "," + UNIT_SEL)) els.push(root);
-    var list = root.querySelectorAll(TEXT_SEL + "," + UNIT_SEL);
+    if (root.matches && root.matches(FIELD_SEL)) els.push(root);
+    var list = root.querySelectorAll(FIELD_SEL);
     for (var i = 0; i < list.length; i++) els.push(list[i]);
     for (var j = 0; j < els.length; j++) maskEl(els[j]);
+
+    // 控件要整个免遮，但插件可能把库里的名字塞在它的 title 上（演员名药丸）
+    if (COMPAT_ATTR) {
+      if (root.matches && root.matches(COMPAT_ATTR)) maskAttrs(root);
+      var extra = root.querySelectorAll(COMPAT_ATTR);
+      for (var k = 0; k < extra.length; k++) maskAttrs(extra[k]);
+    }
   }
 
   function unmaskAll() {

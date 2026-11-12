@@ -100,7 +100,7 @@ return max(LO, min(HI, v))
 ## 专题规范（按需 Read，不每次必读）
 
 - **改带 UI 的插件 `.js` 前**：读 `docs/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。
-- **写/改插件 README 或论坛帖前**：读 `docs/docs-writing.md`（README 结构与取舍 + 论坛帖写作规则；论坛草稿在 `docs/forum-post-*.md`，已 gitignore）。
+- **写/改插件 README、论坛帖、或 yml 里 `displayName`/`description` 前**：读 `docs/docs-writing.md`（README 结构与取舍 + 论坛帖规则 + 设置文案规则 + 写完必做的「逐句三问」；论坛草稿在 `docs/forum-post-*.md`，已 gitignore）。
 - **新插件首次发布前**：读 `docs/new-plugin-release.md`（release.yml 白名单 + stash-plugins 占位符）。
 
 ## 测试工具集（stash-testkit/）

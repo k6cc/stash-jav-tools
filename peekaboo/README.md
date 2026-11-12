@@ -1,6 +1,6 @@
 # Peekaboo 插件使用说明
 
-> v0.1.8：说明与设置文案重写，只讲做什么、遮什么
+> v0.1.9：快捷键与 Shift 在说明里单列一节
 
 把库里的封面、缩略图、播放器画面换成生成的抽象图案，不是高斯模糊。图片本身、数据库、文件一概不动，关掉即恢复。
 
@@ -12,13 +12,20 @@
 
 实测 Stash v0.31.0 与 v0.32.0，两者表现一致；更早的版本未实测。
 
+## 快捷键
+
+| 按键 | 作用 |
+|---|---|
+| `Shift+Alt+B` | 开关遮挡 |
+| 按住 `Shift` | 整页临时露出原图 |
+
 ## 设置
 
 | 设置项 | 默认 | 说明 |
 |---|---|---|
-| Shield on | OFF | 总开关，快捷键 `Shift+Alt+B` |
+| Shield on | OFF | 总开关 |
 | Hide navbar button | OFF | ON 时导航栏不放眼睛按钮 |
-| Reveal on hover | ON | 临时露出原图；Shift 露整页 |
+| Reveal on hover | ON | 悬停卡片时临时露出原图 |
 | Reveal text as well | OFF | 露出原图时连文字一起露 |
 | Let videos keep playing | OFF | OFF 时视频停住；ON 照常播放，画面仍是图案 |
 | Keep text readable | OFF | ON 时文字完全不动 |

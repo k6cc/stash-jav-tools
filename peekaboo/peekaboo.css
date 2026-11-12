@@ -18,6 +18,9 @@ html.peekaboo-on .wall-item-media {
     filter: url(#peekaboo-art-0) !important;
 }
 
+/* 0 号是默认编号：img/video 由上面那条兜住，背景图元素还得有自己的 0 号规则，
+   否则按 URL 哈希到 0 的背景图会整块漏出来 */
+html.peekaboo-on [data-peekaboo-art="0"] { filter: url(#peekaboo-art-0) !important; }
 html.peekaboo-on [data-peekaboo-art="1"] { filter: url(#peekaboo-art-1) !important; }
 html.peekaboo-on [data-peekaboo-art="2"] { filter: url(#peekaboo-art-2) !important; }
 html.peekaboo-on [data-peekaboo-art="3"] { filter: url(#peekaboo-art-3) !important; }
@@ -92,8 +95,8 @@ html.peekaboo-on .peekaboo-peek [data-peekaboo-art] {
     filter: none !important;
 }
 
-/* 按住卡片的整个过程中禁掉文字选中与长按菜单：卡片是链接，长按落在标题上会先起选区
-   （选了字也算“遮住了”，但预览会被随之而来的 touchcancel 掐掉），iOS 还会弹操作菜单。
+/* 按住卡片的整个过程中禁掉文字选中与长按菜单：卡片是链接，长按落在标题上会先起选区，
+   预览会被随之而来的 touchcancel 掐掉；开着 Reveal text as well 时选区里还是原文，能被复制走。
    文字还原后卡片会变高，手指下面的位置可能刚好变成文字，所以这条要盖住整张卡。 */
 html.peekaboo-on .peekaboo-press,
 html.peekaboo-on .peekaboo-press * {

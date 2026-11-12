@@ -1,6 +1,6 @@
 name: Peekaboo
 description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, descriptions, names, tags, the tab title and copied text. Hover a card or hold Shift to see the original for a moment. Nothing in the library is modified."
-version: 0.1.5
+version: 0.1.6
 url: https://discourse.stashapp.cc/t/peekaboo/21027
 ui:
   javascript:
@@ -18,7 +18,7 @@ settings:
     type: BOOLEAN
   hoverPeek:
     displayName: Reveal on hover
-    description: "Hover an image for a moment to see the original, it hides again when you leave. Hold Shift to reveal images and masked text at once. Card previews play muted."
+    description: "Hover a card for a moment to see the original, it hides again when you leave; on touch screens, press and hold. Hold Shift to reveal the whole page. Card previews play muted."
     type: BOOLEAN
   allowVideo:
     displayName: Let videos keep playing

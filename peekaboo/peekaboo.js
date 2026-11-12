@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.5";
+  var PLUGIN_VERSION = "0.1.6";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -819,7 +819,7 @@
       // 标签列表这类卡片没有封面，悬停只为露文字，没有可露的图就不必计时
       if (cfg.revealText && !cfg.textReadable) return card;
     }
-    return t.closest("[data-peekaboo-art], img, video");
+    return t.closest("[" + ART_ATTR + "], img, video");
   }
 
   function schedulePeek(host, delay) {

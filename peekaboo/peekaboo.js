@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.3";
+  var PLUGIN_VERSION = "0.1.4";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -33,6 +33,8 @@
 
   // 悬停露原图按“卡片”整块生效：Stash 悬停后会插入预览视频盖住封面，只露 img 是看不见的
   var HOST_SEL = ".scene-card, .image-card, .gallery-card, .group-card, .studio-card, .performer-card, .tag-card, .wall-item";
+  // 卡片预览视频：遮挡时整块隐藏（见 peekaboo.css），只在露原图期间放出来并播放
+  var PREVIEW_VID = ".scene-card-preview-video, .scene-marker-card-preview-video, .gallery-card-preview-video";
 
   // 文字打码只碰“字段”，页签 / 按钮 / 筛选器 / 表单里的字一律不动
   var TEXT_SEL = [
@@ -209,7 +211,7 @@
     return s.join("");
   }
 
-  var ART_HREF = [];                       // 图案 data URI，滤镜与 content 两种模式共用
+  var ART_HREF = [];                       // 图案 data URI，feImage 的 href
 
   function artHref(k) {
     // encodeURIComponent 不转义单引号，而 SVG 属性用的就是单引号 —— 不替换会截断 href
@@ -240,50 +242,6 @@
     document.body.appendChild(svg);
   }
 
-  // ===== 快路径：<img> 用 content 换图，不走 SVG 滤镜 =====
-  // 手机上的卡顿来自 filter: url() 的离屏栅格化 —— 每张缩略图滚进视口都要重新走一遍滤镜管线。
-  // content: url() 只是把元素内容换成图案，32 张图案共享解码，绘制成本和普通缩略图一样。
-  // content 替换普通元素是较新的规范行为，老浏览器不认，所以先实测再启用，探测失败继续走滤镜。
-  var CT = "peekaboo-ct";
-
-  function injectContentCss() {
-    if (document.getElementById("peekaboo-content-css")) return;
-    var css = ["html." + CT + ".peekaboo-on img{content:url(\"" + ART_HREF[0] +
-      "\")!important;object-fit:cover}"];                    // 未打标的 img 先挂 0 号，别露原图
-    for (var k = 0; k < ART_COUNT; k++) {
-      css.push("html." + CT + ".peekaboo-on img[data-peekaboo-art='" + k + "']{content:url(\"" +
-        ART_HREF[k] + "\")!important;object-fit:cover}");
-    }
-    var st = document.createElement("style");
-    st.id = "peekaboo-content-css";
-    st.textContent = css.join("");
-    document.head.appendChild(st);
-  }
-
-  function probeContent() {
-    return new Promise(function (resolve) {
-      var mk = function (size) {
-        // data URI 里是单引号属性，所以这里的 url() 必须用双引号包，否则字符串被截断
-        return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
-          "<svg xmlns='http://www.w3.org/2000/svg' width='" + size + "' height='" + size + "'>" +
-          "<rect width='" + size + "' height='" + size + "' fill='#000'/></svg>");
-      };
-      // 内容图 40×40、src 8×8：content 真的替换了内容时，布局尺寸会跟着变成 40
-      var img = new Image();
-      img.style.cssText = "position:fixed;left:-9999px;top:0;content:url(\"" + mk(40) + "\")";
-      img.onload = function () {
-        setTimeout(function () {                                 // content 的布局要等一帧才同步过来
-          var w = img.getBoundingClientRect().width;
-          img.remove();
-          resolve(w > 24);
-        }, 60);
-      };
-      img.onerror = function () { img.remove(); resolve(false); };
-      img.src = mk(8);
-      document.body.appendChild(img);
-    });
-  }
-
   // ===== 画面打标 =====
   function hash(str) {
     var h = 5381;
@@ -300,23 +258,10 @@
     return hash(key) % ART_COUNT;
   }
 
-  // 还没加载任何帧的 <video> 是透明的（没有海报时也一样），滤镜对它只是凭空多画一层图案，
-  // 而下面那张 <img> 已经是同一幅。确认无帧时先放开滤镜，一有画面立刻收回。
-  function syncVideoIdle(v) {
-    if (v.readyState === 0 && !v.poster) v.setAttribute("data-peekaboo-idle", "");
-    else v.removeAttribute("data-peekaboo-idle");
-    if (!v.__peekabooIdleHooked) {
-      v.__peekabooIdleHooked = true;
-      v.addEventListener("loadeddata", function () { syncVideoIdle(v); });
-      v.addEventListener("emptied", function () { syncVideoIdle(v); });
-    }
-  }
-
   function mark(el) {
     if (!el || el.__peekabooMarked) return;
     el.__peekabooMarked = true;
     el.setAttribute(ART_ATTR, String(artIndexOf(el)));
-    if (el.tagName === "VIDEO") syncVideoIdle(el);
   }
 
   function isMediaBackground(el, bg) {
@@ -757,7 +702,9 @@
     if (!state.on || cfg.allowVideo) return;
     var v = e.target;
     if (!v || v.tagName !== "VIDEO") return;
-    // 卡片预览在 CSS 里已经整块不显示（见 peekaboo.css），还在播就只是白烧解码
+    // 露原图期间预览视频要照常播，不然掀开盖子只有一张静止帧
+    if (state.reveal || (v.closest && v.closest("." + PEEK))) return;
+    // 其余时候卡片预览在 CSS 里已经整块不显示（见 peekaboo.css），还在播就只是白烧解码
     v.muted = true;
     try { v.pause(); } catch (err) { /* 忽略 */ }
   }, true);
@@ -765,9 +712,30 @@
   // ===== 悬停预览 =====
   var peekEl = null;
   var peekTextEl = null;          // 悬停时被还原了文字的那张卡片
+  var peekVideo = null;           // 露原图期间放出来播放的那张预览视频
   var peekPending = null;
   var peekTimer = 0;
   var PEEK_DELAY = 280;
+
+  // 预览视频被 CSS 整块隐藏，平时拦着不播；按住时放出来播，松手就停，
+  // 这样既能看到动态预览，也不会让视频在后台一直解码
+  function stopPeekVideo() {
+    var v = peekVideo;
+    peekVideo = null;
+    if (!v) return;
+    try { v.pause(); } catch (e) { /* 未就绪 */ }
+  }
+
+  function startPeekVideo(el) {
+    stopPeekVideo();
+    if (cfg.allowVideo || !el) return;
+    var v = el.querySelector(PREVIEW_VID);
+    if (!v) return;
+    peekVideo = v;
+    v.muted = true;
+    var p = v.play();
+    if (p && p.catch) p.catch(function () { /* 自动播放被拒，停在首帧 */ });
+  }
 
   function cancelPeek() {
     if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
@@ -786,9 +754,11 @@
     if (peekEl && peekEl !== el) {
       peekEl.classList.remove(PEEK);
       maskPeekText();
+      stopPeekVideo();
     }
     peekEl = el;
     el.classList.add(PEEK);
+    startPeekVideo(el);
     if (cfg.revealText && !cfg.textReadable && state.on) {
       unmaskWithin(el);
       peekTextEl = el;
@@ -802,6 +772,7 @@
       peekEl.classList.remove(PEEK);
       peekEl = null;
     }
+    stopPeekVideo();
   }
 
   function peekHost(e) {
@@ -1120,12 +1091,6 @@
 
     startObserver();
     startSettingsSync();
-
-    probeContent().then(function (ok) {
-      if (!ok) return;
-      injectContentCss();
-      document.documentElement.classList.add(CT);
-    });
 
     loadConfig().then(function (ok) {
       cfgLoaded = ok;

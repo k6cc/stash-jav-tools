@@ -1,6 +1,6 @@
 name: Peekaboo
-description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, descriptions, names, tags, the tab title and copied text. Hover a card or hold Shift to see the original for a moment. Nothing in the library is modified."
-version: 0.1.7
+description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, descriptions, names, tags, the tab title and copied text. The original can be revealed on demand. Nothing in the library is modified."
+version: 0.1.8
 url: https://discourse.stashapp.cc/t/peekaboo/21027
 ui:
   javascript:
@@ -19,21 +19,21 @@ settings:
     type: BOOLEAN
   hoverPeek:
     displayName: Reveal on hover
-    description: "Hover a card for a moment to see the original, it hides again when you leave; on touch screens, press and hold. Hold Shift to reveal the whole page. Card previews play muted."
+    description: "Show the original while hovering a card, or across the whole page while Shift is held."
     type: BOOLEAN
   allowVideo:
     displayName: Let videos keep playing
-    description: "ON = videos keep playing (with sound) behind the placeholder. OFF = playback is paused and blocked while the shield is on."
+    description: "OFF = videos stay paused while the shield is on. ON = they keep playing behind the pattern, as before."
     type: BOOLEAN
   textReadable:
     displayName: Keep text readable
-    description: "OFF (default) = titles, descriptions, names, aliases, tags and detail values are masked, plus the tab title, image alt text and copied text. ON = leave all text untouched. Navigation, tabs, buttons and forms stay readable either way."
+    description: "OFF (default) = titles, descriptions, names, aliases, tags and detail values are masked, plus the tab title, image alt text and copied text. ON = leave all text untouched."
     type: BOOLEAN
   revealText:
     displayName: Reveal text as well
-    description: "ON = hovering a card or holding Shift also brings the original titles and names back. OFF (default) = only the image is revealed, text stays masked. No effect when Keep text readable is on."
+    description: "ON = revealing also brings the original titles and names back. OFF (default) = only the image is revealed, text stays masked. No effect when Keep text readable is on."
     type: BOOLEAN
   textStyle:
     displayName: Text mask style
-    description: "sunny = English words such as Sunflower / Mint Soda (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. sunny and letters are capitalised like Stash itself: every word in titles and names, only the first word in descriptions. Type one of those six names."
+    description: "sunny = English words such as Sunflower / Mint Soda (default). symbol = grey blocks. black / white = solid blocks. glyph = one symbol per character (✦ ※ §). letters = one letter per character. Type one of those six names."
     type: STRING

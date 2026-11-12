@@ -1,4 +1,4 @@
-/* Peekaboo v0.1.0 —— Stash 插件
+/* Peekaboo —— Stash 插件
  * 用生成的 SVG 占位图替换所有图片 / 视频画面，而不是高斯模糊。
  * 实现：<html> 上挂一个 class，CSS 把 img/video 的 filter 指向只输出 feImage 的
  * SVG 滤镜 —— 元素原始像素被整块丢弃，src 不动，关掉时无需还原任何东西。
@@ -14,13 +14,14 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.4";
+  var PLUGIN_VERSION = "0.1.5";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
   var DEFS_ID = "peekaboo-defs";
   var ON = "peekaboo-on";
   var PEEK = "peekaboo-peek";
+  var PRESS = "peekaboo-press";
   var REVEAL = "peekaboo-reveal";
   var ART_ATTR = "data-peekaboo-art";
   var TEXT_ATTR = "data-peekaboo-text";
@@ -715,6 +716,8 @@
   var peekVideo = null;           // 露原图期间放出来播放的那张预览视频
   var peekPending = null;
   var peekTimer = 0;
+  var pressEl = null;             // 手指正按住的卡片（含 350ms 等待期）
+  var muteClickUntil = 0;         // 长按刚结束，紧跟的那次 click 不算数
   var PEEK_DELAY = 280;
 
   // 预览视频被 CSS 整块隐藏，平时拦着不播；按住时放出来播，松手就停，
@@ -742,6 +745,37 @@
     peekPending = null;
   }
 
+  // 卡片本身是链接：长按默认会起选区、弹「在新标签页打开」，选区带来的 touchcancel
+  // 会把预览当场掐掉，松手后紧跟的 click 还会把场景点开。按住期间一并挡掉。
+  function pressStart(el) {
+    if (pressEl === el) return;
+    pressEnd();
+    pressEl = el;
+    el.classList.add(PRESS);
+  }
+
+  function pressEnd() {
+    if (!pressEl) return;
+    pressEl.classList.remove(PRESS);
+    pressEl = null;
+  }
+
+  document.addEventListener("selectstart", function (e) {
+    if (pressEl && pressEl.contains(e.target)) e.preventDefault();
+  }, true);
+
+  document.addEventListener("contextmenu", function (e) {
+    if (pressEl && pressEl.contains(e.target)) e.preventDefault();
+  }, true);
+
+  document.addEventListener("click", function (e) {
+    if (!muteClickUntil) return;
+    if (Date.now() > muteClickUntil) { muteClickUntil = 0; return; }
+    muteClickUntil = 0;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
   // 把悬停时露出来的文字重新遮回去
   function maskPeekText() {
     var el = peekTextEl;
@@ -767,6 +801,7 @@
 
   function peekEnd() {
     cancelPeek();
+    pressEnd();
     maskPeekText();
     if (peekEl) {
       peekEl.classList.remove(PEEK);
@@ -817,13 +852,18 @@
   // 触屏：长按预览
   document.addEventListener("touchstart", function (e) {
     if (!state.on || !cfg.hoverPeek || state.reveal) return;
+    muteClickUntil = 0;                                                  // 新手势，上一轮的长按静音作废
     var host = peekHost(e);
     if (!host || host === peekEl) return;
+    pressStart(host);
     schedulePeek(host, 350);
   }, { capture: true, passive: true });
 
   ["touchend", "touchcancel", "touchmove"].forEach(function (ev) {
     document.addEventListener(ev, function () {
+      // 看过预览的这次长按只算「看一眼」，不算点击：吃掉紧跟其后的 click，别顺手把场景打开
+      if (ev !== "touchmove" && peekEl) muteClickUntil = Date.now() + 700;
+      pressEnd();
       if (ev === "touchmove" && !peekEl && !peekPending) return;
       peekEnd();
     }, { capture: true, passive: true });

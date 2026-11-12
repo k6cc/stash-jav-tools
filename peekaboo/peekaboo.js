@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.1";
+  var PLUGIN_VERSION = "0.1.2";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -117,7 +117,7 @@
   var state = { on: false, reveal: false };
   var cfg = {
     enabled: false, hoverPeek: true, allowVideo: false, textReadable: false,
-    textStyle: DEFAULT_TEXT_STYLE, navButton: true, revealText: false
+    textStyle: DEFAULT_TEXT_STYLE, hideNavButton: false, revealText: false
   };
   var cfgLoaded = false;
   var cfgSig = "";
@@ -161,7 +161,7 @@
     var motif = Math.floor(k / PALETTES.length) % MOTIFS;
     var r = rng(k * 7919 + 31);
     var s = [];
-    s.push("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120' width='120' height='120'>");
+    s.push("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120' width='120' height='120' preserveAspectRatio='xMidYMid slice'>");
     s.push("<defs>");
     s.push("<linearGradient id='g' x1='0' y1='1' x2='1' y2='0'>");
     s.push("<stop offset='0' stop-color='" + pal[0] + "'/><stop offset='1' stop-color='" + pal[1] + "'/></linearGradient>");
@@ -209,14 +209,23 @@
     return s.join("");
   }
 
+  var ART_HREF = [];                       // 图案 data URI，滤镜与 content 两种模式共用
+
+  function artHref(k) {
+    // encodeURIComponent 不转义单引号，而 SVG 属性用的就是单引号 —— 不替换会截断 href
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(artSvg(k)).replace(/'/g, "%27");
+  }
+
   function injectDefs() {
+    // 先备好 data URI：重载插件时旧 <defs> 还在，但这里是新的实例，href 表还是空的
+    if (!ART_HREF.length) {
+      for (var k = 0; k < ART_COUNT; k++) ART_HREF[k] = artHref(k);
+    }
     if (document.getElementById(DEFS_ID)) return;
     var parts = ["<defs>"];
-    for (var k = 0; k < ART_COUNT; k++) {
-      // encodeURIComponent 不转义单引号，而 SVG 属性用的就是单引号 —— 不替换会截断 href
-      var href = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(artSvg(k)).replace(/'/g, "%27");
-      parts.push("<filter id='peekaboo-art-" + k + "' x='0' y='0' width='100%' height='100%' color-interpolation-filters='sRGB'>");
-      parts.push("<feImage href='" + href + "' preserveAspectRatio='xMidYMid slice' width='100%' height='100%'/>");
+    for (var i = 0; i < ART_COUNT; i++) {
+      parts.push("<filter id='peekaboo-art-" + i + "' x='0' y='0' width='100%' height='100%' color-interpolation-filters='sRGB'>");
+      parts.push("<feImage href='" + ART_HREF[i] + "' preserveAspectRatio='xMidYMid slice' width='100%' height='100%'/>");
       parts.push("</filter>");
     }
     parts.push("</defs>");
@@ -229,6 +238,50 @@
     svg.style.cssText = "position:absolute;width:0;height:0;overflow:hidden;pointer-events:none";
     svg.innerHTML = parts.join("");
     document.body.appendChild(svg);
+  }
+
+  // ===== 快路径：<img> 用 content 换图，不走 SVG 滤镜 =====
+  // 手机上的卡顿来自 filter: url() 的离屏栅格化 —— 每张缩略图滚进视口都要重新走一遍滤镜管线。
+  // content: url() 只是把元素内容换成图案，32 张图案共享解码，绘制成本和普通缩略图一样。
+  // content 替换普通元素是较新的规范行为，老浏览器不认，所以先实测再启用，探测失败继续走滤镜。
+  var CT = "peekaboo-ct";
+
+  function injectContentCss() {
+    if (document.getElementById("peekaboo-content-css")) return;
+    var css = ["html." + CT + ".peekaboo-on img{content:url(\"" + ART_HREF[0] +
+      "\")!important;object-fit:cover}"];                    // 未打标的 img 先挂 0 号，别露原图
+    for (var k = 0; k < ART_COUNT; k++) {
+      css.push("html." + CT + ".peekaboo-on img[data-peekaboo-art='" + k + "']{content:url(\"" +
+        ART_HREF[k] + "\")!important;object-fit:cover}");
+    }
+    var st = document.createElement("style");
+    st.id = "peekaboo-content-css";
+    st.textContent = css.join("");
+    document.head.appendChild(st);
+  }
+
+  function probeContent() {
+    return new Promise(function (resolve) {
+      var mk = function (size) {
+        // data URI 里是单引号属性，所以这里的 url() 必须用双引号包，否则字符串被截断
+        return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='" + size + "' height='" + size + "'>" +
+          "<rect width='" + size + "' height='" + size + "' fill='#000'/></svg>");
+      };
+      // 内容图 40×40、src 8×8：content 真的替换了内容时，布局尺寸会跟着变成 40
+      var img = new Image();
+      img.style.cssText = "position:fixed;left:-9999px;top:0;content:url(\"" + mk(40) + "\")";
+      img.onload = function () {
+        setTimeout(function () {                                 // content 的布局要等一帧才同步过来
+          var w = img.getBoundingClientRect().width;
+          img.remove();
+          resolve(w > 24);
+        }, 60);
+      };
+      img.onerror = function () { img.remove(); resolve(false); };
+      img.src = mk(8);
+      document.body.appendChild(img);
+    });
   }
 
   // ===== 画面打标 =====
@@ -247,10 +300,23 @@
     return hash(key) % ART_COUNT;
   }
 
+  // 还没加载任何帧的 <video> 是透明的（没有海报时也一样），滤镜对它只是凭空多画一层图案，
+  // 而下面那张 <img> 已经是同一幅。确认无帧时先放开滤镜，一有画面立刻收回。
+  function syncVideoIdle(v) {
+    if (v.readyState === 0 && !v.poster) v.setAttribute("data-peekaboo-idle", "");
+    else v.removeAttribute("data-peekaboo-idle");
+    if (!v.__peekabooIdleHooked) {
+      v.__peekabooIdleHooked = true;
+      v.addEventListener("loadeddata", function () { syncVideoIdle(v); });
+      v.addEventListener("emptied", function () { syncVideoIdle(v); });
+    }
+  }
+
   function mark(el) {
     if (!el || el.__peekabooMarked) return;
     el.__peekabooMarked = true;
     el.setAttribute(ART_ATTR, String(artIndexOf(el)));
+    if (el.tagName === "VIDEO") syncVideoIdle(el);
   }
 
   function isMediaBackground(el, bg) {
@@ -863,7 +929,7 @@
         allowVideo: cfg.allowVideo,
         textReadable: cfg.textReadable,
         textStyle: cfg.textStyle,
-        navButton: cfg.navButton,
+        hideNavButton: cfg.hideNavButton,
         revealText: cfg.revealText
       });
     }).catch(function (e) {
@@ -898,7 +964,7 @@
   // 用 textStyle 是否为空判断「从没保存过」，此时把默认值写回去，设置页才和实际行为一致
   var DEFAULTS = {
     hoverPeek: true, allowVideo: false, textReadable: false,
-    textStyle: DEFAULT_TEXT_STYLE, navButton: true, revealText: false
+    textStyle: DEFAULT_TEXT_STYLE, revealText: false
   };
 
   function loadConfig() {
@@ -911,7 +977,7 @@
       cfg.hoverPeek = first ? DEFAULTS.hoverPeek : s.hoverPeek !== false;
       cfg.allowVideo = first ? DEFAULTS.allowVideo : s.allowVideo === true;
       cfg.textReadable = first ? DEFAULTS.textReadable : s.textReadable === true;
-      cfg.navButton = first ? DEFAULTS.navButton : s.navButton !== false;
+      cfg.hideNavButton = s.hideNavButton === true;                       // 反向：false = 显示按钮，不依赖写回
       cfg.revealText = first ? DEFAULTS.revealText : s.revealText === true;
       cfg.textStyle = normalizeStyle(raw) || DEFAULTS.textStyle;
       if (first) {
@@ -921,7 +987,7 @@
           allowVideo: cfg.allowVideo,
           textReadable: cfg.textReadable,
           textStyle: cfg.textStyle,
-          navButton: cfg.navButton,
+          hideNavButton: cfg.hideNavButton,
           revealText: cfg.revealText
         });
       }
@@ -936,7 +1002,7 @@
 
   function signature() {
     return [cfg.enabled, cfg.hoverPeek, cfg.allowVideo, cfg.textReadable, cfg.textStyle,
-      cfg.navButton, cfg.revealText].join("|");
+      cfg.hideNavButton, cfg.revealText].join("|");
   }
 
   // 设置页改完立刻生效，不用刷新
@@ -1021,10 +1087,10 @@
     if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
   }
 
-  // 关掉「显示眼睛按钮」时只留快捷键，页面上的按钮要跟着消失
+  // 勾上「隐藏导航栏按钮」时只留快捷键，页面上的按钮要跟着消失
   function syncButton() {
-    if (cfg.navButton) createButton();
-    else removeButton();
+    if (cfg.hideNavButton) removeButton();
+    else createButton();
   }
 
   function updateButton() {
@@ -1049,7 +1115,6 @@
   // ===== 启动 =====
   function boot() {
     injectDefs();
-    syncButton();
     // 先用本浏览器的缓存值上屏，再用 Stash 设置校正。
     // 缓存为空（换设备、清过站点数据）时按“开”处理：宁可多遮一瞬，也别先露一帧原图
     var cached = null;
@@ -1059,13 +1124,20 @@
     startObserver();
     startSettingsSync();
 
+    probeContent().then(function (ok) {
+      if (!ok) return;
+      injectContentCss();
+      document.documentElement.classList.add(CT);
+    });
+
     loadConfig().then(function (ok) {
       cfgLoaded = ok;
-      if (!ok) return;
-      cfgSig = signature();
-      if (cfg.enabled !== state.on) setState(cfg.enabled, false);
-      else updateButton();
-      syncButton();
+      if (ok) {
+        cfgSig = signature();
+        if (cfg.enabled !== state.on) setState(cfg.enabled, false);
+        else updateButton();
+      }
+      syncButton();                                                     // 配置到手再决定挂不挂按钮，避开「先出现再撤掉」
     });
 
     console.log("[peekaboo] v" + PLUGIN_VERSION);

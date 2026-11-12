@@ -1,6 +1,6 @@
 name: Peekaboo
 description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, descriptions, names, tags, the tab title and copied text. Hover a card or hold Shift to see the original for a moment. Nothing in the library is modified."
-version: 0.1.1
+version: 0.1.2
 url: https://discourse.stashapp.cc/t/peekaboo/21027
 ui:
   javascript:
@@ -12,9 +12,9 @@ settings:
     displayName: Shield on
     description: "Replace every image and video frame with SVG art. Shortcut Shift+Alt+B."
     type: BOOLEAN
-  navButton:
-    displayName: Show navbar button
-    description: "ON = an eye button in the navbar. OFF = hotkey only (Shift+Alt+B)."
+  hideNavButton:
+    displayName: Hide navbar button
+    description: "ON = no eye button in the navbar, hotkey Shift+Alt+B only."
     type: BOOLEAN
   hoverPeek:
     displayName: Reveal on hover

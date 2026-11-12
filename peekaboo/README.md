@@ -1,6 +1,6 @@
 # Peekaboo 插件使用说明
 
-> v0.1.1：标签列表卡片（无封面）悬停也能露文字
+> v0.1.2：手机端滚动不再卡（封面与缩略图改用 `content` 换图，不再逐个走 SVG 滤镜）；导航栏开关改为 `Hide navbar button`，默认不隐藏
 
 把库里的封面、缩略图、播放器画面换成生成的抽象图案，不是高斯模糊。图片本身、数据库、文件一概不动，关掉即恢复。
 
@@ -8,7 +8,7 @@
 
 把 `peekaboo/` 复制到 Stash 插件目录（Windows `%USERPROFILE%\.stash\plugins\`，Docker `~/.stash/plugins/`），重载插件后在「设置 → 插件」能看到 Peekaboo 即成功。
 
-开关三处等价：导航栏眼睛按钮（可用 Show navbar button 关掉）、`Shift+Alt+B`、设置页的 Shield on。状态存进库配置，换浏览器也保持。
+开关三处等价：导航栏眼睛按钮（可用 Hide navbar button 隐藏）、`Shift+Alt+B`、设置页的 Shield on。状态存进库配置，换浏览器也保持。
 
 ## 兼容性
 
@@ -19,7 +19,7 @@
 | 设置项 | 默认 | 说明 |
 |---|---|---|
 | Shield on | OFF | 总开关 |
-| Show navbar button | ON | OFF 时导航栏不出现眼睛按钮，只剩快捷键 |
+| Hide navbar button | OFF | ON 时导航栏不出现眼睛按钮，只剩快捷键 |
 | Reveal on hover | ON | 悬停片刻把整张卡片（含悬停才出现的预览视频）露出来，移开恢复；按住 Shift 则整页临时全露 |
 | Reveal text as well | OFF | ON 时悬停或按住 Shift 连文字一起露出；OFF（默认）只露图片，标题、人名、标签保持遮罩 |
 | Let videos keep playing | OFF | OFF 时播放器暂停且禁止播放；卡片预览不受影响（本就静音循环） |
@@ -53,7 +53,7 @@
 
 ## 为什么不直接模糊
 
-模糊保留构图、色调和轮廓，强度拉满仍能猜出画面。这里用 CSS 滤镜把元素输出整块换掉（滤镜只输出一张内嵌 SVG），原像素根本没参与绘制，所以不存在「糊得不够」的问题。
+模糊保留构图、色调和轮廓，强度拉满仍能猜出画面。这里不是叠一层模糊，而是把元素要画的内容整块换成图案，原像素根本没参与绘制，所以不存在「糊得不够」的问题。
 
 ## 已知限制
 

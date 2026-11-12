@@ -1,10 +1,15 @@
 /* Peekaboo —— 仅在 <html class="peekaboo-on"> 时生效。
-   核心：filter 指向只输出 feImage 的 SVG 滤镜，元素的原始像素被整块替换，
-   不依赖 src 改写，也不需要逐个元素做还原。 */
+   遮挡有两种画法：<img> 用 content 换掉内容（peekaboo-ct，手机快路径），
+   其余用只输出 feImage 的 SVG 滤镜。原始像素都不参与绘制，也都不需要还原。 */
 
 html.peekaboo-on img,
 html.peekaboo-on video {
     filter: url(#peekaboo-art-0) !important;
+}
+
+/* 无帧的 <video> 是透明的，下面那张 <img> 已经画了图案，这层滤镜纯属白画 */
+html.peekaboo-on video[data-peekaboo-idle] {
+    filter: none !important;
 }
 
 /* 首帧兜底：这些容器是背景图（播放器海报、进度条预览气泡、雪碧图），
@@ -64,6 +69,12 @@ html.peekaboo-on[data-peekaboo-text="white"] [data-peekaboo-masked] {
     color: #fff !important;
 }
 
+/* content 模式（手机快路径）：<img> 的内容直接换成图案，滤镜整条链路跳过。
+   必须命中全部 img —— 未打标的也有 0 号图案，留着滤镜就是白做一次离屏栅格化 */
+html.peekaboo-ct.peekaboo-on img {
+    filter: none !important;
+}
+
 /* 悬停预览：整张卡片（含 Stash 悬停插入的预览视频）临时露出原图。
    规则必须排在上面的编号规则之后（同优先级，靠顺序生效）。 */
 html.peekaboo-on .peekaboo-peek,
@@ -78,4 +89,15 @@ html.peekaboo-on.peekaboo-reveal img,
 html.peekaboo-on.peekaboo-reveal video,
 html.peekaboo-on.peekaboo-reveal [data-peekaboo-art] {
     filter: none !important;
+}
+
+/* content 模式下露原图：光摘滤镜不够，还得把被换掉的内容卸掉。
+   带属性的选择器优先级更高，专门压住后面注入的编号规则；不带属性的兜住未打标的 img */
+html.peekaboo-ct.peekaboo-on.peekaboo-reveal img[data-peekaboo-art],
+html.peekaboo-ct.peekaboo-on .peekaboo-peek img[data-peekaboo-art],
+html.peekaboo-ct.peekaboo-on img.peekaboo-peek[data-peekaboo-art],
+html.peekaboo-ct.peekaboo-on.peekaboo-reveal img,
+html.peekaboo-ct.peekaboo-on .peekaboo-peek img,
+html.peekaboo-ct.peekaboo-on img.peekaboo-peek {
+    content: normal !important;
 }

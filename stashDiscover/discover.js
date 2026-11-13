@@ -2865,21 +2865,27 @@
       if (!pf) continue;
       if (lib[String(pf.stashId)]) continue;
       if (SSD.dpIgnore && endpoint && SSD.dpIgnore.isPerformerIgnored(endpoint, pf.stashId)) continue;
-      out.push(miniPerfCard({
-        name: pf.name,
-        image: pf.image,
-        stashId: pf.stashId,
-        // 只留作品数：「· 最近有新作」在窄卡里必然被省略号吃掉
-        // （实测 1280 下文字需 125px、可用只有 113px — 用户 2026-10-27）
-        sub: tc((pf.sceneCount || 0) + " 部作品", (pf.sceneCount || 0) + " scenes"),
-        // 角标只留序号：英文 "Trending #12" 有 12 字符，迷你卡只有 168px 宽，
-        // 会被撑到半张卡；中文「热门榜 #12」已经够短，保持（用户 2026-10-28）
-        badge: tc("热门榜 #" + pos, "#" + pos), badgeKind: "hot",
-        badgeTitle: tc("热门榜第 " + pos + " 位", "Trending #" + pos),
-        onClick: function () { openPerfModal({ src: "hot", stashId: pf.stashId, name: pf.name, image: pf.image, sceneCount: pf.sceneCount, rank: pos }); },
-      }));
+      out.push(trendingPerfMini(pf, pos));
     }
     return out;
+  }
+
+  // 每张卡在独立作用域里建回调：直接在 for 里写闭包会共享循环结束后的
+  // pf/pos（表现是点谁都弹同一个演员，还是榜尾那位）
+  function trendingPerfMini(pf, pos) {
+    return miniPerfCard({
+      name: pf.name,
+      image: pf.image,
+      stashId: pf.stashId,
+      // 只留作品数：「· 最近有新作」在窄卡里必然被省略号吃掉
+      // （实测 1280 下文字需 125px、可用只有 113px — 用户 2026-10-27）
+      sub: tc((pf.sceneCount || 0) + " 部作品", (pf.sceneCount || 0) + " scenes"),
+      // 角标只留序号：英文 "Trending #12" 有 12 字符，迷你卡只有 168px 宽，
+      // 会被撑到半张卡；中文「热门榜 #12」已经够短，保持（用户 2026-10-28）
+      badge: tc("热门榜 #" + pos, "#" + pos), badgeKind: "hot",
+      badgeTitle: tc("热门榜第 " + pos + " 位", "Trending #" + pos),
+      onClick: function () { openPerfModal({ src: "hot", stashId: pf.stashId, name: pf.name, image: pf.image, sceneCount: pf.sceneCount, rank: pos }); },
+    });
   }
 
   // ── 钻取视图（§3.3：面包屑 + 分页 + 筛选）───────────────────────────────

@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.10";
+  var PLUGIN_VERSION = "1.0.0";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -982,6 +982,18 @@
     if (persist) persistState();
   }
 
+  // 设置页读的是 Apollo 的 configuration 缓存：写回后让它失效，
+  // 下次进设置页才会重新拉，否则那份旧快照会在保存别的插件时把这次改动覆盖回去。
+  // 取不到这个调试钩子（Apollo 未开启）时跳过，行为退回旧版
+  function invalidateConfigCache() {
+    try {
+      var c = window.__APOLLO_CLIENT__;
+      if (c && c.cache && c.cache.evict) {
+        c.cache.evict({ id: "ROOT_QUERY", fieldName: "configuration" });
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
   // configurePlugin 是整体覆盖：必须带上全部设置项，否则没传的会被写成空。
   // 写回前重读一次：设置页里刚改的项还没同步到本地，拿旧值写回会把它盖掉
   function persistState() {
@@ -998,7 +1010,7 @@
         hideNavButton: cfg.hideNavButton,
         revealText: cfg.revealText
       });
-    }).catch(function (e) {
+    }).then(invalidateConfigCache).catch(function (e) {
       console.warn("[peekaboo] 保存状态失败：", e);
     });
   }

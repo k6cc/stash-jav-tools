@@ -1,6 +1,6 @@
 name: Peekaboo
 description: "Masks every cover, thumbnail and video frame with generated SVG art instead of a blur, and can hide titles, descriptions, names, tags, the tab title and copied text. The original can be revealed on demand. Nothing in the library is modified."
-version: 0.1.10
+version: 1.0.0
 url: https://discourse.stashapp.cc/t/peekaboo/21027
 ui:
   javascript:

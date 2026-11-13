@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.7.9";
+  var PLUGIN_VERSION = "2.7.10";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -1477,10 +1477,100 @@
     return false;
   }
 
-  function loadMissingScenes() {
-    var performerId = _state.performerId;
-    if (!performerId) return Promise.resolve();
+  // ─── 发现 tab 的会话内快照（10 分钟）──────────────────────────────────────
+  // 离开演员/工作室页会走 resetPerformerState，以前必然把多源结果整个丢掉，
+  // 回到同一位又得从头扫一遍。这里留一份最近结果：命中就先画出来，再用当轮
+  // 查到的本地 key / 设置校验一次（通过就收工，不再碰源）。
+  // 只留最近 1 位 —— cachedMissing 里是完整 scene 对象，存多份不划算。
+  var TAB_SNAP_TTL_MS = 10 * 60 * 1000;
+  var _tabSnap = null;
 
+  function tabSnapSrcKey(boxes) {
+    return (boxes || []).map(function (b) { return b.endpoint.toLowerCase(); }).sort().join(",");
+  }
+
+  // 保存时机：resetPerformerState 清空之前。空结果与错误态不存 —— 那种情况
+  // 回来重扫一次反而更实在。
+  function saveTabSnapshot() {
+    if (!_state.performerId || !_state.loadInitiated) return;
+    // 加载中被切走：手上的只是半截结果，存下来会让下次少几条
+    if (_state.loading || !_state.cachedMissing.length) return;
+    _tabSnap = {
+      at: Date.now(),
+      id: String(_state.performerId),
+      entityType: _state.entityType,
+      recentDays: _state.cfgRecentDays,
+      previewDays: _state.cfgPreviewDays,
+      srcs: tabSnapSrcKey(_state.queryBoxes),
+      data: {
+        performerName: _state.performerName,
+        performerStashIds: _state.performerStashIds,
+        localStashIds: _state.localStashIds,
+        cachedMissing: _state.cachedMissing,
+        allLoaded: _state.allLoaded,
+        boxCursors: _state.boxCursors,
+        boxExhausted: _state.boxExhausted,
+        boxStatus: _state.boxStatus,
+        boxFetchedTotal: _state.boxFetchedTotal,
+        boxTotalCount: _state.boxTotalCount,
+        droppedByWindow: _state.droppedByWindow,
+        queryBoxes: _state.queryBoxes,
+        boxStashIds: _state.boxStashIds,
+        currentPage: _state.currentPage,
+        sortDir: _state.sortDir,
+        preferredFallback: _state.preferredFallback,
+        preferredBoxLabel: _state.preferredBoxLabel,
+      },
+    };
+  }
+
+  function applyTabSnapshot(performerId) {
+    var s = _tabSnap;
+    if (!s || s.id !== String(performerId)) return false;
+    if (s.entityType !== _state.entityType) return false;
+    if (Date.now() - s.at > TAB_SNAP_TTL_MS) return false;
+    var d = s.data;
+    _state.performerName = d.performerName;
+    _state.performerStashIds = d.performerStashIds;
+    _state.localStashIds = d.localStashIds;
+    _state.cachedMissing = d.cachedMissing;
+    _state.allLoaded = d.allLoaded;
+    _state.boxCursors = d.boxCursors;
+    _state.boxExhausted = d.boxExhausted;
+    _state.boxStatus = d.boxStatus;
+    _state.boxFetchedTotal = d.boxFetchedTotal;
+    _state.boxTotalCount = d.boxTotalCount;
+    _state.droppedByWindow = d.droppedByWindow;
+    _state.queryBoxes = d.queryBoxes;
+    _state.boxStashIds = d.boxStashIds;
+    _state.currentPage = d.currentPage;
+    _state.sortDir = d.sortDir;
+    _state.preferredFallback = d.preferredFallback;
+    _state.preferredBoxLabel = d.preferredBoxLabel;
+    _state.loading = false;
+    _state.loadInitiated = true;
+    _state.viewState = computeResultViewState();
+    // 选择集不跨页面：key 对不上，留着重开就是一个幽灵「已选 N」
+    _tabSel.on = false;
+    _tabSel.keys = {};
+    _tabSel.items = [];
+    _tabSel.prog = "";
+    renderTabContent();
+    return true;
+  }
+
+  // 设置与源集合都跟快照一致才算数；本地在库的变化由调用方重新过滤
+  function tabSnapshotValid(queryBoxes) {
+    var s = _tabSnap;
+    if (!s) return false;
+    return s.recentDays === _state.cfgRecentDays &&
+      s.previewDays === _state.cfgPreviewDays &&
+      s.srcs === tabSnapSrcKey(queryBoxes);
+  }
+
+  // 完整重扫的前置：清掉上一轮累积（源游标、统计、选择集），并立刻画 loading 帧。
+  // 换人 / 重扫时上一页的选择集与条目都不再有意义，留着只会让「已选 N」清不掉。
+  function beginScan() {
     _state.loading = true;
     _state.loadInitiated = true;
     _state.viewState = "loading";
@@ -1505,13 +1595,27 @@
     _state.showIgnored = false;
     _state.allLoaded = false;
     _state.loadingPage = false;
-    // 换人 / 重扫：上一页的选择集与条目都不再有意义（key 对不上，留着只会
-    // 让「已选 N」显示成一个永远清不掉的幽灵数）
     _tabSel.on = false;
     _tabSel.keys = {};
     _tabSel.items = [];
     _tabSel.prog = "";
     renderTabContent();
+  }
+
+  // force：用户主动要求换一批数据（刷新按钮、临时不限窗口、重试、改关联 ID）
+  // 时不认快照 —— 认了就等于「点了刷新还是原来那批」，10 分钟内怎么点都没用。
+  function loadMissingScenes(force) {
+    var performerId = _state.performerId;
+    if (!performerId) return Promise.resolve();
+
+    // 命中快照先把上次的结果画出来：多源扫描要几秒，别让用户盯着骨架。
+    // 随后仍会查设置/本地 key 校验，通过就只做一次在库过滤（不碰源）。
+    var restored = !force && applyTabSnapshot(performerId);
+    if (!restored) {
+      // 强刷失败时别再拿旧快照顶上：那时候屏幕上已经是错误态了
+      if (force) _tabSnap = null;
+      beginScan();
+    }
 
     var isStudio = _state.entityType === "studio";
     return Promise.all([
@@ -1599,11 +1703,8 @@
       });
       _state.boxStashIds = boxStashIds;
 
-      // Re-render now that the sources are known: the first loading frame is
-      // drawn before the box list is resolved, so it would have no source rows
-      renderTabContent();
-
-      // Local performer maps (box performer id → local performer) for card badges
+      // 演员映射一律重拉：本地查询（一源一条），比存进快照更可靠 ——
+      // 卡片的「已在库演员」徽章全靠它，缺了会显示成未拥有。
       _state.localPerformerMaps = {};
       var mapPromises = queryBoxes.map(function (b) {
         return buildLocalPerformerStashIdMap(b.endpoint).then(function (m) {
@@ -1612,6 +1713,26 @@
           console.warn("[SSD] local performer map failed for", b.name, e.message);
         });
       });
+
+      // 快照恢复的收尾：设置与源都没变 → 补完映射后只做一次在库过滤就收工
+      // （一个源请求都不发）。变了 → 当作没恢复，从头扫。
+      if (restored && tabSnapshotValid(queryBoxes)) {
+        return Promise.all(mapPromises).then(function () {
+          var keep = _state.cachedMissing.filter(function (it) { return !isSceneOwned(it, localKeys); });
+          _state.cachedMissing = keep;
+          var maxPage = Math.max(1, Math.ceil(keep.length / _state.perPage));
+          if (_state.currentPage > maxPage) _state.currentPage = 1;
+          _state.loading = false;
+          _state.loadInitiated = true;
+          _state.viewState = computeResultViewState();
+          renderTabContent();
+        });
+      }
+      if (restored) beginScan();
+
+      // Re-render now that the sources are known: the first loading frame is
+      // drawn before the box list is resolved, so it would have no source rows
+      renderTabContent();
 
       // Lazy-load first page only
       return Promise.all(mapPromises).then(function () {
@@ -2193,7 +2314,9 @@
   // "Unlimited time range (this session)" — a viewing aid, never a setting write
   function setWindowRelaxed(on) {
     _state.windowRelaxed = !!on;
-    loadMissingScenes();
+    // 窗口在扫描时生效（见 loadMissingScenes 里的 recentDays/previewDays），
+    // 快照是旧窗口扫出来的，认了它这个开关就点了没反应
+    loadMissingScenes(true);
   }
 
   // 「临时查看已忽略（本次）」：同 setWindowRelaxed，是观看辅助 —— 不写忽略记录、
@@ -2206,7 +2329,7 @@
   }
 
   function retryLoad() {
-    loadMissingScenes();
+    loadMissingScenes(true);
   }
 
   function openBoxPerformer(box) {
@@ -3432,7 +3555,8 @@
           if (linked) {
             stopEditWatch();
             _state.editWatching = false;
-            loadMissingScenes();
+            // 刚补上的关联 ID 会改变要查的源/编号，不能拿旧快照顶上
+            loadMissingScenes(true);
             return;
           }
         }
@@ -3715,9 +3839,9 @@
       duration: 6000,
       onAction: function () {
         keys.forEach(function (k) { SSD.dpIgnore.remove("scenes", k); });
-        // 撤销后原地重扫一次，条数才对得上（记录已不在，重扫会重新捞回来）。
-        // 必须真的调 loadMissingScenes：只清 cachedMissing 再 render 的话，这一屏
-        // 会一直空着等用户手动刷新（2026-10-30 实测）。
+        // 走一遍完整装载而不是只清 cachedMissing 再 render：后者会让这一屏空着等
+        // 用户手动刷新（2026-10-30 实测）。忽略只影响渲染期的过滤，条目一直留在
+        // 结果里，所以这次装载命中快照也能把卡片捞回来，不必碰源。
         loadMissingScenes();
       },
     });
@@ -4011,7 +4135,7 @@
     refreshBtn.title = tc("重新查询 stash-box", "Re-query stash-box");
     refreshBtn.onclick = function () {
       _state.searchQuery = "";
-      loadMissingScenes();
+      loadMissingScenes(true);
     };
     toolbar.appendChild(refreshBtn);
 
@@ -8509,6 +8633,8 @@
   // Drop everything tied to the previous performer (including the edit-panel poll
   // and the one-off "unlimited time" flag), so a new performer starts clean.
   function resetPerformerState() {
+    // 清空前先留一份快照：回到同一位时 10 分钟内直接复用上次结果
+    saveTabSnapshot();
     stopEditWatch();
     _state.performerId = null;
     _state.entityType = "performer";

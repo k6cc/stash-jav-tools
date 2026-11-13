@@ -3194,6 +3194,44 @@
     });
   }
 
+  // 热门榜弹窗的「他最近的场景」：源上每次都能查，但同一演员的近期场景
+  // 10 分钟内不会变。与 boxPerfDetail 同款（TTL + 在途合并 + 条目上限）——
+  // 重开同一张卡、或入库后再打开，直接出图不再转圈。
+  var HOT_SCENE_TTL_MS = 10 * 60 * 1000;
+  var HOT_SCENE_MAX = 48;                    // 一屏 24 张，留两轮余量
+  var _hotScenes = Object.create(null);      // "endpoint|stashId" → {at, scenes}
+  var _hotScenesInflight = Object.create(null);
+
+  function hotScenesTrim() {
+    var keys = Object.keys(_hotScenes);
+    if (keys.length <= HOT_SCENE_MAX) return;
+    keys.sort(function (a, b) { return (_hotScenes[a].at || 0) - (_hotScenes[b].at || 0); });
+    keys.slice(0, keys.length - HOT_SCENE_MAX).forEach(function (k) { delete _hotScenes[k]; });
+  }
+
+  // 失败不写缓存（调用方显示「场景加载失败」，下次重开还能重试）
+  function hotPerfScenes(box, stashId, perPage) {
+    var key = String(box.endpoint || "") + "|" + String(stashId || "");
+    var hit = _hotScenes[key];
+    if (hit && Date.now() - hit.at < HOT_SCENE_TTL_MS) return Promise.resolve(hit.scenes);
+    if (_hotScenesInflight[key]) return _hotScenesInflight[key];
+    var input = { performers: { value: [stashId], modifier: "INCLUDES" }, sort: "DATE", direction: "DESC", per_page: perPage };
+    var p = SSD.callBoxSceneList(box, input, BOX_TIMEOUT).then(function (qs) {
+      var scenes = (qs && qs.scenes) || [];
+      _hotScenes[key] = { at: Date.now(), scenes: scenes };   // 空结果也存：省掉重复查空
+      hotScenesTrim();
+      return scenes;
+    });
+    _hotScenesInflight[key] = p.then(function (scenes) {
+      delete _hotScenesInflight[key];
+      return scenes;
+    }, function (e) {
+      delete _hotScenesInflight[key];
+      throw e;
+    });
+    return _hotScenesInflight[key];
+  }
+
   function openPerfModal(p) {
     closePerfModal();
     var d = _dp.d.latest;
@@ -3310,11 +3348,9 @@
       SSD.layoutCardGrid();
     } else {
       scBody.appendChild(stateBox("loading"));
-      var input = { performers: { value: [p.stashId], modifier: "INCLUDES" }, sort: "DATE", direction: "DESC", per_page: 6 };
-      SSD.callBoxSceneList({ endpoint: endpoint, api_key: apiKey }, input, BOX_TIMEOUT).then(function (qs) {
+      hotPerfScenes({ endpoint: endpoint, api_key: apiKey }, p.stashId, 6).then(function (scenes) {
         if (!_dpModal) return;
         scBody.innerHTML = "";
-        var scenes = (qs && qs.scenes) || [];
         if (!scenes.length) { scBody.appendChild(stateBox("empty", tc("暂无场景", "No scenes"))); return; }
         var box2 = { name: d.source.name, endpoint: endpoint, apiKey: apiKey };
         scBody.appendChild(sceneGrid(scenes.map(function (s2) { return shapeBoxItem(box2, s2); }), { allowList: true }));

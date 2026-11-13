@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.7.7";
+  var PLUGIN_VERSION = "2.7.8";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -4827,11 +4827,15 @@
 
     cardSection.appendChild(details);
 
-    // Native-style popover badges below the text: tag count + performer count
+    card.appendChild(cardSection);
+
+    // Native-style popover badges below the text: tag count + performer count.
+    // 与原生一致：<hr> 和 .card-popovers 是 .card-section 的兄弟节点，
+    // 27px 的间隔来自 Stash 自己的 .scene-card > hr 规则（嵌在 section 里就吃不到）
     var performers = (sc.performers || []).map(function (p) { return p.performer; }).filter(Boolean);
     var tags = (sc.tags || []).filter(Boolean);
     if (performers.length > 0 || tags.length > 0) {
-      cardSection.appendChild(document.createElement("hr"));
+      card.appendChild(document.createElement("hr"));
 
       var popovers = document.createElement("div");
       popovers.setAttribute("role", "group");
@@ -4843,7 +4847,6 @@
         var tagBtn = document.createElement("button");
         tagBtn.type = "button";
         tagBtn.className = "minimal btn btn-primary";
-        tagBtn.title = tc("标签", "Tags");
         tagBtn.innerHTML = SSD_ICON_TAG + "<span>" + tags.length + "</span>";
         attachHoverPopover(tagBtn, function () { return buildTagPopoverContent(tags); });
         tagCount.appendChild(tagBtn);
@@ -4856,7 +4859,6 @@
         var perfBtn = document.createElement("button");
         perfBtn.type = "button";
         perfBtn.className = "minimal btn btn-primary";
-        perfBtn.title = tc("演员", "Performers");
         perfBtn.innerHTML = SSD_ICON_USER + "<span>" + performers.length + "</span>";
         attachHoverPopover(perfBtn, function () {
           return buildPerformerPopoverContent(performers, item.endpoint, st.localPerformerMaps);
@@ -4865,10 +4867,8 @@
         popovers.appendChild(perfCount);
       }
 
-      cardSection.appendChild(popovers);
+      card.appendChild(popovers);
     }
-
-    card.appendChild(cardSection);
 
     card.onclick = function () { openModal(item, card); };
     return card;
@@ -4890,39 +4890,61 @@
   function attachHoverPopover(el, buildContent) {
     var pop = null;
     var hideTimer = null;
+    var resizeObs = null;
 
     function show() {
       clearTimeout(hideTimer);
       if (pop && pop.parentNode) return;
       pop = document.createElement("div");
-      pop.className = "popover hover-popover-content bs-popover-bottom show";
+      pop.className = "popover hover-popover-content bs-popover-bottom show fade";
       pop.setAttribute("role", "tooltip");
       // Hoverable so the popover stays visible while the mouse is on it,
       // but no interaction is possible (display-only, never clickable)
       pop.style.pointerEvents = "auto";
       pop.style.cursor = "default";
-      var arrow = document.createElement("div");
-      arrow.className = "arrow";
-      // Bootstrap's .arrow has no `left` and `margin: 0 .5rem` → it sits on
-      // the left edge; center it on the popover's top edge instead
-      arrow.style.left = "50%";
-      arrow.style.margin = "0";
-      arrow.style.transform = "translateX(-50%)";
+      // .bs-popover-bottom 自带 margin-top: .5rem，会把定位后的浮窗再推下去
+      pop.style.margin = "0";
+      // 原生 hover popover 没有 .popover-body，内容直接挂在 .popover 下，
+      // 内边距全靠徽章自带的 5px margin
+      pop.appendChild(buildContent());
+
+      // 贴边时浮窗会脱离按钮，尖尖必须跟着按钮走（等价 popper 的 arrow offset），
+      // 否则指向浮窗外面的空白处
+      var arrow = document.createElement("span");
+      arrow.className = "ssd-hover-arrow";
       pop.appendChild(arrow);
-      // Native hover popovers wrap content in .popover-body (padding, themed text)
-      var body = document.createElement("div");
-      body.className = "popover-body";
-      body.appendChild(buildContent());
-      pop.appendChild(body);
       document.body.appendChild(pop);
 
-      var r = el.getBoundingClientRect();
-      var pw = pop.offsetWidth;
-      var left = r.left + r.width / 2 - pw / 2 + window.scrollX;
-      left = Math.max(8, Math.min(left,
-        window.scrollX + document.documentElement.clientWidth - pw - 8));
-      pop.style.left = left + "px";
-      pop.style.top = (r.bottom + window.scrollY + 6) + "px";
+      // 三角的填充与描边取浮窗自己的颜色，主题换了也不用改样式表
+      var pcs = getComputedStyle(pop);
+      pop.style.setProperty("--ssd-pop-bg", pcs.backgroundColor);
+      pop.style.setProperty("--ssd-pop-line", pcs.borderTopColor);
+
+      // 定位要可重入：演员浮窗里有头像，图片加载完宽度会变，那时必须重算，
+      // 否则浮窗左边界按旧宽度夹好、尖尖还指着旧位置
+      function place() {
+        if (!pop || !pop.parentNode) return;
+        var r = el.getBoundingClientRect();
+        var pw = pop.offsetWidth;
+        var pageX = window.scrollX;
+        var pageY = window.scrollY;
+        var center = r.left + pageX + r.width / 2;
+        var left = Math.round(center - pw / 2);
+        // 坐标取整，和原生 popper 的输出一致：亚像素会让浮窗 0.67px 的边框与
+        // 尖尖的内三角错开半像素，衔接处看起来是一条断开的深色横线
+        left = Math.max(Math.round(pageX) + 8, Math.min(left,
+          Math.round(pageX + document.documentElement.clientWidth - pw - 8)));
+        pop.style.left = left + "px";
+        pop.style.top = (Math.round(r.bottom + pageY) + 7) + "px";
+        var ax = Math.round(center - left);
+        arrow.style.left = Math.max(10, Math.min(ax, pw - 10)) + "px";
+      }
+      place();
+      requestAnimationFrame(place);
+      if (window.ResizeObserver) {
+        resizeObs = new ResizeObserver(place);
+        resizeObs.observe(pop);
+      }
 
       // Keep the popover open while the mouse rests on it; the 150ms grace
       // period in hide() covers the badge → popover crossing
@@ -4934,6 +4956,7 @@
     function hide() {
       clearTimeout(hideTimer);
       hideTimer = setTimeout(function () {
+        if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
         if (pop && pop.parentNode) pop.parentNode.removeChild(pop);
         pop = null;
       }, 150);

@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "0.1.9";
+  var PLUGIN_VERSION = "0.1.10";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -151,7 +151,6 @@
     enabled: false, hoverPeek: true, allowVideo: false, textReadable: false,
     textStyle: DEFAULT_TEXT_STYLE, hideNavButton: false, revealText: false
   };
-  var cfgLoaded = false;
   var cfgSig = "";
 
   // ===== i18n：跟随 Stash 界面语言 =====
@@ -983,15 +982,13 @@
     if (persist) persistState();
   }
 
-  // configurePlugin 是整体覆盖：必须带上全部设置项，否则没传的会被写成空
+  // configurePlugin 是整体覆盖：必须带上全部设置项，否则没传的会被写成空。
+  // 写回前重读一次：设置页里刚改的项还没同步到本地，拿旧值写回会把它盖掉
   function persistState() {
-    var ready = cfgLoaded
-      ? Promise.resolve(true)
-      : loadConfig().then(function (ok) { cfgLoaded = ok; return ok; });
-
-    ready.then(function (ok) {
+    loadConfig().then(function (ok) {
       if (!ok) return;
       cfg.enabled = state.on;
+      cfgSig = signature();
       return saveConfig({
         enabled: cfg.enabled,
         hoverPeek: cfg.hoverPeek,
@@ -1074,7 +1071,7 @@
       cfg.hideNavButton, cfg.revealText].join("|");
   }
 
-  // 设置页改完立刻生效，不用刷新
+  // 设置页保存后，换页/回到前台时重读一次，不用手动刷新
   function refreshFromSettings() {
     loadConfig().then(function (ok) {
       if (!ok) return;
@@ -1099,9 +1096,6 @@
   }
 
   function startSettingsSync() {
-    setInterval(function () {
-      if (isSettingsPage()) refreshFromSettings();
-    }, 2000);
     window.addEventListener("focus", refreshFromSettings);
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) refreshFromSettings();
@@ -1194,7 +1188,6 @@
     startSettingsSync();
 
     loadConfig().then(function (ok) {
-      cfgLoaded = ok;
       if (ok) {
         cfgSig = signature();
         if (cfg.enabled !== state.on) setState(cfg.enabled, false);

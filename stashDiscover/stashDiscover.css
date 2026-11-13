@@ -874,12 +874,33 @@
 
 /* ─── Pager ──────────────────────────────────────────────────────────────── */
 
+/* 吸底翻页条：位置与行为对齐 Stash 原生 .pagination-footer-container。
+   外层只吸底、放行点击（透明区域不挡卡片），按钮组才接事件；
+   移动端 bottom 由 JS 按底部 tab 栏实测高度写入 --ssd-pager-offset。
+   容器背景透明，实心条由紧贴的实色按钮拼成（原生同款，按钮间距 -1px 无缝）；
+   投影也照抄原生 .pagination-footer .pagination。 */
 .ssd-pager {
+  position: sticky;
+  bottom: var(--ssd-pager-offset, 0px);
+  z-index: 10;
   display: flex;
-  align-items: center;
   justify-content: center;
   margin-top: 16px;
-  padding: 12px 0;
+  padding: 8px 0 12px;
+  pointer-events: none;
+}
+.ssd-pager > .pagination {
+  pointer-events: auto;
+  width: fit-content;
+  margin: 0 auto;
+  box-shadow: 0 8px 10px 2px rgba(0, 0, 0, 0.3);
+}
+/* 照抄原生 `.pagination-footer .pagination .btn:disabled`：禁用键只把文字调灰，
+   不降整体透明度 —— Bootstrap 默认的 opacity .65 会连按钮底色一起变透，
+   压在封面图上就透出底图（原生是实心）。 */
+.ssd-pager .pagination .btn:disabled {
+  color: #888;
+  opacity: 1;
 }
 
 /* Native .page-count's padding ("5.25px 5px 5.25px 15px") plus Stash's own

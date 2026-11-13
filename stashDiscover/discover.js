@@ -270,7 +270,15 @@
   });
 
   // ═══ P2: 数据管线（设计文档 §4/§5，binge 已验证模式）═════════════════════
-  var BOX_TIMEOUT = SSD.BOX_TIMEOUT_MS || 25000;
+  // 总览一进来就同时发 4 个数据集，全站榜/演员榜会跟整屏扫描的那两条大请求
+  // 抢同一条 3 并发通道和带宽：轻查询平时 1.5–6s，被压着时实测破 15s。
+  // 慢主要是源与节点链路，不是体积（用户实测同一批数据 4–13s 波动），所以给
+  // 一到两倍余量即可；再宽只是把「慢」变成「等更久才失败」。
+  var BOX_TIMEOUT = 20000;
+  // 整屏扫描（100 位演员一批 / 工作室分页）单次回几百条带图片的场景。javstash
+  // 实测：100 位演员 12–30s、50 位 18s、25 位 14s —— 慢在源本身，拆小批次反而更慢。
+  // 35s 覆盖实测上沿；超时后仍会试一次，但受单次调用总预算 45s 封顶（第二次只剩几秒）
+  var BOX_TIMEOUT_HEAVY = 35000;
   var PERFORMER_BATCH = 100;      // §4.1 演员分批
   var BATCH_CONCURRENCY = 3;      // binge 实测：3 宽并发对源友好且冷加载快
   var BOX_PAGE_SIZE = 1000;       // 实测源不封顶 per_page；count 制终止兼容偷降源的盒
@@ -486,7 +494,7 @@
         // 0 = 不限：不带日期过滤（GraphQL 的 date.value 不允许 null）
         if (sinceIsoDate) input.date = { value: sinceIsoDate, modifier: "GREATER_THAN" };
         // TPDB 的 queryScenes 恒返回空 → 内部自动切 REST（按演员逐个取并筛日期）
-        return SSD.callBoxSceneList(box, input, BOX_TIMEOUT);
+        return SSD.callBoxSceneList(box, input, BOX_TIMEOUT_HEAVY);
       });
     }
     function next(qs) {
@@ -572,7 +580,7 @@
           studios: { value: studioStashIds, modifier: "INCLUDES" },
           sort: "DATE", direction: "DESC",
           page: page, per_page: STUDIO_PAGE_SIZE,
-        }, BOX_TIMEOUT);
+        }, BOX_TIMEOUT_HEAVY);
       });
     }
     function next(qs) {
@@ -1773,11 +1781,13 @@
   };
   function viewDataKeys(view) {
     switch (view) {
-      case "overview": return ["latest", "trending", "studios", "trendingPerf"];
+      // 轻的排前面：先占通道先跑完，整屏扫描那两条大请求随后才吃满带宽 ——
+      // 反过来的话轻查询会在重下载中途超时（实测「热门」15s 扑空）
+      case "overview": return ["trendingPerf", "trending", "studios", "latest"];
       case "latest": case "preview": case "follow": return ["latest"];
       case "trending": return ["trending"];
       case "studios": return ["studios"];
-      case "performers": return ["latest", "trendingPerf"];
+      case "performers": return ["trendingPerf", "latest"];
       case "perfFilter": return ["latest"];
       case "studioFilter": return ["studios"];
       default: return [];

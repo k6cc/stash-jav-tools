@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.7.10";
+  var PLUGIN_VERSION = "2.7.11";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -87,15 +87,15 @@
   // forum report) — every call is aborted after this timeout.
   var BOX_TIMEOUT_MS = 15000;
 
-  // ─── 429 限流：退避重试 + 按源节流 ───────────────────────────────────────
+  // ─── 限流与偶发断连：退避重试 + 按源节流 ──────────────────────────────────
   // 源被限流时回 429 + Retry-After。以前这档被归进 blocked（「请求被拒绝」），
   // 既不重试也不说明原因，整批数据就这么丢了。
-  // 只重试 429：超时已经烧掉 15s 预算，再叠一次就会撞反代的 60s 硬切断
-  //（见 README「注意事项」），而 429 是秒回的，不占超时预算。
-  var BOX_MAX_RETRIES = 2;          // 最多重试 2 次 = 单次调用最多 3 个请求
+  // 连接被断 / 回了非 JSON / 超时同样各重试一次：这类是源侧偶发，等一秒再发
+  // 多半就好，不然一次断连就让整块进错误态、只能手点重试。
+  var BOX_MAX_RETRIES = 2;          // 429 最多重试 2 次 = 单次调用最多 3 个请求
   var BOX_BACKOFF_BASE = 2000;      // 源没给 Retry-After 时：2s、4s
   var RETRY_AFTER_CAP = 15000;      // 源要求的等待再长也不等，直接报错让用户手动重试
-  var BOX_RETRY_BUDGET = 45000;     // 单次调用总预算（含等待），到点即放弃
+  var BOX_RETRY_BUDGET = 45000;     // 单次调用总预算（含等待与重试里的每次尝试），到点即放弃
   var BOX_PENALTY_MS = 5 * 60 * 1000;  // 被限流后该源降速持续多久
   var BOX_PENALTY_DELAY = 1000;     // 降速期间的请求间隔
 
@@ -138,19 +138,33 @@
     g.penalizeUntil = Date.now() + BOX_PENALTY_MS;
   }
 
-  // 重试判定：返回要等的毫秒数，null = 现在放弃。只认 ratelimit。
+  // 重试判定：返回要等的毫秒数，null = 现在放弃。
+  // 429 按源的 Retry-After 退避；连接被断 / 回了 HTML / 超时是源侧偶发，
+  // 等一秒再试一次就能好（实测一次断连就让整块进错误态，只能手点重试）。
+  var BOX_SOFT_RETRY_MS = 1500;
   function retryWaitFor(err, ctx) {
-    if (!err || err.ssdKind !== "ratelimit") return null;
-    if (ctx.attempt >= BOX_MAX_RETRIES) return null;
+    var kind = err && err.ssdKind;
+    if (!kind) return null;
     var now = Date.now();
-    if (now >= ctx.deadline) return null;
-    var ra = err.retryAfterMs;
-    // 源要求的等待超过上限：报错让用户自己决定，别把请求挂在这里
-    if (ra != null && ra > RETRY_AFTER_CAP) return null;
-    var want = (ra != null ? ra : BOX_BACKOFF_BASE * Math.pow(2, ctx.attempt));
-    var wait = Math.min(want, RETRY_AFTER_CAP);
-    if (now + wait >= ctx.deadline) return null;
-    return wait;
+
+    if (kind === "ratelimit") {
+      if (ctx.attempt >= BOX_MAX_RETRIES) return null;
+      if (now >= ctx.deadline) return null;
+      var ra = err.retryAfterMs;
+      // 源要求的等待超过上限：报错让用户自己决定，别把请求挂在这里
+      if (ra != null && ra > RETRY_AFTER_CAP) return null;
+      var want = (ra != null ? ra : BOX_BACKOFF_BASE * Math.pow(2, ctx.attempt));
+      var wait = Math.min(want, RETRY_AFTER_CAP);
+      if (now + wait >= ctx.deadline) return null;
+      return wait;
+    }
+
+    if (kind === "network" || kind === "parse" || kind === "timeout") {
+      if (ctx.attempt >= 1) return null;
+      if (now + BOX_SOFT_RETRY_MS >= ctx.deadline) return null;
+      return BOX_SOFT_RETRY_MS;
+    }
+    return null;
   }
 
   var BOX_ERR_TEXT = {
@@ -292,12 +306,16 @@
       var wait = boxGateTake(endpoint);
       var start = wait > 0 ? sleepMs(wait) : Promise.resolve();
       return start.then(function () {
+        // 本次尝试的等待上限不超过本次调用的剩余预算。否则「超时 → 退避 → 重试」
+        // 会把总时长翻倍：45s 的预算实际能拖到 90s 以上，用户只看到一直转圈。
+        var left = ctx.deadline - Date.now();
+        var eff = Math.min(tmo || BOX_TIMEOUT_MS, left > 0 ? left : (tmo || BOX_TIMEOUT_MS));
         var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
         var timedOut = false;
         var timer = setTimeout(function () {
           timedOut = true;
           if (controller) controller.abort();
-        }, tmo || BOX_TIMEOUT_MS);
+        }, eff);
         function done() { clearTimeout(timer); }
 
         function fetchError(e) {
@@ -354,8 +372,8 @@
           throw e;
         }
         ctx.attempt++;
-        console.warn("[ssd] 429 " + boxHostOf(at) + " retry " + ctx.attempt +
-          "/" + BOX_MAX_RETRIES + " in " + wait + "ms");
+        console.warn("[ssd] " + (e && e.ssdKind) + " " + boxHostOf(at) + " retry " +
+          ctx.attempt + " in " + wait + "ms");
         return sleepMs(wait).then(function () { return loop(at, tmo); });
       });
     }
@@ -463,12 +481,15 @@
       var wait = boxGateTake(TPDB_GATE_KEY);
       var start = wait > 0 ? sleepMs(wait) : Promise.resolve();
       return start.then(function () {
+        // 同 callBoxGQL：单次等待不超过本次调用的剩余预算，别让重试把总时长翻倍
+        var left = ctx.deadline - Date.now();
+        var eff = Math.min(timeoutMs || BOX_TIMEOUT_MS, left > 0 ? left : (timeoutMs || BOX_TIMEOUT_MS));
         var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
         var timedOut = false;
         var timer = setTimeout(function () {
           timedOut = true;
           if (controller) controller.abort();
-        }, timeoutMs || BOX_TIMEOUT_MS);
+        }, eff);
         var headers = { "Accept": "application/json" };
         if (boxKey(box)) headers["Authorization"] = "Bearer " + boxKey(box);
         return fetch("https://api.theporndb.net" + path, {
@@ -1220,11 +1241,14 @@
     "tags { id name } " +
     "images { url }";
 
+  // 发现 tab 单页查询的等待上限。全局默认 15s 是给轻量查询用的；这一条要回
+  // 一页 100 条带演员头像的场景（约 480KB），节点慢时 15s 吃紧（实测 4–13s）。
+  // 20s + 一次重试仍在 45s 总预算内。
+  var BOX_PAGE_TIMEOUT_MS = 20000;
+
   // Fetch ONE page from a stash-box (lazy loading — never pulls all 1000+ scenes).
-  // Page size is dynamic (_state.boxPageSize, 20–100): starts at the box maximum
-  // (stash-box clamps per_page to 100 in getPagination) and adapts to the observed
-  // missing density — shrinks to the expected need when density is high, regrows
-  // toward the max when it is low or the remaining need increases.
+  // 每页 100 条（约 480KB）：缺失率低的库一页就能填满一屏，少一次往返；
+  // 单次超时/断连由 callBoxGQL 的重试兜住。页大小按实测缺失密度自适应（20–100）。
   function fetchBoxPage(box, stashId, pageNum) {
     var boxPerPage = _state.boxPageSize;
     var input = Object.assign(
@@ -1241,7 +1265,7 @@
     );
     return _boxRateLimiter.submit(function () {
       // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
-      return callBoxSceneList(box, input);
+      return callBoxSceneList(box, input, BOX_PAGE_TIMEOUT_MS);
     }).then(function (result) {
       if (!result || !result.scenes) return { scenes: [], count: 0, hasMore: false };
       var items = result.scenes.map(function (sc) {
@@ -1256,6 +1280,7 @@
       return {
         scenes: items,
         count: result.count || 0,
+        perPage: boxPerPage,
         hasMore: result.hasMore != null ? result.hasMore : result.scenes.length >= boxPerPage,
         truncated: !!result.truncated,
         skipped: result.skipped || [],
@@ -1331,7 +1356,8 @@
         _state.boxCursors[b.endpoint] = pageNum + 1;
         delete _state.boxFailed[b.endpoint];
         _state.boxStatus[b.endpoint] = { ok: true };
-        _state.boxFetched[b.endpoint] = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
+        var fetched = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
+        _state.boxFetched[b.endpoint] = fetched;
         if (result.truncated) _state.boxTruncated[b.endpoint] = true;
         if (result.skipped && result.skipped.length) {
           // 累加：多页各自的跳过名单不重复
@@ -1341,7 +1367,13 @@
           });
           _state.boxSkipped[b.endpoint] = prev;
         }
+        // queryScenes 没有 hasMore 字段，只能靠「本页是否回满」推断 —— 源偷降
+        // per_page 时（请求 100 回 20）会误判到底、真的少显示。count 是总数，
+        // 本页没回满且已取条数达到它就一定取完了，用这个兜底；回满的一页仍
+        // 按「还有更多」走，宁可多发一次空请求。
         if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
+        else if (result.count > 0 && fetched >= result.count &&
+          result.scenes.length < (result.perPage || 1)) _state.boxExhausted[b.endpoint] = true;
         // Window early-stop: the page's boundary date crossed the window,
         // every later page is outside it as well
         else if (boxPageOutOfWindow(result.scenes)) _state.boxExhausted[b.endpoint] = true;
@@ -4408,45 +4440,50 @@
     }
 
     // ── Pagination controls (native .pagination.btn-group: arrows + page numbers) ──
-    var pager = document.createElement("div");
-    pager.className = "ssd-pager";
+    // 吸在滚动区底部，位置与逻辑对齐 Stash 原生 .pagination-footer-container：
+    // 外层只负责吸底和放行点击（透明区域不挡卡片），内层胶囊才接事件。
+    // 只有一页时不渲染 —— 原生列表页也是没有第二页就不出翻页条。
+    if (totalPages > 1) {
+      var pager = document.createElement("div");
+      pager.className = "ssd-pager";
 
-    var pg = document.createElement("div");
-    pg.setAttribute("role", "group");
-    pg.className = "pagination btn-group";
+      var pg = document.createElement("div");
+      pg.setAttribute("role", "group");
+      pg.className = "pagination btn-group";
 
-    var prevBtn = document.createElement("button");
-    prevBtn.type = "button";
-    prevBtn.className = "btn btn-secondary";
-    prevBtn.title = tc("上一页", "Previous");
-    prevBtn.innerHTML = "&lt;";
-    prevBtn.disabled = _state.currentPage <= 1 || _state.loadingPage;
-    prevBtn.onclick = function () { goToPage(_state.currentPage - 1); };
-    pg.appendChild(prevBtn);
+      var prevBtn = document.createElement("button");
+      prevBtn.type = "button";
+      prevBtn.className = "btn btn-secondary";
+      prevBtn.title = tc("上一页", "Previous");
+      prevBtn.innerHTML = "&lt;";
+      prevBtn.disabled = _state.currentPage <= 1 || _state.loadingPage;
+      prevBtn.onclick = function () { goToPage(_state.currentPage - 1); };
+      pg.appendChild(prevBtn);
 
-    // Page numbers: show every page the local cache already covers; while
-    // lazy-loading, the > arrow keeps fetching further pages on demand
-    var startPage = Math.max(1, _state.currentPage - 2);
-    var endPage = Math.min(knownPages, startPage + 4);
-    if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
-    for (var pn = startPage; pn <= endPage; pn++) {
-      pg.appendChild(makePageButton(pn, pn === _state.currentPage));
+      // Page numbers: show every page the local cache already covers; while
+      // lazy-loading, the > arrow keeps fetching further pages on demand
+      var startPage = Math.max(1, _state.currentPage - 2);
+      var endPage = Math.min(knownPages, startPage + 4);
+      if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
+      for (var pn = startPage; pn <= endPage; pn++) {
+        pg.appendChild(makePageButton(pn, pn === _state.currentPage));
+      }
+
+      var canNext = isSearching
+        ? _state.currentPage < knownPages
+        : (_state.allLoaded ? _state.currentPage < knownPages : true);
+      var nextBtn = document.createElement("button");
+      nextBtn.type = "button";
+      nextBtn.className = "btn btn-secondary";
+      nextBtn.title = tc("下一页", "Next");
+      nextBtn.innerHTML = "&gt;";
+      nextBtn.disabled = !canNext || _state.loadingPage;
+      nextBtn.onclick = function () { goToPage(_state.currentPage + 1); };
+      pg.appendChild(nextBtn);
+
+      pager.appendChild(pg);
+      pane.appendChild(pager);
     }
-
-    var canNext = isSearching
-      ? _state.currentPage < knownPages
-      : (_state.allLoaded ? _state.currentPage < knownPages : true);
-    var nextBtn = document.createElement("button");
-    nextBtn.type = "button";
-    nextBtn.className = "btn btn-secondary";
-    nextBtn.title = tc("下一页", "Next");
-    nextBtn.innerHTML = "&gt;";
-    nextBtn.disabled = !canNext || _state.loadingPage;
-    nextBtn.onclick = function () { goToPage(_state.currentPage + 1); };
-    pg.appendChild(nextBtn);
-
-    pager.appendChild(pg);
-    pane.appendChild(pager);
   }
 
   function makePageButton(pageNum, isActive) {
@@ -4930,7 +4967,12 @@
     // 媒体查询覆盖，只能靠 !important，故迁到样式表（用户 2026-10-27）
     titleText.textContent = sc.title || sc.code || tc("无标题", "Untitled");
     title.appendChild(titleText);
-    cardSection.appendChild(title);
+    // 原生标题外面还包一层 <a>，主题靠 .card-section > a:first-child 把标题
+    // 放在左列、日期放右列；少了它标题会铺满整行，日期被挤到标题上方
+    // （Flexoki 实测）。不带 href：点击照旧冒泡到 card 打开弹窗，不导航。
+    var titleLink = document.createElement("a");
+    titleLink.appendChild(title);
+    cardSection.appendChild(titleLink);
 
     var details = document.createElement("div");
     details.className = "scene-card__details";
@@ -9963,6 +10005,12 @@
     var pinnedTop = getComputedStyle(nav).position !== "static" && r.top <= 8;
     document.documentElement.style.setProperty(
       "--ssd-stick-top", (pinnedTop ? Math.round(r.height) : 0) + "px");
+    // 同一个元素在移动端贴在屏幕底部（底部 tab 栏），翻页条要停在它上方，
+    // 否则上滑时会被压住。判据同理：贴底才加这个高度。
+    var pinnedBottom = getComputedStyle(nav).position !== "static" &&
+      r.bottom >= window.innerHeight - 8;
+    document.documentElement.style.setProperty(
+      "--ssd-pager-offset", (pinnedBottom ? Math.round(r.height) : 0) + "px");
   }
 
   // ─── 插件设置页「测试」按钮（用户 2026-11-02）─────────────────────────────

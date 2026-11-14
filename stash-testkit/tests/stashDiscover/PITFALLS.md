@@ -495,3 +495,25 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   且菜单 `right <= vw-8`。注意别把页面自身的溢出算到菜单头上 —— 演员页原生
   `performer-head/.stash-id-pill` 在 ≤360px 本来就有 15px 溢出，用「菜单开/关各量一次」
   对比才靠谱。
+
+## 发现页：整页重建 / 局部换模块都会把滚到底的人拽回顶部
+
+- **根因不是「内容变短」，是清空那一刻的瞬时布局**：`c.innerHTML=""` 让文档塌到只剩页头，
+  浏览器当场把 `scrollTop` 钳成 0，之后内容补回来也不会自己恢复。实测刷新时 `scrollTop`
+  765→0，而 JS 一次都没写过它（给 `Element.prototype.scrollTop` 与 `window.scrollTo` 打桩，
+  点击后零调用）。所以「保存 scrollY 再写回」必须做，且要在**布局恢复之后**做。
+- **换模块也一样**：`refreshModules` 把模块换成重建的卡片时，新 `img` 解码前卡高偏矮，
+  文档瞬时变短 → 同样被钳（实测 765→390→0，模块高度采样恢复后仍停在 0）。
+  修法：`refreshModules` 进门记 `scrollTop`、出门写回，**再补一次 `requestAnimationFrame`**
+  （封面解码发生在本任务之后）。
+- 刷新时**不把模块换成骨架**（`ensureData(..., quiet)`）：骨架比真实卡片矮，等于自己制造
+  一次变矮。骨架只留给「本来就没数据」和「重试要立刻有反馈」两种场景。
+- `pollSettled` 的 60s 兜底定时器**必须**在正常落地时 `clearTimeout`：否则一分钟后回调再跑
+  一遍，那次整页 `render()` 就是「模块早就加载完了，过 1 分钟页面自己跳回顶部」的真凶
+  （实测滚到底后 61s，高度没变仍 2043，`scrollTop` 归零）。
+- 探针写法：把 `--path /plugins/stashDiscover` 打开后先滚到底、点刷新、每 100~200ms 采样
+  `scrollTop + scrollHeight`；只在变化时打点，否则上百行噪音淹没关键跳变时刻。
+- **`render()` 是「先 `syncChrome()` 再 `renderContent()`」**：想给渲染出来的节点加状态类
+  （刷新中的 `is-busy`）不能只写在 syncChrome 里 —— 那一刻节点还不存在。实测刷新中切回总览：
+  文案「更新中 0/4」、六个模块全亮、`is-busy` 计数 0。修法是在 renderContent 之后再补一次
+  状态刷新（`syncBusyMarks()`），别指望 syncChrome 兜住。

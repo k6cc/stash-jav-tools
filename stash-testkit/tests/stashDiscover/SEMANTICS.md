@@ -161,20 +161,48 @@ country/birthdate/gender`），每个都有明确的读取点（卡片 / 弹窗 
   `scenes.length < totalSeen` 就判被裁。UI 在 `.ssd-dp-pcount` 旁挂 chip（title 写「只存下最新 N 部
   （共拉到 M 部）」），点了走 `doRefresh()`。老条目没这字段 → 当完整。
   **chip 文字用 `--sx-tx2` 而不是 `--ssd-warning`**：后者当文字色在浅色主题下对比度只有 2:1。
-- 场景详情弹窗**读**这份：一打开就用 `item.scene` 渲染详情区，所以不是空白转圈。
-  但入库要完整字段（完整简介、标签 id、演员档案、源链接站点），必须再拉一次 `findScene` ——
-  这是分层，不是重复。**场景详情不做短时缓存**（用户 2026-10-30 明确否掉），每次打开请求一次。
-- 演员侧是另一回事：`boxPerfDetail` 有 10 分钟缓存，因为弹层和入库预览要的是同一份全字段。
-- 刷新按钮 = `cacheInvalidate(host)` 删三族缓存 + `invalidateLocalMemos()` 清会话 memo +
-  `_dp.d/_dp.err/_dp.fetchedAt` 归零 + `ensureData(keys, true)` 绕过缓存重拉并覆盖写回。
 - 预算账（4000 条 × 3 图，按实测 20 部/源投影重算）：stashdb 1235 → 索引化后 788 字符/条；
   javstash 801 → 726；TPDB 1306 → 1181（3 张图 561 字符是它的主因，仍超预算，暂不处理）。
 - 场景详情弹窗**读**这份：一打开就用 `item.scene` 渲染详情区，所以不是空白转圈。
   但入库要完整字段（完整简介、标签 id、演员档案、源链接站点），必须再拉一次 `findScene` ——
   这是分层，不是重复。**场景详情不做短时缓存**（用户 2026-10-30 明确否掉），每次打开请求一次。
 - 演员侧是另一回事：`boxPerfDetail` 有 10 分钟缓存，因为弹层和入库预览要的是同一份全字段。
-- 刷新按钮 = `cacheInvalidate(host)` 删三族缓存 + `invalidateLocalMemos()` 清会话 memo +
-  `_dp.d/_dp.err/_dp.fetchedAt` 归零 + `ensureData(keys, true)` 绕过缓存重拉并覆盖写回。
+- 刷新按钮 = `cacheInvalidate(host)`（删该源全部缓存键）+ `invalidateLocalMemos()` + 清图片失败
+  负缓存，然后四个数据集 `ensureData(keys, true, prio, quiet)` 绕过缓存重拉。`quiet` = 旧内容原地
+  留着、模块不换骨架，数据到了就地换；`_dp.d / _dp.fetchedAt` **不清零**（只有失败的那一份才摘掉，
+  模块换成「错误 + 重试」）。
+
+## 刷新过程中的界面反馈（2026-11-15）
+
+主动刷新**不清卡、不上骨架**：旧卡是有效内容，清空只证明「动作发生了」、证明不了「数据是新的」
+（12h 窗口内源端没新片时，清空再填回一模一样的卡更像 bug），而失败时清空等于把可用内容炸掉。
+三个信号代替：
+
+- 页头 `statusText()` 是唯一出口（`syncChrome` 与每分钟的相对时间定时器都走它，各写一份必然互相覆盖）：
+  `更新中 2/4` → 结束后 `刚刚更新 · +3` / `· 无新增`，失败则 `· 2/4 失败`。
+  **结果类后缀 10 秒后自动退回纯时间**（`REFRESH_NOTE_MS`）；失败类不带 `until`、常驻到下次
+  全部成功（`clearFailNoteIfRecovered`），否则模块内错误框被重试掉后页头仍挂着失败。
+- 总览按模块降到 `.5` + 图标换成模块色散射圈（`--ssd-mod-c`，`svg` 与 `::before` 共用），
+  数据集落地模块整块重建即亮回（`ssd-sec-brighten`）。一个模块要等它**全部**依赖的数据集
+  （`MODULE_DEPS`）：发现演员同时吃 latest 与 trendingPerf，只按 `MODULES_OF_DATASET` 会提前亮。
+- 钻取/列表视图没有模块头，只有 `content.is-refreshing` 整片降暗；设置页与已忽略管理不降。
+
+新增数只在**内存里有旧快照**时才算（`datasetSceneIds` 差集，三个场景族合并去重；`trendingPerf`
+是演员榜、不计入）。首次进入直接点刷新不显示 `+N` —— 按空集合比会得到「+187」。
+
+## 缓存过期后的首屏与页头时间（2026-11-15 实测）
+
+- 新鲜期：场景三族（`newScenes` / `trending` / `studios`）12h；热门演员榜 `trendingPerf.v1` **6h**，
+  是独立键、独立 TTL。
+- SWR 覆盖三条：`latest` / `trending` / `studios` 都会「先出 7 天内的旧缓存 + 后台静默重拉」。
+  以前只有 `latest` 有，另两条过期就直接空等网络（实测工作室模块空白 6s 才出卡）。
+- 后台那次的结果通过 `res.refresh` 交回 `ensureData` 回填（替换 `_dp.d[k]` + 就地换模块），
+  当前页不用重进就能更新；以前只写缓存、界面永远停在旧数据。
+- **页头「x 前更新」= `max(各数据集 fetchedAt)`，但 `getTrendingPerformers` 的返回对象里没有
+  `fetchedAt`**，所以热门演员榜不参与这个数字（实测：三族 3h 前、trendingPerf 13h → 重取完成，
+  文案始终「3 小时前更新」）。要让它进统计得先补字段。
+- 因此「没点刷新、十几秒后文案变『刚刚』」只可能来自 latest / trending / studios 里的一条走了网络
+  （过期、回看窗口变了、换了数据源、刚清过缓存）。
 
 ## Jackett 结果的来源索引器（2026-10-30）
 

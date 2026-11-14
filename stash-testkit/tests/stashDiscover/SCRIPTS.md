@@ -34,6 +34,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
 | `probe_overview_placeholder.js` | 总览的骨架占位与模块局部刷新：各模块骨架高 vs 落地高、页头身份是否保持（= 没整页重建）、整页高度抖动。**跑两次**：第一次返回 `stage=cleaned`（清场景缓存），重跑才采得到骨架 | 清 `newScenes`/`trending`/`studios` 缓存键（下次加载重拉） |
+| `probe_refresh_scroll.js` | 刷新期间滚动位置：先滚到底、点一次 `.ssd-dp-refresh`，每 200ms 采 `scrollTop/scrollHeight`，只记变化。正常只有 `pre` 一行；出现 y 变小的记录就是「被拽回顶部」（`endY` 远小于 `startY`） | 否，但会真发一次刷新请求 |
 | `probe_batch_select.js` | 多选入口 / 点选 / 全选 / 批量忽略 + 撤销 / 列表模式 / 退出 | 写忽略记录，测完撤销并核对条数还原 |
 | `probe_search_scroll.js` | 点「搜索资源」后滚到底、渲染后抬头对齐、每条结果带索引器标签 | 否 |
 | `probe_search_btns.js` | 搜索结果行内五类按钮（ghost / tonal / ok / err）+ 低匹配折叠条 | 否，灌假结果 |

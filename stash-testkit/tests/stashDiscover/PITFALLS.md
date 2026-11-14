@@ -219,6 +219,22 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   只删 `jackettTimeout`，`180` 连类型都不变。唯一副作用：旧类型下**故意**填 0 表示「不限」的人会
   被清成默认 180 —— 旧类型里「没填」和「填 0」是同一个值，无法区分，只能按误存处理；重新填一次
   `0`（这次是字符串）即可，迁移只跑一次（`SSD:cfgMigrated.v2`）。
+- **原生 `.studio-overlay` 是 `height: 10%`，不是按内容撑高**：宿主 CSS 里写死 `height: 10%;
+  max-width: 40%; overflow: visible`，单行刚好。把它改到底部（`bottom:6px`）后，名字换行时
+  盒子还是 10%（136px 封面 → 13.6px），多出来的行按 `overflow: visible` 往下画，直接**掉到封面外**
+  的文字区；顶部两档看不出问题（溢出的行落在封面里）。
+  同一个 `height: 10%` 还会咬第二口：想用 `-webkit-line-clamp: 2` 截两行时它必须配
+  `overflow: hidden`，而 10% 高度会把第二行整行裁掉（省略号都看不到）。所以两件事都要先
+  `height: auto`。另注意被截断的文本要落在真正装文字的元素上 —— 原生把名字包在 `inline-block`
+  的 `<a>` 里，父 div 只有一个原子子盒，clamp 写在父级截不到内部的行，两层都得写。
+  判据：`getBoundingClientRect().height` 与 `scrollHeight` 不等就是没生效（实测单行 12 /
+  两行 24 / 三行被截在 24，`bottom` 恒 6，`top` 始终在封面内）。（2026-11-15）
+- **本机的工作室名是 peekaboo 生成的假名，别拿它验证内容**：peekaboo 把 `.studio-overlay`
+  里的文本整段替换成随机名（元素上留 `data-peekaboo-masked`），实测往真卡片里写文本 600ms 内就被
+  改回去、60ms 定时纠正也压不住；克隆节点、甚至自己新建的 `.studio-overlay` 一样会被改写
+  （它在 document 上观察）。**验证排版/截断前先关掉遮挡**：导航栏的眼睛按钮或 `Shift+Alt+B`，
+  也可以在插件设置里把 Shield on 关掉 —— 比绕过去省事。真不方便关时把测试节点放进 **Shadow DOM**
+  （MutationObserver 看不到 shadow 树），或者只看几何量。（2026-11-15）
 
 ## 数据与标识
 

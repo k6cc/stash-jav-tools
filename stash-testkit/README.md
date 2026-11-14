@@ -92,6 +92,12 @@ stash-testkit/
 - **国籍国旗别用 emoji**：Windows 的 Segoe UI Emoji 不渲染国旗字形（显示成两字母），用 `flagcdn.com/w40/<小写码>.png` + `onerror` 回退国家码文本。
 - **TPDB 场景列表只能走 REST，批量过滤是 deepObject**：`/scenes?performers[整数_id]=x&performers[...]=x`，**值被忽略、只认键**，多键 OR 相加；uuid 当键返回 0 条，`per_page` 顶 100。它的 stash-box GraphQL `queryScenes` 恒返回 `{count, scenes:null}`。语义与探针见 `tests/stashDiscover/SEMANTICS.md`。
 
+### 插件 UI（React 注入）
+
+- **注入到设置页的弹窗，点击会沿 React 树冒泡回注入点**：`Modal` / `createPortal` 只把 DOM 挂到 body，React 父节点仍是按钮所在的 `SettingGroup`，而卡片头是折叠开关 → 点弹窗任意位置都会把设置展开/收起。修法：在弹窗子树根（Header/Body/Footer）的 `onClick` + `onMouseDown` 上 `stopPropagation`；只换挂载点没用（实测卡片高度 132 → 1338，修后三次点击均 132）。
+- **拖拽出弹窗再松手，`click` 落在「按下点与松手点的最近公共祖先」**：它可能直接是卡片头，这条事件已跑出弹窗子树，子树上的 `stopPropagation` 收不到。要在 `document` **捕获阶段**判：`pointerdown` 记起点 → 位移 > 8px 记为拖拽 → `click` 里吞掉遮罩落点与拖拽落点。同一机制还会让「点遮罩关窗」顺带折叠卡片，一起兜住。
+- **白屏 + 零日志，先查函数形参与函数体是否一致**：`ensureData(keys, force)` 体内用了未声明的 `prio` → `ReferenceError`，被 React 错误边界吞掉，`window.onerror` / `console.error` / `unhandledrejection` 全抓不到，`node --check` 也照样通过（语法合法），页面只剩 body 末尾一句「出了些问题。」。判据：页面容器为 null 但 `window.<命名空间>` 导出键正常 → 直接 grep 新增变量名的形参声明。
+
 ### 工具链
 
 - **Node 的 fetch 默认不读 `HTTPS_PROXY`**：脚本要过代理得自己起 CONNECT 隧道（`tests/stashDiscover/scripts/node_tpdb_harness.js` 已内置这套做法）。

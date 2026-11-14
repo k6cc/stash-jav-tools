@@ -101,7 +101,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 - **键位语义**：场景缓存是 `SSD:dp:<host>:<family>.v3`（`cacheKey`）；已读 / 关注 / 未读 / 轮询（`read.v1` `follow.v1` `unread.v1` `poll.v1`）都是**全局键**，无 host 前缀。
 - **`cacheInvalidate(host)` 删的是 `SSD:dp:<host>:` 前缀的全部键**（刷新按钮 / 切源时调用）。任何「不能丢」的数据都不能带 host 前缀，否则一点刷新就没了。
 - **升级孤儿实测 580,525 字符**（占插件存储 698,846 的 83%）：`javstash:newScenes.v2` 410,160、`javstash:studios.v2` 98,368、`theporndb:trending.v2` 36,567、`javstash:trending.v2` 35,061。成因：`cacheWrite` 只清「同 host + 同 family」的旧版本键，某个源升级后再没被访问过，旧条目就永久滞留。
-- **孤儿判定不能用 `.v\d+$`**：`local.v1` / `follow.v1` / `unread.v1` / `poll.v1` / `trendingPerf.v1` 的 `.v1` 是各自存储的版本号，不跟 `CACHE_FMT` 走，按后缀粗暴匹配会误删用户数据。只认 `SSD:dp:<host>:{newScenes|trending|studios}.v<N>`。
+- **孤儿判定不能用 `.v\d+$`**：`owned.v1` / `linked.v1` / `follow.v1` / `unread.v1` / `poll.v1` / `trendingPerf.v1` 的 `.v1` 是各自存储的版本号，不跟 `CACHE_FMT` 走，按后缀粗暴匹配会误删用户数据。只认 `SSD:dp:<host>:{newScenes|trending|studios}.v<N>`。
 - **单条快照体积**（做预算时用）：场景 259 字符（TPDB 50 条均值，最大 326），加前 4 位演员名 290；演员 151 字符（本机 115 位，中位 155），源侧头像 URL 另加约 60。
 - 验收基线：孤儿清扫后 `orphanChars` 应为 0，`SSD:*` 由 698,846 降到约 118,000。
 - **已落地（discover.js `sweepOrphanCaches()`，挂载发现页时跑一次）**：实测 `SSD:*` 699,353 → **118,828**、总占用 719,415 → 139,061、`orphanChars` 580,525 → **0**，与预估一致。
@@ -203,7 +203,7 @@ Jackett 版本不输出，所以老的 `tracker` 字段恒为空串 —— 前�
 ## 关注角标（导航数字）口径
 
 - 角标 = 当前数据源 + 窗口（`prefs.recentDays`，缺省 30 天）+ 关注演员的场景，按**场景×关注演员**计数；剔除预告（开关关时）、已读 `marks`、`ownedKeys` 与 `code:` 命中、未链接演员、忽略记录（`pollFollowed`）。
-- `SSD:dp:<host>:local.v1` 结构是 `{fetchedAt, ownedKeys:{key:1}, linked:[{stashId}]}`。**`linked` 是数组**，`pollLocalSnap` 按元素 `p.stashId` 转映射；当成对象读会得到空集 → 所有场景被剔除、角标恒 0（2026-11-03 踩过）。
+- 本地快照两条键：`SSD:dp:<host>:owned.v1` = `{fetchedAt, keys:{key:1}}`、`SSD:dp:<host>:linked.v1` = `{fetchedAt, performers:[{stashId}]}`（旧版单键 `local.v1` 会被 `migrateLocalV1` 拆开并删除）。**`performers` 是数组**，`pollLocalSnap` 按元素 `p.stashId` 转映射；当成对象读会得到空集 → 所有场景被剔除、角标恒 0（2026-11-03 踩过）。
 - 每源每轮先拉 1 页 100 条；被截断且预告占名额时按需续页（上限 3 页，累计有效条数够 100 即停）。判定用的 `skipPrev` 必须在**查询前**算好，计数阶段复用同一变量，否则续页口径与计数口径会不一致。
 - 实测（2026-11-03，javstash 4 位关注，30 天窗口）：10 条 = 预告 3 + 已上映 7；开关关 → 角标 7，开 → 10。临时把 `POLL_PER_PAGE` 压到 4：关 → 5（第一页只有 1 条已上映，续页补齐），开 → 4（首页 4 条全算，不续页）。
 

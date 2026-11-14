@@ -90,3 +90,25 @@
 字段体积账、`tagDict` 为何不做裁剪收窄、`totalSeen` 的口径 → [SEMANTICS.md](SEMANTICS.md)
 「发现页缓存」；任务通道为何只有 `runPluginOperation` → SEMANTICS「Jackett 搜索链路」。
 回归探针见 [SCRIPTS.md](SCRIPTS.md)。
+
+## v2.8.0：测试面板重做 / 总览加载态 / 查询层去重（v2.7.2 → 2.8.0，2026-11-14）
+
+- **设置页测试弹窗改用宿主 `Bootstrap.Modal`**：X 按钮 + Header 下沿 / Footer 上沿各一条细线（照
+  External Player Launcher）。Esc、遮罩关闭、背景滚动锁都由 Modal 提供；遮罩误关自己做防误触
+  —— `backdrop:"static"` + 判「pointerdown 起点也在遮罩上且位移 < 8px」。点击泄漏分两层修：弹窗
+  子树根 `stopPropagation`（挡 React 树冒泡）+ `document` 捕获阶段吞掉拖拽/遮罩落点（挡已跑出子树的
+  那条 click）。机制见主 README「插件 UI」。
+- **总览加载态**：等高骨架占位替代 `加载中…`（场景卡复用 `.ssd-card-grid`、文案区按卡档定高，迷你卡
+  44px 头像），错误态带重试；数据落地按 `data-mod` 就地替换模块（`refreshModules`），不再
+  `innerHTML=""` 整页重建。骨架只对齐典型卡高，实测模块差 0~22px、整页抖动 44px（原 51px 是整页跳）。
+- **限流器加优先级**：`submit(fn, priority)` 把重试插到队头（实测冷加载里 latest 的两个请求原本要等到
+  t+5.7s）。优先任务能越过尚未派发的排队任务，越不过已占满的 3 个槽位。
+- **查询层**：`getPluginSettings` / `getStashBoxes` 并发去重 + 10s TTL（刷新窗口 `configuration{plugins}`
+  5 → 1，用户点刷新会先清缓存）；SWR 后台刷新补 `.catch`；in-flight 去重键从「演员个数」改成 id 集合。
+  冷加载剩下的 2 次配置查询经调用栈确认来自 peekaboo 插件，不是本插件。
+- **tab 分页终止判据改用 count**（顺序：整页重复 → TPDB `hasMore=false` → 空页 → 取满 count →
+  无 count 才退回「没回满」），加 `TAB_MAX_PAGES=50` 兜底；**本地快照拆键**
+  `owned.v1`（10 分钟）/ `linked.v1`（1 小时），各 1.2M 字符预算，写失败 `console.warn` 一次，
+  读时迁移旧 `local.v1`。
+- 机制型结论：骨架容器类名、count 判据、弹窗指针事件测试法 → [PITFALLS.md](PITFALLS.md)；
+  回归脚本 `probe_overview_placeholder.js` / `probe_tab_paging.js` / `probe_req_dist.js`。

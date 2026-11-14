@@ -163,6 +163,15 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   强制断行。（第七轮）
 - **混排图片后不能再 `facts.join(" · ")`**：一行里国旗是 `<img>`、性别是带色 span、年龄是文本，
   只能按节点 append，分隔靠 flex `gap`。（第七轮）
+- **骨架占位要复用真实卡的容器类，`trimRows` 才数得对列**：`.ssd-dp-grid` 普通态是
+  `display:block`（只有 `.ssd-dp-grid.mini` 是 grid），场景卡骨架只挂它 → 12~24 张卡整宽竖排，
+  `trimRows` 只数到 1 列，`latest` 骨架高达 2099px 而真实内容 648px。容器用
+  `.ssd-card-grid.ssd-dp-grid` 双类名：列宽交给 `repeat(auto-fill,minmax(--ssd-card-min,1fr))`，
+  宽度靠 `.ssd-dp-sec > .ssd-dp-grid{width:100%}`。迷你骨架单用 `.ssd-dp-grid.mini` 即可。
+- **骨架只能对齐「典型卡高」，别把 0 差当验收标准**：真实卡高度由内容撑开（长标题 / 角标多一行），
+  标准档实测骨架 325 → 落地 346（+21 / +22，迷你卡 0）。验收看三件事：页头元素身份不变
+  （没有整页重建）、模块高度差 ≤ 一行、整页高度抖动（实测 44px）。回归脚本
+  `scripts/probe_overview_placeholder.js`。
 
 ## Stash 宿主机制
 
@@ -277,6 +286,11 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **`shot` 与 `eval` 都支持 `--vsize`**：`apply_vsize` 在 `open_stash_page` 之后调，走同一套 CDP
   覆盖。`shot` 早期只有 `eval` 有，移动端布局根本截不到。（第六轮，已补）
 - **点完后立刻读 DOM 拿到的是中间态**：异步渲染 / 预载 / 回填都要轮询等元素出现再断言。
+- **设置页弹窗的点击泄漏只有真实指针事件能复现**：合成 `el.click()` 永远「按下点 = 松手点 = 元素
+  自身」，测不出拖拽松手时 `click` 落在最近公共祖先（机制与修法见主 README「插件 UI」节）。
+  用 CDP 发 `pointerdown → pointermove → pointerup`，并量 `.setting-group` 高度做对照
+  （收起 132 / 展开 1338）：面板内点击、拖到面板外松手、点遮罩三种操作后都必须仍是 132。
+  只测面板内部会漏掉「点遮罩关窗也折叠卡片」这一路。
 
 ## 业务逻辑
 
@@ -294,6 +308,14 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   小档（100）排得下 3 列、中档（155）却只剩 1 列 —— 一行一张大卡，档位落差完全不合理
   （用户安卓实测：演员弹窗中档只显示 1 个，小档 3 个正常）。≤480 改成
   `repeat(3/2/1, minmax(0,1fr))`，桌面仍走 auto-fill。（第九轮）
+- **tab 分页判到底要用 `count`，不能用「本页是否回满」**：`queryScenes` 不返回 `hasMore`（只有
+  TPDB 的 REST `meta` 有真值），而源会把 `per_page` 压低 —— 实测第 2 页起插件自己就把 per 降到
+  20，「没回满」判据会在第 1 页直接终止。判定顺序：整页与上一页完全相同 → TPDB `hasMore=false`
+  → 空页 → 已取满 `count` → 只有拿不到 count 时才退回「没回满」。`TAB_MAX_PAGES=50` 兜底
+  （对齐发现页 `BOX_MAX_PAGES`），到顶置 `boxTruncated` 让 UI 提示。回归脚本
+  `scripts/probe_tab_paging.js`（clamp 模式实测翻到第 6 页共 240 个；改前停在第 1 页 40 个）。
+- **`fetchBoxPage` 的返回里 `hasMore` 是 `null` 而不是 `false`**：GraphQL 源没有这个字段，
+  把 `null` 当 `false` 会一律判到底。只有 TPDB 的 `meta.current_page < last_page` 才给布尔值。
 
 ## 探针陷阱
 
@@ -382,7 +404,7 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **角标和关注页是两套数据源，口径必须一致**：导航角标走主 JS 的轻量轮询（每 6h），
   它当初「故意不查本地是否已拥有」；关注页走完整管线，会剔除已拥有、未链接演员的场景。
   结果就是「角标 2、关注页全是已读」（用户 2026-11-02）。修法是轮询读发现页写的
-  `SSD:dp:<host>:local.v1`（ownedKeys + linked，无 TTL），按同口径过滤；快照缺失才退回旧行为。
+  `SSD:dp:<host>:owned.v1` 与 `:linked.v1`（拆两条键，任一份缺失才退回旧行为），按同口径过滤。
   实测判据：同一条场景，未拥有时轮询计 1，把它的 stash_id 键塞进 ownedKeys 后计 0。
 - **插件设置页注入按钮，别用 `<button>`**：`PluginApi.components` 里没有 Button
   （External Player Launcher 取的就是这个位置，拿到 undefined 后按钮静默消失），

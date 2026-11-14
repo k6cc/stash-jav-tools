@@ -24,6 +24,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
+| `probe_req_dist.js` | 按「查询签名」聚合一次刷新里的 fetch：次数 / 字节 / p50 耗时 / 状态码，用来抓重复请求与最贵的查询（脚本自动点一次 `.ssd-dp-refresh`，采 12s） | 否，只包 `fetch` 统计 |
 | `probe_429_backoff.js` | 429 退避：两次 429 后成功（2s+4s）／`Retry-After` 超上限直接报错不重试／重试耗尽带 `retried 2x`／500 不重试／被限流的源下一次至少隔 1s／没被打过的源零排队（< 200ms） | 否，全程 mock `fetch`。用 `--path /`（任何加载了 `SSD` 的页面都行，不需要进插件页） |
 | `probe_imgfail_retry.js` | 封面失败负缓存：1 分钟内失败被跳过／超过 10 分钟自动重试／超过 12h 视为未失败／`clearAllImgFail()` 清空 | 会写 `sessionStorage` 的 `SSD:imgfail.v1`，**跑完还原原值**。用 `--path /plugins/stashDiscover` |
 | `probe_plugin_settings.js` | 设置项类型与脏值：`recentDays`/`jackettTimeout` 是 STRING／配置里没有旧 NUMBER 留下的 `0`；手填 `"0"` 的语义（`recentDays` 0=不限、`previewDays` 0=不限/-1=隐藏、`parseInt("0")` 不落默认） | 否，纯 GraphQL 只读 + 纯函数调用。用 `--path /` |
@@ -32,6 +33,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
+| `probe_overview_placeholder.js` | 总览的骨架占位与模块局部刷新：各模块骨架高 vs 落地高、页头身份是否保持（= 没整页重建）、整页高度抖动。**跑两次**：第一次返回 `stage=cleaned`（清场景缓存），重跑才采得到骨架 | 清 `newScenes`/`trending`/`studios` 缓存键（下次加载重拉） |
 | `probe_batch_select.js` | 多选入口 / 点选 / 全选 / 批量忽略 + 撤销 / 列表模式 / 退出 | 写忽略记录，测完撤销并核对条数还原 |
 | `probe_search_scroll.js` | 点「搜索资源」后滚到底、渲染后抬头对齐、每条结果带索引器标签 | 否 |
 | `probe_search_btns.js` | 搜索结果行内五类按钮（ghost / tonal / ok / err）+ 低匹配折叠条 | 否，灌假结果 |
@@ -44,6 +46,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
+| `probe_tab_paging.js` | 分页终止判据：点「下一页」时是否提前判到底 / 停不下来。跑前用 `localStorage.setItem("SSD:probe.tabMode","normal|clamp|ignore")` 选源行为，输出每页的请求数 / 卡片数 / 页脚文案；`clamp`（每页只回 20、count=5000）应继续翻页，`ignore`（同批重发、count=0）应 2 页内停住（首屏已缓存该页时会给 hint 说明没测到） | 否，mock box 的 `queryScenes` 响应；跑完删掉探针键 |
 | `probe_tab_select.js` | tab 的多选入口 / 点选 / 全选 / 批量忽略 + 撤销 / Esc 退出（含勾选圈 24px 断言） | 写忽略记录，测完还原 |
 | `probe_ignored_show.js` | 全被忽略 → 空态入口 → 8 卡 8 徽章 + chip → 恢复隐藏 | 写忽略记录，按前后差集删 |
 | `probe_reignore.js` | 已忽略的场景再忽略一次：幂等 / 不抛异常 / 撤销不误删更早记录 | 写忽略记录，按差集还原 |

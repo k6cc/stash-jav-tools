@@ -27,6 +27,9 @@
 | 改入库流程 | `FEATURES.md`「入库弹窗 + 演员建档四步」+ `verify_add_to_library.py` |
 | 排查「样式不生效 / 被盖住」 | `PITFALLS.md`「CSS 特异性与源码顺序」「布局与尺寸基线」（先搜 `特异性`、`盖住`、`z-index`） |
 | 排查「Stash 那边行为怪」 | `PITFALLS.md`「Stash 宿主机制」「数据与标识」 |
+| 改总览加载态 / 骨架占位 / 模块刷新 | `PITFALLS.md`「布局与尺寸基线」末两条 + `scripts/probe_overview_placeholder.js` |
+| 改分页 / 「到底了」判定 | `PITFALLS.md`「业务逻辑」`count` 两条 + `scripts/probe_tab_paging.js` |
+| 排查「点了没反应 / 请求太多 / 哪个查询最贵」 | `scripts/probe_req_dist.js`（按查询签名聚合次数与字节） |
 | 跑一轮回归 | `SCRIPTS.md` 按板块挑脚本 |
 
 ## scripts/ 目录
@@ -37,6 +40,8 @@
 ## 实测环境
 
 - 实例 `http://localhost:9999`（登录凭据见 `screenshots/creds.json`，不入库）；演员 **43 = AIKA**（javstash + stashdb 双源）；非本地映射演员用篠田ゆう（javstash）。
+- 库里还有一位同名 **166 = AIKA**，其 stash_id 的 endpoint 存的是短名 `javstash` → 演员页「发现」tab 会一直显示
+  「未关联 stash-box ID」。跑 `probe_tab_paging.js` 时它按「endpoint 是完整 URL」自动挑人，别手选 166。
 - 关联/覆盖实测用临时演员 **97 = ZZ SSD Test（本上花梨）**、**98 = ZZ SSD Test2**，测完已 `performerDestroy` 删除；`preferredBox` 临时改 `stashdb` 后已还原 `javstash.org`（连同 `jackettUrl/jackettApiKey/recentDays:180/previewDays:"7"`）。
 - Jackett 实例：`http://192.168.3.190:9117`（API key 在实例插件设置）。
 - TPDB key：`E:/stashAPP/config.yml` 里该 stash-box 块的 `apikey`；`scripts/probe_tpdb_api.py` 与 `scripts/node_tpdb_harness.js` 都从那里读，不打印。

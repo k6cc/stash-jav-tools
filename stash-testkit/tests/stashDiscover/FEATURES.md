@@ -85,7 +85,7 @@
 - **重复 code 跳过**：开跑前一次 `findScenes(filter:{per_page:-1}){scenes{code}}` 建集合。**别逐条 `q=` 查**：大库里 q= 是模糊匹配，`ABC-123` 会撞上 `ABC-1234`，而且 N 次往返。
 - **失败项留在选择集里**：结束后只清成功项，`SEL.items = failed`，工具栏仍在多选态，原地重试。
 - **`ssd:scene-saved` 必须 bubbles**：`document.dispatchEvent(new CustomEvent(name, {detail}))` 默认 `bubbles: false`，而 discover.js 的两处监听挂在 **window** 上 → 事件根本传不过去。症状：入库成功、toast 正确、卡片不消失。**踩过**，两处派发都补了 `bubbles: true`。
-- **`:local.v1` 给了 10 分钟 TTL**：这份 ownedKeys/linked 快照原先「无 TTL」，只清内存 memo（`invalidateLocalMemos`）不够 —— 下次 ensureData 又把旧快照读回来。现在 `_localDirty` 标记 + TTL 双保险：入库当下立刻重算，隔一次会话也不会拿 stale 数据当准。
+- **本地快照拆两键 + TTL**：`owned.v1`（入库键集合，10 分钟）与 `linked.v1`（库内演员，1 小时）。原先合存在 `:local.v1` 且「无 TTL」，只清内存 memo（`invalidateLocalMemos`）不够 —— 下次 ensureData 又把旧快照读回来。现在 `_localDirty` 标记 + TTL 双保险；拆键是为了大的 owned 写不下时不连累小的 linked（各自还有 1.2M 字符预算，写失败会 `console.warn` 一次）。
 - **实测**：5 卡 → 选 2 → 入库 → t≈6s 时列表降到 3 卡（已入库的消失）、toast「成功 2」；重复入库同一批 → 「成功 0 · 跳过 2」；批量忽略 2 部 → 5→3 卡 → 撤销回 0 条、5 卡。
 - **探针**：`probe_batch_select.js`（进入/点选/全选/批量忽略+撤销/列表模式/退出，忽略记录测完还原）。
 

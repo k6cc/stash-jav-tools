@@ -1107,6 +1107,15 @@
     });
   }
 
+  // SWR 后台刷新：陈旧数据已经在渲染了，这次失败不该弹错、也不该变成
+  // unhandled rejection（控制台一条红字且没有上下文）→ 只留痕，resolve 成 null。
+  function bgRefresh(fn) {
+    return fn().catch(function (e) {
+      console.warn("[SSD] background refresh failed:", (e && e.ssdKind) || e);
+      return null;
+    });
+  }
+
   // 演员侧全量：SWR（stale 先出 + 后台刷新）→ 12h fresh 命中直接用
   function getDiscoverData(opts) {
     opts = opts || {};
@@ -1120,17 +1129,16 @@
           });
         }
       }
-      // SWR：陈旧缓存立刻出，后台静默刷新（不等待）。失败只留痕不弹错——
-      // 这次失败不该影响已经用陈旧数据渲染好的页面；但不接住会变成
-      // unhandled rejection（控制台一条红字，且没有任何上下文）。
-      if (!opts.force && !opts.noStale) {
+      // SWR：陈旧缓存立刻出，后台静默刷新（不等待）。刷新结果挂在 res.refresh
+      // 上由编排层回填界面 —— 只在后台写缓存的话，当前页要重进才更新。
+      if (!opts.force) {
         var stale = cacheReadStale(host, "newScenes");
         if (stale) {
-          refreshDiscover(base, opts).catch(function (e) {
-            console.warn("[SSD] background refresh failed:", (e && e.ssdKind) || e);
-          });
           return loadLinkedOwned(host, base.source.endpoint).then(function (lo) {
-            return buildResult(base, { scenes: stale.scenes, totalSeen: stale.totalSeen, fetchedAt: stale.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "stale");
+            var res = buildResult(base, { scenes: stale.scenes, totalSeen: stale.totalSeen, fetchedAt: stale.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "stale");
+            // 不传 opts：后台刷新不该占限流队头，也不该驱动批量进度文案
+            res.refresh = bgRefresh(function () { return refreshDiscover(base, {}); });
+            return res;
           });
         }
       }
@@ -1196,16 +1204,27 @@
     opts = opts || {};
     return resolveBase().then(function (base) {
       var host = base.source.host;
+      var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
+      function fetchFresh() {
+        return fetchTrendingScenes(box, opts.prio).then(function (scenes) {
+          if (scenes == null) throw { ssdKind: "box", message: "trending fetch failed" };
+          cacheWrite(host, "trending", null, scenes);
+          return buildTrending(base, { fetchedAt: Date.now(), scenes: scenes }, "network");
+        });
+      }
       if (!opts.force) {
         var fresh = cacheRead(host, "trending", null);
         if (fresh) return buildTrending(base, fresh, "fresh");
+        // 与 latest 同款 SWR：先出 7d 内的旧榜，别再空等一次整榜拉取
+        var stale = cacheReadStale(host, "trending");
+        if (stale) {
+          return buildTrending(base, stale, "stale").then(function (res) {
+            res.refresh = bgRefresh(function () { return fetchFresh(); });
+            return res;
+          });
+        }
       }
-      var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
-      return fetchTrendingScenes(box, opts.prio).then(function (scenes) {
-        if (scenes == null) throw { ssdKind: "box", message: "trending fetch failed" };
-        cacheWrite(host, "trending", null, scenes);
-        return buildTrending(base, { fetchedAt: Date.now(), scenes: scenes }, "network");
-      });
+      return fetchFresh();
     });
   }
 
@@ -1250,25 +1269,37 @@
     opts = opts || {};
     return resolveBase().then(function (base) {
       var host = base.source.host;
+      var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
+      function fetchFresh() {
+        return Promise.all([loadFavoriteStudios(base.source.endpoint), loadOwnedKeys()]).then(function (r) {
+          var studios = r[0], ownedKeys = r[1];
+          if (!studios.length) {
+            var emptyEntry = { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: [] };
+            cacheWrite(host, "studios", base.since, []);
+            return buildStudio(base, emptyEntry, "network");
+          }
+          var ids = studios.map(function (s) { return s.stashId; });
+          return fetchStudioScenes(box, ids, base.since, opts.prio).then(function (scenes) {
+            if (scenes == null) throw { ssdKind: "box", message: "studio fetch failed" };
+            cacheWrite(host, "studios", base.since, scenes);
+            return buildStudio(base, { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: scenes, ownedKeys: ownedKeys, studios: studios }, "network");
+          });
+        });
+      }
       if (!opts.force) {
         var fresh = cacheRead(host, "studios", base.since);
         if (fresh) return buildStudio(base, fresh, "fresh");
-      }
-      var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
-      return Promise.all([loadFavoriteStudios(base.source.endpoint), loadOwnedKeys()]).then(function (r) {
-        var studios = r[0], ownedKeys = r[1];
-        if (!studios.length) {
-          var emptyEntry = { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: [] };
-          cacheWrite(host, "studios", base.since, []);
-          return buildStudio(base, emptyEntry, "network");
+        // 这一条以前没有 SWR：缓存一旦不命中就直接空等网络（实测 6s 空白）。
+        // 陈旧读忽略 since —— 换了回看窗口时先出旧窗口的数据，后台刷新回来再纠正。
+        var stale = cacheReadStale(host, "studios");
+        if (stale) {
+          return buildStudio(base, stale, "stale").then(function (res) {
+            res.refresh = bgRefresh(function () { return fetchFresh(); });
+            return res;
+          });
         }
-        var ids = studios.map(function (s) { return s.stashId; });
-        return fetchStudioScenes(box, ids, base.since, opts.prio).then(function (scenes) {
-          if (scenes == null) throw { ssdKind: "box", message: "studio fetch failed" };
-          cacheWrite(host, "studios", base.since, scenes);
-          return buildStudio(base, { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: scenes, ownedKeys: ownedKeys, studios: studios }, "network");
-        });
-      });
+      }
+      return fetchFresh();
     });
   }
 
@@ -1423,6 +1454,10 @@
     search: "", page: 1,
     boxes: [],        // 已配置 stash-box（数据源下拉）
     refreshing: false,
+    // 本轮刷新的进度与结果（页头文案 + 模块降暗都读这三个）
+    refreshKeys: [],     // 本轮要重取的数据集（固定四个：刷新语义就是整页重拉）
+    refreshPending: null, // 还没落地的数据集标记；null = 不在刷新中
+    refreshNote: null,   // 页头后缀 { text, until, fail }
     followOpenKey: null, // 关注分组展开态（会话级；单一 key = 手风琴，最多展开一位）
     perfGroup: null,  // 演员过滤视图：actorsWithNew 分组引用
     perfFrom: null,   // 进入演员过滤视图前的来源视图（返回按钮回到这里）
@@ -1902,6 +1937,87 @@
     return b;
   }
 
+  // ── 刷新反馈：页头文案 + 模块降暗（用户 2026-11-15）─────────────────────
+  // 主动刷新不清卡：卡片降到半透明 + 图标转圈，数据集落地就整块亮回来。
+  // 页头同时给出进度（2/4）和本轮结果（+3 / 无新增 / 2/4 失败）。
+  var REFRESH_NOTE_MS = 10000;
+  var _noteTimer = 0;
+
+  // 场景 id 集合：三个场景数据集内容结构不同，统一摊成 { id: 1 } 才能做差集
+  // （trendingPerf 是演员榜，不是场景，不参与新增计数）
+  function sceneIdsOf(list) {
+    var out = {};
+    (list || []).forEach(function (it) {
+      var id = it && it.scene && it.scene.id;
+      if (id != null) out[String(id)] = 1;
+    });
+    return out;
+  }
+  function datasetSceneIds(k, d) {
+    if (!d) return null;
+    if (k === "latest") {
+      var out = sceneIdsOf(d.latest);
+      var pv = sceneIdsOf(d.preview);
+      Object.keys(pv).forEach(function (id) { out[id] = 1; });
+      (d.actorsWithNew || []).forEach(function (g) {
+        var s = sceneIdsOf(g && g.items);
+        Object.keys(s).forEach(function (id) { out[id] = 1; });
+      });
+      return out;
+    }
+    if (k === "trending" || k === "studios") return sceneIdsOf(d.items);
+    return null;
+  }
+
+  function fmtClock(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function refreshDoneCount() {
+    var keys = _dp.refreshKeys || [], pend = _dp.refreshPending, n = 0;
+    keys.forEach(function (k) { if (!pend || !pend[k]) n++; });
+    return n;
+  }
+
+  // 页头状态文字的唯一出口：syncChrome 与每分钟的相对时间定时器都走它，
+  // 两处各写一份必然互相覆盖。
+  function statusText() {
+    if (_dp.refreshing) {
+      var keys = _dp.refreshKeys || [];
+      return tc("更新中 " + refreshDoneCount() + "/" + keys.length,
+        "Updating " + refreshDoneCount() + "/" + keys.length);
+    }
+    var base = relTime(_dp.fetchedAt);
+    var note = _dp.refreshNote;
+    // 失败类不带 until（常驻到下次成功），结果类 10 秒后自动退回纯时间
+    if (!note || (note.until && Date.now() > note.until)) return base;
+    return base + " · " + note.text;
+  }
+
+  function clearNoteTimer() {
+    if (_noteTimer) { clearTimeout(_noteTimer); _noteTimer = 0; }
+  }
+  function setRefreshNote(note) {
+    clearNoteTimer();
+    _dp.refreshNote = note;
+    if (note && note.until) {
+      _noteTimer = setTimeout(function () {
+        _noteTimer = 0;
+        _dp.refreshNote = null;
+        syncChrome();
+      }, REFRESH_NOTE_MS);
+    }
+  }
+  // 失败后缀要留到恢复为止：模块内错误框被重试掉了，页头就不该还挂着「2/4 失败」
+  function clearFailNoteIfRecovered() {
+    if (!_dp.refreshNote || !_dp.refreshNote.fail) return;
+    var anyErr = Object.keys(_dp.err || {}).some(function (k) { return !!_dp.err[k]; });
+    if (!anyErr) setRefreshNote(null);
+  }
+
   // ── 数据编排（渐进加载：每个数据集到达即重渲染）──────────────────────────
   var DATASETS = {
     latest: function (o) { return getDiscoverData(o); },
@@ -1926,7 +2042,10 @@
   // 每次发起领一个号：新的接管后，旧请求回来只丢弃、不覆盖状态。
   // 否则"重试 → 旧请求超时回来 → 界面又跳回错误"。
   var _dataSeq = {};
-  function ensureData(keys, force, prio) {
+  // quiet：force 重取时不立刻把模块换成骨架。刷新要用它 —— 换成骨架会让文档
+  // 变矮，滚在底部的人被浏览器钳回顶部（骨架比真实卡片矮），而重试必须立刻有
+  // 反馈（错误框原地停着看起来就像点了没反应）。
+  function ensureData(keys, force, prio, quiet) {
     var started = false;
     keys.forEach(function (k) {
       if (!DATASETS[k]) return;
@@ -1945,19 +2064,33 @@
         if (k === "latest") _dp.progress = null;
         _dp.fetchedAt = Math.max(_dp.fetchedAt, r.fetchedAt || 0);
         if (k === "latest") { _dp.boxes = r.boxes || []; syncSourceSelect(); }
+        // 本轮刷新记账要在 syncChrome 之前（afterDataset 里就会读进度和文案）
+        if (_dp.refreshPending) delete _dp.refreshPending[k];
+        clearFailNoteIfRecovered();
         emitUnread();
         afterDataset(k);
+        // SWR：陈旧缓存先出，后台那次拉取的结果挂在这里回填。不回填的话界面
+        // 一直停在旧数据 —— 后台确实写进了缓存，但当前页要重进才看得到。
+        if (r.refresh) r.refresh.then(function (fresh) {
+          // 期间点了刷新 / 重试就作废：那一轮有自己的 seq，别用旧的盖新的
+          if (!fresh || _dataSeq[k] !== seq) return;
+          _dp.d[k] = fresh;
+          _dp.fetchedAt = Math.max(_dp.fetchedAt, fresh.fetchedAt || 0);
+          if (k === "latest") { _dp.boxes = fresh.boxes || []; syncSourceSelect(); }
+          afterDataset(k);
+        });
       }).catch(function (e) {
         if (_dataSeq[k] !== seq) return;
         _dp.loading[k] = false;
         if (k === "latest") _dp.progress = null;
         _dp.err[k] = e;
+        if (_dp.refreshPending) delete _dp.refreshPending[k];
         afterDataset(k);
       });
     });
     // 重试要立刻有反馈：以前只清 err 不重绘，错误框会原地停到下次超时，
     // 看起来就是"点了重试毫无反应"（用户 2026-11-12）
-    if (started && force) {
+    if (started && force && !quiet) {
       var patched = false;
       keys.forEach(function (k) { if (refreshModules([k])) patched = true; });
       if (!patched) render();
@@ -1971,9 +2104,46 @@
     studios: ["studios"],
     trendingPerf: ["performers"],
   };
+  // 反查：一个模块要等它依赖的数据集全部落地才亮。「发现演员」同时吃 latest 和
+  // trendingPerf —— 只按 MODULES_OF_DATASET 的话，latest 一到它就跟着亮了，但榜还
+  // 没回来（实测 latest 1s、trendingPerf 4.6s，会亮 3 秒多才回填）。
+  var MODULE_DEPS = {
+    actors: ["latest"], latest: ["latest"], preview: ["latest"],
+    performers: ["latest", "trendingPerf"],
+    trending: ["trending"], studios: ["studios"],
+  };
+  function moduleWaiting(mod) {
+    var pend = _dp.refreshPending;
+    if (!pend) return false;
+    var deps = MODULE_DEPS[mod] || [];
+    for (var i = 0; i < deps.length; i++) if (pend[deps[i]]) return true;
+    return false;
+  }
+  // 刷新中：总览按模块降暗（各模块等自己的数据集），钻取/列表视图没有模块头，
+  // 整片降暗。设置与已忽略管理不是数据视图，别把它们糊成半透明。
+  var DATA_VIEWS = {
+    latest: 1, preview: 1, trending: 1, studios: 1, follow: 1,
+    performers: 1, perfFilter: 1, studioFilter: 1,
+  };
+  function syncBusyMarks() {
+    var c = _dp.refs.content;
+    if (!c) return;
+    var on = !!(_dp.refreshing && _dp.refreshPending);
+    if (_dp.view !== "overview") {
+      c.classList.toggle("is-refreshing", on && !!DATA_VIEWS[_dp.view]);
+      return;
+    }
+    c.classList.remove("is-refreshing");
+    c.querySelectorAll(".ssd-dp-sec[data-mod]").forEach(function (s) {
+      s.classList.toggle("is-busy", on && moduleWaiting(s.getAttribute("data-mod")));
+    });
+  }
 
   function afterDataset(k) {
     syncChrome();
+    // 当前视图用不到这条数据（刷新会顺带拉另外几个数据集）：只更新页头，
+    // 别整页重建 —— 重建会把当前视图的卡片全部重做，封面重新解码
+    if (viewDataKeys(_dp.view).indexOf(k) < 0) return;
     if (refreshModules([k])) return;
     render();
   }
@@ -1989,6 +2159,10 @@
       (MODULES_OF_DATASET[k] || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
     });
     var done = 0;
+    // 换模块会把卡片重建一遍：新 img 解码前卡高是矮的，文档瞬时变短，浏览器就把
+    // 滚到底的人钳回顶部（实测 scrollTop 765→390→0，而 JS 一次都没写过它）。
+    // 建完把位置写回去，下一帧再兜一次 —— 封面解码是在本任务之后才完成的。
+    var keepY = pageScrollTop();
     ids.forEach(function (id) {
       if (!moduleShown(id)) return;
       var old = c.querySelector('.ssd-dp-sec[data-mod="' + id + '"]');
@@ -1998,6 +2172,12 @@
       old.parentNode.insertBefore(holder, old);
       old.parentNode.removeChild(old);
       renderModule(id, holder, rows);
+      // 本轮刷新里「要等的东西已经到齐」的模块淡入回全亮；还要继续等的（发现演员
+      // 等 trendingPerf）不加 —— 动画会盖掉 is-busy 的半透明，让它提前亮起来
+      if (_dp.refreshPending && !moduleWaiting(id)) {
+        var made = holder.querySelector(".ssd-dp-sec");
+        if (made) made.classList.add("ssd-sec-brighten");
+      }
       var p = holder.parentNode;
       while (holder.firstChild) p.insertBefore(holder.firstChild, holder);
       p.removeChild(holder);
@@ -2007,6 +2187,11 @@
     SSD.layoutCardGrid();
     applySelMarks();
     if (_dp.sel.on) syncSelBar();
+    setPageScrollTop(keepY);
+    // 刚重建的模块是新元素、没有 is-busy：「发现演员」要等 trendingPerf 时得把它
+    // 重新标回降暗态，否则会在数据没到之前先亮一下
+    syncBusyMarks();
+    requestAnimationFrame(function () { setPageScrollTop(keepY); });
     return true;
   }
 
@@ -2029,12 +2214,24 @@
     return tc("加载中… 已拉取 " + p.done + "/" + p.total + " 批",
       "Loading… " + p.done + "/" + p.total + " batches");
   }
+  // 等这些数据集全部落地再回调。两条出口（都落地 / 60s 兜底）只能走一次，且都要
+  // 把另一条清掉：兜底定时器不清的话，一分钟后又把 cb 跑一遍 —— 那次整页重绘就是
+  // 「刷新完一直没动，过 1 分钟页面自己跳回顶部」的来源（实测：加载完 30s 后滚到底，
+  // 61s 时 scrollTop 2043→0，而此时文档高度没变）。
   function pollSettled(keys, cb) {
+    var done = false;
     var t = setInterval(function () {
       var busy = keys.some(function (k) { return _dp.loading[k]; });
-      if (!busy) { clearInterval(t); cb(); }
+      if (!busy) finish();
     }, 150);
-    setTimeout(function () { clearInterval(t); cb(); }, 60000); // 兜底
+    var bail = setTimeout(finish, 60000);
+    function finish() {
+      if (done) return;
+      done = true;
+      clearInterval(t);
+      clearTimeout(bail);
+      cb();
+    }
   }
   // 源错误 → 具体原因（用户 2026-10-26：不再只显示 Unknown error）
   var ERR_KIND_TEXT = {
@@ -3199,7 +3396,7 @@
     var prev = el("button", "ssd-dp-pg", "‹");
     prev.type = "button";
     prev.disabled = _dp.page <= 1;
-    prev.addEventListener("click", function () { _dp.page--; render(); });
+    prev.addEventListener("click", function () { _dp.page--; render({ top: true }); });
     pg.appendChild(prev);
     var s = Math.max(1, _dp.page - 2), e = Math.min(totalPages, s + 4);
     if (e - s < 4) s = Math.max(1, e - 4);
@@ -3207,14 +3404,14 @@
       (function (pn) {
         var b = el("button", "ssd-dp-pg" + (pn === _dp.page ? " on" : ""), String(pn));
         b.type = "button";
-        b.addEventListener("click", function () { _dp.page = pn; render(); });
+        b.addEventListener("click", function () { _dp.page = pn; render({ top: true }); });
         pg.appendChild(b);
       })(p);
     }
     var next = el("button", "ssd-dp-pg", "›");
     next.type = "button";
     next.disabled = _dp.page >= totalPages;
-    next.addEventListener("click", function () { _dp.page++; render(); });
+    next.addEventListener("click", function () { _dp.page++; render({ top: true }); });
     pg.appendChild(next);
     return pg;
   }
@@ -6090,17 +6287,58 @@
     var now = Date.now();
     if (now - (_dp.lastRefreshAt || 0) < 2000) return;
     _dp.lastRefreshAt = now;
+    // 刷新按钮在页头、每个视图都在，语义是「重拉整页」：四个数据集一起重取
+    // （refreshAll 会清掉这个源的全部缓存，只重取当前视图会让切过去时全变冷），
+    // 但只重画当前视图。
+    var keys = viewDataKeys("overview");
+    // 新增计数要拿刷新前的快照比。内存里没有旧数据（首次进入直接点刷新）就没法
+    // 算差值 —— 那时候按空集合比会得到「+187」这种荒谬数字，所以只显示时间。
+    var oldIds = {}, hasOld = false;
+    ["latest", "trending", "studios"].forEach(function (k) {
+      var ids = datasetSceneIds(k, _dp.d[k]);
+      if (ids) { oldIds[k] = ids; hasOld = true; }
+    });
     _dp.refreshing = true;
-    render();
+    _dp.refreshKeys = keys;
+    _dp.refreshPending = {};
+    keys.forEach(function (k) { _dp.refreshPending[k] = true; });
+    setRefreshNote(null);
+    // 不清卡、不重建：卡片降到半透明 + 模块图标转圈，数据集一到就整块亮回来。
+    // 重建会把 content 清空，用户正看到一半就被拽回顶部（主动点刷新时人都在页头，
+    // 但滚下去看进度时被拽回来一样难受）。
+    syncChrome();
     refreshAll().then(function () {
-      var keys = viewDataKeys("overview");
-      _dp.d = {}; _dp.err = {}; _dp.fetchedAt = 0;
-      ensureData(keys, true);
-      pollSettled(keys, function () { _dp.refreshing = false; render(); });
+      ensureData(keys, true, false, true);
+      pollSettled(keys, function () {
+        _dp.refreshing = false;
+        _dp.refreshPending = null;
+        // 确实没拿到的：摘掉旧数据，模块换成「错误 + 重试」—— 留着旧数据的话
+        // 用户看到的全是旧的，却以为刚刷新过
+        var failed = 0;
+        keys.forEach(function (k) { if (_dp.err[k]) { failed++; delete _dp.d[k]; } });
+        if (failed) {
+          // 异常优先于新增数，且常驻到下一次全部成功（模块内错误框被重试掉时一并清）
+          setRefreshNote({ text: tc(failed + "/" + keys.length + " 失败", failed + "/" + keys.length + " failed"), fail: true });
+        } else if (hasOld) {
+          var added = 0;
+          ["latest", "trending", "studios"].forEach(function (k) {
+            var nowIds = datasetSceneIds(k, _dp.d[k]), before = oldIds[k];
+            if (!nowIds || !before) return;
+            Object.keys(nowIds).forEach(function (id) { if (!before[id]) added++; });
+          });
+          setRefreshNote({ text: added ? "+" + added : tc("无新增", "no new"), until: Date.now() + REFRESH_NOTE_MS });
+        }
+        // 各模块在数据集落地时就地换过了（afterDataset → refreshModules），收尾
+        // 再整页重建只会让最后一批卡片多闪一次；总览只补页头状态。
+        if (_dp.view === "overview") syncChrome();
+        else render();
+      });
     }).catch(function (e) {
+      // 配置都取不到（没配源 / 配置查询失败）时，旧内容还能看：别清屏，抛 toast
       _dp.refreshing = false;
-      _dp.err.latest = e;
-      render();
+      _dp.refreshPending = null;
+      syncChrome();
+      SSD.toast(errText(e), { duration: 6000 });
     });
   }
 
@@ -6243,11 +6481,27 @@
     });
   }
 
-  function render() {
+  // 整页重建的第一句是 c.innerHTML=""，文档在那瞬间塌到只剩页头，浏览器立刻把
+  // scrollTop 钳到 0 —— 之后内容补回来也不会自己恢复。所以同视图重建前记一次、
+  // 建完写回去；换视图本就该回顶部（switchView / ?view= 会显式滚），不记。
+  var _renderedView = "";
+  function pageScrollTop() {
+    var s = document.scrollingElement || document.documentElement;
+    return (s && s.scrollTop) || 0;
+  }
+  function setPageScrollTop(y) {
+    var s = document.scrollingElement || document.documentElement;
+    if (s && s.scrollTop !== y) s.scrollTop = y;
+  }
+
+  function render(opts) {
     var refs = _dp.refs;
     if (!refs.content) return;
     syncChrome();
-    renderContent();
+    renderContent(opts);
+    // 刚建出来的模块要补刷新态：syncChrome 跑在 renderContent 之前，那时还没有
+    // 这些节点（刷新中切回总览，会看到模块全亮着却写着「更新中」）
+    syncBusyMarks();
   }
 
   // follow tab 红点：原实现只在「有事件到达」时挂/摘，页面重建 tabs 或事件
@@ -6296,10 +6550,17 @@
             tc("源", "DS") + "<b>" + srcName + "</b></span>";
       }
     }
-    // 窄屏刷新反馈：状态文字变「更新中…」+ 标题图标旋转（用户 2026-10-27）
+    // 窄屏刷新反馈：状态文字带本轮进度（更新中 2/4），刷新结束后短暂显示本轮
+    // 结果（+3 / 无新增）或常驻失败数（用户 2026-11-15）
     if (refs.updated) {
-      refs.updated.textContent = _dp.refreshing ? tc("更新中…", "Updating…") : relTime(_dp.fetchedAt);
+      refs.updated.textContent = statusText();
       refs.updated.setAttribute("aria-busy", _dp.refreshing ? "true" : "false");
+      // 悬停可核验：文案只说「刚刚」，到底几点刷的靠这行，用户怀疑没刷新时能自己查
+      if (_dp.fetchedAt) {
+        refs.updated.title = tc("上次刷新 " + fmtClock(_dp.fetchedAt), "Last refresh " + fmtClock(_dp.fetchedAt));
+      } else {
+        refs.updated.removeAttribute("title");
+      }
     }
     if (refs.title) {
       var tsvg = refs.title.querySelector("svg");
@@ -6347,11 +6608,17 @@
     }
     // 控件组的显隐（滑块/数据源）会改宽度 → 重新判定筛选行要不要收起
     syncToolbar();
+    // 刷新中的降暗/转圈跟着页头一起刷：总览按模块、其他视图整片
+    syncBusyMarks();
   }
 
-  function renderContent() {
+  // opts.top：换页这种「明确换一屏」的重建，建完回顶部（与以前被钳到 0 的观感一致）
+  function renderContent(opts) {
     var c = _dp.refs.content;
     if (!c) return;
+    var wantTop = !!(opts && opts.top);
+    var keepY = wantTop || _dp.view !== _renderedView ? 0 : pageScrollTop();
+    _renderedView = _dp.view;
     c.innerHTML = "";
     ensureData(viewDataKeys(_dp.view));
     // 没配 stash-box 是全局状态：原先 6 个模块各挂一条「未配置」+ 重试，一屏
@@ -6377,6 +6644,7 @@
       nbActs.appendChild(nbSet);
       nb.appendChild(nbActs);
       c.appendChild(nb);
+      setPageScrollTop(keepY);
       return;
     }
     switch (_dp.view) {
@@ -6394,6 +6662,7 @@
     // 多选态跨渲染保持：切网格/列表、批量入库后列表刷新都要重新打标记
     applySelMarks();
     if (_dp.sel.on) syncSelBar();
+    setPageScrollTop(keepY);
   }
 
   // 入库后：失效本地 memo（ownedKeys 变了）→ 重算当前视图的数据集。
@@ -6460,9 +6729,10 @@
     });
     // 每秒巡检一次 location.search：导航角标带 ?view=follow 进入时切到关注视图
     setInterval(syncViewFromLocation, 1000);
-    // 相对时间每分钟自刷新
+    // 相对时间每分钟自刷新（走 statusText：刷新中/结果后缀也由它统一出口，
+    // 直接写 relTime 会把「+3 / 2 个失败」抹掉）
     setInterval(function () {
-      if (_dp.refs.updated) _dp.refs.updated.textContent = relTime(_dp.fetchedAt);
+      if (_dp.refs.updated) _dp.refs.updated.textContent = statusText();
     }, 60000);
   }
 

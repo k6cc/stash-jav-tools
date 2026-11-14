@@ -1912,6 +1912,8 @@
   font-weight: 650;
   color: var(--sx-hi);
   display: inline-flex;
+  /* 刷新图标的转圈图案用绝对定位盖在原图标上，需要这个参照 */
+  position: relative;
   /* 基线对齐而不是居中：标题右侧还有「0 位演员 · 回看 30 天」这类小字，
      只有按文字基线对齐才看着是一行（用户 2026-10-27 反馈错位）。 */
   align-items: baseline;
@@ -1919,18 +1921,63 @@
   margin: 0;
 }
 
-.ssd-dp-sec-title svg { width: 1em; height: 1em; color: var(--sx-acc); align-self: center; }
+.ssd-dp-sec-title svg {
+  width: 1em; height: 1em; align-self: center;
+  color: var(--ssd-mod-c, var(--sx-acc));
+  transition: opacity .18s;
+}
+
+/* 模块刷新中：原图标淡出，同位置换成模块色的散射条纹圈（用户 2026-11-15）。
+   条纹用 repeating-conic 叠 mask 裁成环 —— 12 段由亮到淡，转起来就是加载圈，
+   不用额外图标资源，颜色直接吃上面的 --ssd-mod-c。 */
+.ssd-dp-sec-title::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 50%;
+  width: 1em; height: 1em;
+  margin-top: -0.5em;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  background: repeating-conic-gradient(from 0deg,
+    var(--ssd-mod-c, var(--sx-acc)) 0deg 8deg,
+    color-mix(in srgb, var(--ssd-mod-c, var(--sx-acc)) 30%, transparent) 10deg 22deg,
+    transparent 24deg 30deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent 58%, #000 59%);
+  mask: radial-gradient(farthest-side, transparent 58%, #000 59%);
+  transition: opacity .18s;
+}
+.ssd-dp-sec.is-busy .ssd-dp-sec-title::before {
+  opacity: 1;
+  animation: ssd-mod-spin .8s linear infinite;
+}
+.ssd-dp-sec.is-busy .ssd-dp-sec-title svg { opacity: 0; }
+@keyframes ssd-mod-spin { to { transform: rotate(360deg); } }
 
 /* ─── 总览模块标题图标配色（用户 2026-10-27）─────────────────────────────
    与主 tab 图标同一套色相，扫读时「关注/最新/热门」在页面上下能对应起来。
    同样与 --sx-tx1b mixed 一次，深浅主题自动适配，不写死亮度。
-   「即将发布」无对应 tab，取唯一剩余的蓝（未来感），与热门橙拉开距离。 */
-.ssd-dp-sec[data-mod="actors"] .ssd-dp-sec-title svg     { color: color-mix(in srgb, #f472b6 78%, var(--sx-tx1b)); }
-.ssd-dp-sec[data-mod="latest"] .ssd-dp-sec-title svg     { color: color-mix(in srgb, #34d399 78%, var(--sx-tx1b)); }
-.ssd-dp-sec[data-mod="trending"] .ssd-dp-sec-title svg   { color: color-mix(in srgb, #fb923c 78%, var(--sx-tx1b)); }
-.ssd-dp-sec[data-mod="preview"] .ssd-dp-sec-title svg    { color: color-mix(in srgb, #60a5fa 78%, var(--sx-tx1b)); }
-.ssd-dp-sec[data-mod="studios"] .ssd-dp-sec-title svg    { color: color-mix(in srgb, #22d3ee 78%, var(--sx-tx1b)); }
-.ssd-dp-sec[data-mod="performers"] .ssd-dp-sec-title svg { color: color-mix(in srgb, #a78bfa 78%, var(--sx-tx1b)); }
+   「即将发布」无对应 tab，取唯一剩余的蓝（未来感），与热门橙拉开距离。
+   定义成变量：原图标（svg）和刷新用的转圈图案（::before）共用同一色。 */
+.ssd-dp-sec[data-mod="actors"]     { --ssd-mod-c: color-mix(in srgb, #f472b6 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="latest"]     { --ssd-mod-c: color-mix(in srgb, #34d399 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="trending"]   { --ssd-mod-c: color-mix(in srgb, #fb923c 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="preview"]    { --ssd-mod-c: color-mix(in srgb, #60a5fa 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="studios"]    { --ssd-mod-c: color-mix(in srgb, #22d3ee 78%, var(--sx-tx1b)); }
+.ssd-dp-sec[data-mod="performers"] { --ssd-mod-c: color-mix(in srgb, #a78bfa 78%, var(--sx-tx1b)); }
+
+/* 刷新中：本模块的卡片降到半透明（标题行不降，图标在那转）。
+   数据集落地时整块重建 → 新元素没有 is-busy，同时挂 ssd-sec-brighten 淡入回来。 */
+.ssd-dp-sec.is-busy > *:not(.ssd-dp-sec-head) { opacity: .5; }
+@keyframes ssd-sec-brighten { from { opacity: .5; } }
+.ssd-dp-sec.ssd-sec-brighten > *:not(.ssd-dp-sec-head) { animation: ssd-sec-brighten .22s ease-out; }
+/* 钻取视图没有模块头，刷新中整片降暗 */
+.ssd-dp-content.is-refreshing > * { opacity: .5; transition: opacity .2s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ssd-dp-sec.is-busy .ssd-dp-sec-title::before { animation: none; }
+  .ssd-dp-sec.ssd-sec-brighten > *:not(.ssd-dp-sec-head) { animation: none; }
+}
 
 .ssd-dp-sec-count { font-size: 12px; color: var(--sx-tx2); }
 

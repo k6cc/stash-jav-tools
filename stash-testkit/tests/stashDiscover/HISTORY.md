@@ -182,3 +182,21 @@
 - 实测：19 张卡 × 三档最高 24px、越界 0；大档 28px；480/360 屏无横向溢出；单行 12px 与改前一致。
   坑：本机的工作室名被 peekaboo 换成假名且持续改写，验证角标排版前先关遮挡（`Shift+Alt+B` / 导航栏眼睛按钮）
   或把测试节点放进 Shadow DOM。
+
+## v2.8.4：隐藏工作室角标失效 / Whisparr 标题闪烁（v2.8.3 → 2.8.4，2026-11-15）
+
+- **「隐藏」档失效是 v2.8.3 自己引入的，与主题无关**：两行截断那条
+  `.ssd-dp-page .ssd-card-grid .studio-overlay{display:-webkit-box}` 与隐藏那条
+  `[data-studio-badge="none"] .studio-overlay{display:none}` 同为 (0,3,0)，clamp 写在后面就赢了
+  （`getComputedStyle().display` 得到 `flow-root`，Chrome 对 `-webkit-box` 的计算值）。位置三档是 (0,4,0)
+  所以照常生效 —— 正好对上「只有隐藏不动、位置能改」。Flexoki 对 `.studio-overlay` 只有 (0,2,0) 的
+  `display:flex`，压不过，两个主题纯背锅。修法：clamp 两条加 `:not([data-studio-badge="none"])`，
+  隐藏那条加 `display:none !important`。
+- **设置页 Whisparr 标题一闪而过**：显隐要等 `runPluginOp("whisparr_profiles")` 的 `configured`，
+  旧写法首次先画标题 + 「读取中…」，结果回来发现没配置再 `display:none`。改成未取到结果时整组留空 +
+  `display:none`，只有点「重试」才画「读取中…」。代价是配了 Whisparr 的人等一次请求才看到这一组
+  （后插入而非闪烁）。
+- 实测：本地 Flexoki 四档逐个切、禁用第三方 CSS 模拟原生，19 卡全对；偏好设隐藏后主页面 19 卡与弹层 6 卡
+  `display:none`；NAS（stashui）24 卡全隐藏；时长角标不受影响。闪烁对照：包装 `runPluginOp` 返回
+  `configured:false`、延迟 900ms，旧文件 60ms 时 `flex` + 「Whisparr | 推送质量档案 | 读取中…」，
+  新文件同条件 `display:none`、`innerHTML` 长度 0、标题插入 0 次。

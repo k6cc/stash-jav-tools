@@ -212,7 +212,9 @@ pathname 没变，Stash 路由认为没动，卡片 DOM 不重建。
   （不硬编码 720p/1080p）；值存 `prefs.whisparrProfile`（档案 id）；空 = 自动 → `Any` → id 最小。
   找不到用户选的那个（改名/删档）按同一回退，并在 toast 里写明用了哪个。
 - **显隐**：Whisparr 未配置时整组不显示（与场景弹窗那颗按钮同判据）；接口失败则显示并给「重试」，
-  不整组消失。
+  不整组消失。**首次打开设置页时整组先留空**（`_wsp.fetched` 未知 → `display:none` 不画任何东西），
+  结果回来才决定显隐 —— 否则未配置 Whisparr 的人会看到标题闪一下（2026-11-15）。只有用户点「重试」
+  才显示「读取中…」。
 - **实测**（假 Whisparr + 真 Stash 页面）：
   - 下拉渲染：`自动（Any）| 1:Any | 3:HD-720p | 4:HD-1080p | 15:JAV (allow Unknown)`
   - 选中 4 → `localStorage SSD:dp:prefs.whisparrProfile === "4"`；归零后可回到 `""`

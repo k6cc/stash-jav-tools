@@ -117,6 +117,18 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   更靠后的 `.ssd-dp-modal` 同特异性改回 760。（第二轮）
 - **判断「元素看不见」不要只看 `getComputedStyle`**（全是 visible / opacity 1），用
   `document.elementFromPoint(中心)` 看实际命中谁 —— 重叠、遮挡一眼就出来。（第二轮）
+- **「隐藏」被自己的「两行截断」盖掉（v2.8.3 回归）**：`.ssd-dp-page[data-studio-badge="none"]
+  .studio-overlay{display:none}` 与 clamp 用的 `.ssd-dp-page .ssd-card-grid .studio-overlay
+  {display:-webkit-box}` 同为 (0,3,0)，clamp 那条写在后面 → 隐藏整条失效。
+  **症状极易误判成主题兼容问题**：位置能改（`tl`/`bl` 规则特异性更高）只有隐藏不动。实测
+  Flexoki 与 stashui 两个主题都只是背锅 —— 它们对 `.studio-overlay` 只写 `display:flex` 这类
+  (0,2,0)，本来就压不过。(0,3,0) 那条。
+  判据：`getComputedStyle(el).display` 拿到 `flow-root` / `-webkit-box` 而不是 `none`（Chrome 把
+  `display:-webkit-box` 算成 `flow-root`，别以为看错了）。排查手法：遍历 `document.styleSheets`，
+  带 `ruleIndex` 打印所有含该类的规则，相邻两条同特异性一眼就看到谁在后面。
+  修法两件事：clamp 那条加 `:not([data-studio-badge="none"])`；隐藏那条加 `!important`
+  （主题也会写 `display:flex`，开关要有最终话事权）。弹层 `.ssd-dp-modal-scenes` 走同一套规则，
+  它读的是**已保存的偏好**而不是页面上临时改的属性。（2026-11-15）
 
 ## 布局与尺寸基线
 
@@ -533,3 +545,16 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   （刷新中的 `is-busy`）不能只写在 syncChrome 里 —— 那一刻节点还不存在。实测刷新中切回总览：
   文案「更新中 0/4」、六个模块全亮、`is-busy` 计数 0。修法是在 renderContent 之后再补一次
   状态刷新（`syncBusyMarks()`），别指望 syncChrome 兜住。
+
+## 异步决定显隐的设置组：首次别先画再撤
+
+- Whisparr 组的显隐取决于 `runPluginOp` 回来的 `configured`。旧写法让 `paint()` 先画标题 +
+  「读取中…」，结果回来发现没配置再 `display:none` —— 未配置的人看到标题一闪而过
+  （用户 2026-11-15 在 NAS 端发现；本机配了 Whisparr 所以从没暴露）。
+- 修法：`_wsp.fetched === false` 且不是用户点「重试」时，整组留空 + `display:none`；
+  `paint(true)` 只给重试用，才画「读取中…」。
+- 实测（包装 `runPluginOp` 返回 `configured:false`、延迟 900ms）：新版 60ms 时
+  `display:none`、`innerHTML` 长度 0、MutationObserver 记录 h3 插入 0 次；换回旧文件同条件
+  60ms 时 `display:flex` + 「Whisparr | 推送质量档案 | 读取中…」，约 1s 后变 none。
+- 代价：配置了 Whisparr 的人要等一次请求才看到这一组（Whisparr 连不上时实测 2.4s），
+  是事后插入而非闪烁；同一页面会话内 `_wsp` 有缓存，第二次进设置页不再等。

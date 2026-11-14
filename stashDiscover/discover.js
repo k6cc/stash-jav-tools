@@ -5349,9 +5349,14 @@
 
   function fillWhisparrSettings(host) {
     if (!host) return;
-    function paint() {
+    // showLoading：只有用户点「重试」才画「读取中…」。首次打开设置页还不知
+    // 有没有配置 Whisparr，整组先留空 —— 否则未配置它的人会先看到标题再被
+    // 撤走（用户 2026-11-15）。代价是配置了 Whisparr 的人要等一次请求才看到
+    // 这一组，插入而非闪烁。
+    function paint(showLoading) {
       host.innerHTML = "";
       if (_wsp.fetched && !_wsp.configured) { host.style.display = "none"; return; }
+      if (!_wsp.fetched && !showLoading) { host.style.display = "none"; return; }
       host.style.display = "";
       host.appendChild(el("h3", "ssd-dp-set-h", "Whisparr"));
       var box = el("div", "ssd-dp-set-box");
@@ -5369,7 +5374,7 @@
         retry.type = "button";
         retry.addEventListener("click", function () {
           _wsp.fetched = false;
-          paint();
+          paint(true);
           loadWhisparrProfiles(paint);
         });
         row.appendChild(retry);

@@ -716,14 +716,20 @@
    拉成整行宽；top 与 bottom 同时有值时高度同理被撑满。其三档内缩
    （6 / 大档 8 / ≤480 4px）跟随各自的原生贴边规则，见下面各处。 */
 .ssd-dp-page[data-studio-badge="none"] .studio-overlay,
-.ssd-dp-modal-scenes[data-studio-badge="none"] .studio-overlay { display: none; }
+.ssd-dp-modal-scenes[data-studio-badge="none"] .studio-overlay {
+  /* 加 important：主题与其它插件也会写 `.grid-card .studio-overlay { display: flex }`
+     这类可见性规则（实测 Flexoki 就有），隐藏必须是这个开关的最终话事人。 */
+  display: none !important;
+}
 /* 名字最多两行，超出省略号（用户 2026-11-15）。行数截断必须落在真正装文字的元素上：
    原生把名字包在 inline-block 的 <a> 里，父 div 只有一个原子子盒，clamp 不到内部的行。
    两处都写，卡片有没有那层 <a> 都截得住。
    高度也得放回自动：原生 `height:10%` 是单行的高度，配合下面的 overflow:hidden 会把
-   第二行直接裁掉（省略号都看不到）；左下还需要它来自下而上长高，不然溢出封面。 */
-.ssd-dp-page .ssd-card-grid .studio-overlay,
-.ssd-dp-modal-scenes .ssd-card-grid .studio-overlay,
+   第二行直接裁掉（省略号都看不到）；左下还需要它来自下而上长高，不然溢出封面。
+   `:not(none)` 不能省：clamp 要 `display: -webkit-box`，与上面那条同特异性、位置在后，
+   会盖掉「隐藏」（v2.8.3 就是这样让隐藏失效的）。 */
+.ssd-dp-page:not([data-studio-badge="none"]) .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes:not([data-studio-badge="none"]) .ssd-card-grid .studio-overlay,
 .ssd-dp-page .ssd-card-grid .studio-overlay > a,
 .ssd-dp-modal-scenes .ssd-card-grid .studio-overlay > a {
   display: -webkit-box;

@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.0";
+  var PLUGIN_VERSION = "2.8.1";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -1087,6 +1087,15 @@
     return localDateStr(new Date(Date.now() + previewDays * 86400000));
   }
 
+  // 窗口下界（推给源的 date 条件）。比客户端窗口多留一天：源只认 GREATER_THAN
+  // （严格大于），正好落在 cutoff 当天的场景会被源剔掉，而客户端窗口
+  //（rd < cutoff 才丢）本该保留它们。多取一天由客户端自己裁。
+  function windowLowerBound() {
+    var days = _state.recentDays;
+    if (!days || days <= 0) return null;
+    return recentCutoffDate(days + 1);
+  }
+
   // ─── State ────────────────────────────────────────────────────────────────
 
   var _state = {
@@ -1134,7 +1143,8 @@
     // pagination
     perPage: 40,
     currentPage: 1,
-    sortDir: "DESC",           // DESC | ASC (pushed to box query as sort:DATE)
+    sortDir: "DESC",           // DESC | ASC (pushed to box query as direction)
+    sortField: "DATE",         // DATE | TITLE | DURATION | PERFORMERS（演员数，源端无对应枚举 → 按 DATE 取回后本地排）
     zoom: 1,                   // card size 0-3 (native SceneCardGrid zoomWidths)
     displayMode: "grid",       // grid | list — seeded from localStorage below
     refocusSearch: false,      // restore search-input focus after re-render
@@ -1285,6 +1295,17 @@
   // 的源，14s 内发了 47 次请求仍不停。
   var TAB_MAX_PAGES = 50;
 
+  // 每页个数：工具栏下拉的选项，也是 10 分钟快照还原时的合法性校验
+  var PAGE_SIZE_OPTS = [20, 40, 80];
+
+  // 源端的排序字段。「演员数」在 SceneQueryInput.SortEnum 里没有对应项（只有
+  // DATE/TITLE/DURATION/CREATED_AT/…），所以按 DATE 把窗口内全集取回后本地重排：
+  // 窗口已推到源端，一页通常就是全集。也因此它和 DATE 一样能按日期判「翻出窗口了」。
+  function serverSortField() {
+    var f = _state.sortField || "DATE";
+    return f === "PERFORMERS" ? "DATE" : f;
+  }
+
   // Fetch ONE page from a stash-box (lazy loading — never pulls all 1000+ scenes).
   // 每页 100 条（约 480KB）：缺失率低的库一页就能填满一屏，少一次往返；
   // 单次超时/断连由 callBoxGQL 的重试兜住。页大小按实测缺失密度自适应（20–100）。
@@ -1296,12 +1317,16 @@
         ? { studios: { value: [stashId], modifier: "INCLUDES" } }
         : { performers: { value: [stashId], modifier: "INCLUDES" } },
       {
-        sort: "DATE",
+        sort: serverSortField(),
         direction: _state.sortDir,
         page: pageNum,
         per_page: boxPerPage,
       }
     );
+    // 时间窗口下界推到源端：源只回窗口内的条目，通常一页取完，count 也是窗口内
+    // 的总数。留给客户端过滤的话，源上按日期排的 1500 多条得翻十几页才凑满一屏。
+    var lo = windowLowerBound();
+    if (lo) input.date = { value: lo, modifier: "GREATER_THAN" };
     return _boxRateLimiter.submit(function () {
       // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
       return callBoxSceneList(box, input, BOX_PAGE_TIMEOUT_MS);
@@ -1334,23 +1359,47 @@
     });
   }
 
-  // Re-sort the local cache by release_date in the current direction
+  // 场景内演员数：performers 元素可能是 {performer} 也可能是裸演员对象，
+  // 按「有主体」计数（空占位不算），0 人场景排序时恒沉底
+  function perfCount(sc) {
+    var list = (sc && sc.performers) || [];
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (p && (p.performer || p.name)) n++;
+    }
+    return n;
+  }
+
+  // Re-sort the local cache by the current sort field + direction
   function sortCachedMissing() {
+    var field = _state.sortField || "DATE";
+    var sign = _state.sortDir === "ASC" ? 1 : -1;
+    function key(it) {
+      var sc = it.scene || {};
+      if (field === "TITLE") return sc.title || sc.code || "";
+      if (field === "DURATION") return sc.duration || 0;
+      if (field === "PERFORMERS") return perfCount(sc);
+      return sc.release_date || "";
+    }
     _state.cachedMissing.sort(function (a, b) {
-      var da = a.scene.release_date || "";
-      var db = b.scene.release_date || "";
-      if (!da && !db) return 0;
-      if (!da) return 1;
-      if (!db) return -1;
-      return _state.sortDir === "ASC" ? da.localeCompare(db) : db.localeCompare(da);
+      var ka = key(a), kb = key(b);
+      // 空值恒沉底，与方向无关（倒序时不该把没日期的顶到最前）
+      var ea = ka === "" || ka === 0, eb = kb === "" || kb === 0;
+      if (ea && eb) return 0;
+      if (ea) return 1;
+      if (eb) return -1;
+      if (typeof ka === "number" && typeof kb === "number") return (ka - kb) * sign;
+      return ka.localeCompare(kb) * sign;
     });
   }
 
   // True when the boundary date on a fetched box page already lies outside
-  // the recent/preview window — box pages arrive date-sorted in the fetch
-  // direction, so every later page would be outside the window too; paging
-  // on would only waste requests.
+  // the recent/preview window. Only meaningful while pages arrive in date order
+  // (DATE, and PERFORMERS which is fetched as DATE): with TITLE/DURATION the
+  // page is not date-ordered, so the boundary says nothing about the next page.
   function boxPageOutOfWindow(scenes) {
+    if (serverSortField() !== "DATE") return false;
     var recentCut = recentCutoffDate(_state.recentDays);
     var previewCut = previewCutoffDate(_state.previewDays);
     for (var i = scenes.length - 1; i >= 0; i--) {
@@ -1606,7 +1655,9 @@
         queryBoxes: _state.queryBoxes,
         boxStashIds: _state.boxStashIds,
         currentPage: _state.currentPage,
+        perPage: _state.perPage,
         sortDir: _state.sortDir,
+        sortField: _state.sortField,
         preferredFallback: _state.preferredFallback,
         preferredBoxLabel: _state.preferredBoxLabel,
       },
@@ -1633,7 +1684,10 @@
     _state.queryBoxes = d.queryBoxes;
     _state.boxStashIds = d.boxStashIds;
     _state.currentPage = d.currentPage;
+    // 每页个数与 currentPage 是一对：只还原页码会让回到这一位时页码落在空页上
+    if (PAGE_SIZE_OPTS.indexOf(d.perPage) >= 0) _state.perPage = d.perPage;
     _state.sortDir = d.sortDir;
+    _state.sortField = d.sortField || "DATE";
     _state.preferredFallback = d.preferredFallback;
     _state.preferredBoxLabel = d.preferredBoxLabel;
     _state.loading = false;
@@ -1902,17 +1956,17 @@
     loadAndRender(newPerPage);
   }
 
-  // Change sort direction.
-  // Small fully-loaded result sets (<= perPage) are re-sorted from the local
-  // cache without re-querying; otherwise the box query is re-run with a
-  // loading spinner while the cards are hidden.
-  function changeSort(dir) {
-    if (_state.sortDir === dir) return;
+  // Change sort field and/or direction.
+  // 窗口已经推给源端，源回的就是「窗口内全集」：allLoaded 时本地就有完整数据，
+  // 换个排序直接重排即可，不必回源。没取完才重查，两个方向的页游标不通用。
+  function applySort(field, dir) {
+    if (field === _state.sortField && dir === _state.sortDir) return;
+    _state.sortField = field;
     _state.sortDir = dir;
     sortCachedMissing();
     _state.currentPage = 1;
 
-    if (_state.allLoaded && _state.cachedMissing.length <= _state.perPage) {
+    if (_state.allLoaded) {
       renderTabContent();
       return;
     }
@@ -1948,6 +2002,14 @@
       _state.viewState = _state.errorKind || "fatal";
       renderTabContent();
     });
+  }
+
+  function changeSort(dir) { applySort(_state.sortField, dir); }
+  function changeSortField(field) {
+    // 选「演员数」的动机基本都是找单人场景 → 换到这个字段时默认少→多；
+    // 想看群像点一次方向按钮即可（方向按钮会跟着显示 ↑）
+    var dir = field === "PERFORMERS" && field !== _state.sortField ? "ASC" : _state.sortDir;
+    applySort(field, dir);
   }
 
   // ─── Local performer/studio mapping by stash_id ──────────────────────────
@@ -4139,41 +4201,74 @@
     }
     toolbar.appendChild(searchGroup);
 
-    // Sort — date only: toggle opens a dropdown (single item), caret button flips direction
+    // Sort — field dropdown + caret button flips direction
+    var SORT_FIELDS = [
+      ["DATE", tc("日期", "Date")],
+      ["TITLE", tc("标题", "Title")],
+      ["DURATION", tc("时长", "Duration")],
+      ["PERFORMERS", tc("演员数", "Performers")],
+    ];
+    var curField = _state.sortField || "DATE";
+    var curLabel = SORT_FIELDS[0][1];
+    SORT_FIELDS.forEach(function (f) { if (f[0] === curField) curLabel = f[1]; });
+
     var sortGroup = document.createElement("div");
     sortGroup.setAttribute("role", "group");
     sortGroup.className = "sort-by-select dropdown btn-group";
 
     var sortPrep = document.createElement("div");
     sortPrep.className = "input-group-prepend";
+    var sortMenu = document.createElement("div");
+    sortMenu.className = "dropdown-menu";
+
+    // 窄屏避让：菜单按 left:0 展开（BS4），按钮靠右缘时会溢出视口。
+    // 打开后量一次：越右界就翻成右对齐；翻完仍越界（视口比菜单还窄，或按钮
+    // 自己在屏幕外）再限宽 + 平移兜底，四个选项都得留在屏幕里。
+    function placeSortMenu() {
+      sortMenu.classList.remove("ssd-pop-end");
+      sortMenu.style.maxWidth = "";
+      sortMenu.style.transform = "";
+      var vw = document.documentElement.clientWidth;
+      if (sortMenu.getBoundingClientRect().right > vw - 8) sortMenu.classList.add("ssd-pop-end");
+      var r = sortMenu.getBoundingClientRect();
+      if (r.right > vw - 8) {
+        sortMenu.style.maxWidth = (vw - 16) + "px";
+        r = sortMenu.getBoundingClientRect();
+      }
+      var dx = r.right > vw - 8 ? (vw - 8) - r.right : (r.left < 8 ? 8 - r.left : 0);
+      if (dx) sortMenu.style.transform = "translateX(" + Math.round(dx) + "px)";
+    }
+
     var sortToggle = document.createElement("button");
     sortToggle.type = "button";
     sortToggle.className = "dropdown-toggle btn btn-secondary";
-    sortToggle.title = tc("排序字段：日期", "Sort field: date");
+    sortToggle.title = tc("排序字段：", "Sort field: ") + curLabel;
     sortToggle.setAttribute("aria-haspopup", "true");
     sortToggle.setAttribute("aria-expanded", "false");
-    sortToggle.textContent = tc("日期", "Date");
+    sortToggle.textContent = curLabel;
     sortToggle.onclick = function () {
       var open = sortGroup.classList.toggle("show");
       sortMenu.classList.toggle("show", open);
       sortToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) placeSortMenu();
     };
     sortPrep.appendChild(sortToggle);
     sortGroup.appendChild(sortPrep);
 
-    var sortMenu = document.createElement("div");
-    sortMenu.className = "dropdown-menu";
-    var dateItem = document.createElement("a");
-    dateItem.href = "javascript:void(0)";
-    dateItem.className = "dropdown-item active";
-    dateItem.setAttribute("role", "button");
-    dateItem.textContent = tc("日期", "Date");
-    dateItem.onclick = function () {
-      sortGroup.classList.remove("show");
-      sortMenu.classList.remove("show");
-      sortToggle.setAttribute("aria-expanded", "false");
-    };
-    sortMenu.appendChild(dateItem);
+    SORT_FIELDS.forEach(function (f) {
+      var item = document.createElement("a");
+      item.href = "javascript:void(0)";
+      item.className = "dropdown-item" + (f[0] === curField ? " active" : "");
+      item.setAttribute("role", "button");
+      item.textContent = f[1];
+      item.onclick = function () {
+        sortGroup.classList.remove("show");
+        sortMenu.classList.remove("show");
+        sortToggle.setAttribute("aria-expanded", "false");
+        changeSortField(f[0]);
+      };
+      sortMenu.appendChild(item);
+    });
     sortGroup.appendChild(sortMenu);
 
     var isDesc = _state.sortDir !== "ASC";
@@ -4194,7 +4289,7 @@
     ppWrap.className = "page-size-selector";
     var ppSel = document.createElement("select");
     ppSel.className = "btn-secondary form-control";
-    [20, 40, 80].forEach(function (n) {
+    PAGE_SIZE_OPTS.forEach(function (n) {
       var opt = document.createElement("option");
       opt.value = String(n);
       opt.textContent = String(n);

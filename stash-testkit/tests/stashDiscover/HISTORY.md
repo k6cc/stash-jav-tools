@@ -112,3 +112,26 @@
   读时迁移旧 `local.v1`。
 - 机制型结论：骨架容器类名、count 判据、弹窗指针事件测试法 → [PITFALLS.md](PITFALLS.md)；
   回归脚本 `probe_overview_placeholder.js` / `probe_tab_paging.js` / `probe_req_dist.js`。
+
+## v2.8.1：排序体系 / 窗口下推源端（v2.8.0 → 2.8.1，2026-11-15）
+
+- **时间窗口下界交给源端**：`fetchBoxPage` 拼 `date:{value: recentCutoffDate(recentDays+1), modifier:"GREATER_THAN"}`。
+  多留一天是因为源只认严格大于（`GREATER_THAN_OR_EQUALS` 不是合法 modifier），边界当天的片子会被源剔掉，
+  多取的那天由客户端窗口自己裁。原来只在客户端过滤：源按日期倒序发 1513 条，倒序翻 15 页、正序 19 页 77 秒；
+  带上 date 后同一演员窗口内 18 条，一页取完，count 也变成窗口内的数。TPDB 只有批量路径
+  `/scenes?performers[x]=…&date=…&date_operation=>` 认 date，子资源 `/performers/{uuid}/scenes` 带 date 直接
+  报错、带整数 id 则忽略，所以有窗口时它走 `tpdbSinceScenes`（一次全量、排序交客户端、`hasMore:false`）。
+- **tab 排序字段**：`DATE | TITLE | DURATION | PERFORMERS`，字段 + 方向都推给源。`PERFORMERS`（演员数）在
+  `SceneQueryInput.SortEnum` 里没有对应项，`serverSortField()` 退回 DATE、取回窗口内全集后本地排；也因为取回
+  仍是日期序，`boxPageOutOfWindow` 的早停照常有效。选它时自动切升序（找单人是主要动机）。
+- **换排序不再整轮重查**：`applySort()` 在 `allLoaded` 时纯本地重排（实测点倒序 19 请求 → 0），没取完才回源。
+  前提是窗口已下推、源回的就是全集。快照里 `sortField` 一起存，回来还是那个排序。
+- **发现页排序（用户选 B）**：下拉同时作用于总览模块，但按模块决定 —— 最新发布 / 工作室新发布跟随；
+  即将发布把日期方向冻结为「近→远」（预告按日期倒序无意义），标题 / 演员数照选；热门不跟随（重排就不是
+  全站榜）；演员维度迷你卡不跟随。新增「演员数 ↑/↓」，`perfCountOf` 只数有 performer 主体的元素，0 人恒沉底。
+- **窄屏下拉避让**：BS4 `.dropdown-menu` 恒 `left:0`，375px 下溢出 122px。打开时量矩形 → 越界翻成右对齐，
+  仍越界再限宽 + `translateX`。注意 ≤360px 演员页原生 `performer-head` 本来就有 15px 溢出，别误判。
+- **`perPage` 并入 10 分钟快照**（与 `currentPage` 成对，只存页码会落在空页）；下拉选项抽成 `PAGE_SIZE_OPTS`，
+  还原时用它校验合法性。刷新仍回默认 40 —— `_tabSnap` 在内存里。
+- 回归：`probe_tab_paging` normal 2 请求 / clamp 12 请求 240 卡 / ignore 2 请求即停，与 v2.8.0 基线一致。
+  探针 mock 的场景日期改成「当天」，否则窗口下推后全被裁掉。

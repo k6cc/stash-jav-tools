@@ -485,3 +485,13 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
 - **导航角标不能只在事件到时更新**：启动轮询可能在导航项挂载前就写完缓存并发了
   `ssd:unread-changed`，这次事件没有监听者 → 角标一直显示挂载前读到的旧缓存。
   `DiscoverNavItem` 的 `useEffect` 里要再读一次 `dpCachedUnread()` 比对。
+
+## 插件 UI / 布局
+
+- **BS4 的 `.dropdown-menu` 恒按 `left:0` 展开，不会自己避让视口**：发现 tab 的排序
+  下拉在窄屏（375px）实测右缘溢出 122px、320px 溢出 172px，整页被撑出横向滚动。
+  打开时量一次矩形：越右界加类翻成 `right:0`；翻完仍越界（视口比菜单 `min-width:16rem`
+  还窄）再 `maxWidth = vw-16` + `translateX` 兜底。判据：`scrollWidth == clientWidth`
+  且菜单 `right <= vw-8`。注意别把页面自身的溢出算到菜单头上 —— 演员页原生
+  `performer-head/.stash-id-pill` 在 ≤360px 本来就有 15px 溢出，用「菜单开/关各量一次」
+  对比才靠谱。

@@ -46,7 +46,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
-| `probe_tab_paging.js` | 分页终止判据：点「下一页」时是否提前判到底 / 停不下来。跑前用 `localStorage.setItem("SSD:probe.tabMode","normal|clamp|ignore")` 选源行为，输出每页的请求数 / 卡片数 / 页脚文案；`clamp`（每页只回 20、count=5000）应继续翻页，`ignore`（同批重发、count=0）应 2 页内停住（首屏已缓存该页时会给 hint 说明没测到） | 否，mock box 的 `queryScenes` 响应；跑完删掉探针键 |
+| `probe_tab_paging.js` | 分页终止判据：点「下一页」时是否提前判到底 / 停不下来。跑前用 `localStorage.setItem("SSD:probe.tabMode","normal|clamp|ignore")` 选源行为，输出每页的请求数 / 卡片数 / 页脚文案；`clamp`（每页只回 20、count=5000）应继续翻页，`ignore`（同批重发、count=0）应 2 页内停住（首屏已缓存该页时会给 hint 说明没测到）。mock 场景的日期取**当天**——窗口下界已推给源端，日期落在窗口外的 mock 会被客户端裁掉，分页一条都测不到 | 否，mock box 的 `queryScenes` 响应；跑完删掉探针键 |
 | `probe_tab_select.js` | tab 的多选入口 / 点选 / 全选 / 批量忽略 + 撤销 / Esc 退出（含勾选圈 24px 断言） | 写忽略记录，测完还原 |
 | `probe_ignored_show.js` | 全被忽略 → 空态入口 → 8 卡 8 徽章 + chip → 恢复隐藏 | 写忽略记录，按前后差集删 |
 | `probe_reignore.js` | 已忽略的场景再忽略一次：幂等 / 不抛异常 / 撤销不误删更早记录 | 写忽略记录，按差集还原 |

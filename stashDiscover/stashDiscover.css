@@ -4659,6 +4659,14 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
 /* active 也只换底色深浅，边框/文字色跟着原生 btn 走，不另造配色 */
 .ssd-tabsel-btn.active { filter: brightness(1.18); }
 
+/* 排序下拉的窄屏避让：BS4 的 .dropdown-menu 恒按 left:0 展开，按钮靠右缘时
+   菜单会拱出视口。JS 打开后量一次，越界就加 .ssd-pop-end 翻成右对齐（左缘
+   仍越界时再由 JS 限宽）。只改横向对齐，纵向沿用核心 .dropdown-menu 的定位。 */
+.ssd-tab-pane .sort-by-select .dropdown-menu.ssd-pop-end {
+  left: auto;
+  right: 0;
+}
+
 /* 选态：整行居中，收掉会换掉「当前页装的是哪些片」的控件（搜索 / 排序 /
    每页 / 刷新 / 卡片大小 / 翻页），只留网格·列表切换与操作组。
    不加边框、不加圆角、不换底色 —— 整行就是原生筛选栏，按钮也全是原生 .btn。

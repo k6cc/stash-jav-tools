@@ -50,12 +50,15 @@
     var inp = (body.variables || {}).input || (body.variables || {}).in || {};
     var page = inp.page || 1, per = inp.per_page || 100;
     var n = MODE === "clamp" ? Math.min(20, per) : per;
+    // 窗口下界已推给源端（date GREATER_THAN recentDays），mock 场景的日期必须落在
+    // 窗口内，否则全被客户端窗口过滤掉 → 面板空白，分页判据一条都测不到
+    var today = SSD.localDateStr(new Date());
     var scenes = [];
     for (var i = 0; i < n; i++) {
       // ignore 模式每页给同一批 id；其余按页偏移，模拟真实分页
       var idx = MODE === "ignore" ? i : (page - 1) * per + i;
       scenes.push({
-        id: "probe-" + idx, title: "PROBE " + idx, date: "2025-01-01",
+        id: "probe-" + idx, title: "PROBE " + idx, date: today,
         images: [], studio: null, performers: [],
       });
     }

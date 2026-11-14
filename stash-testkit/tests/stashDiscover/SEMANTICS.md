@@ -7,6 +7,8 @@
 ## 数据流
 
 - **发现页列表**：`queryScenes(performers INCLUDES, sort DATE, direction, page, per_page)` 多 box 并行；per_page 按 missing 密度在 20–100 对称自适应（首轮 100）；本地去重 = stash_id ∪ 番号（code）双键；recent/preview 窗口在拉取循环内按 release_date 过滤（无日期场景直通）。
+- **演员页「发现」tab**：窗口**下界推给源端** —— `date:{value: 今天-(recentDays+1)天, modifier: GREATER_THAN}`，源只回窗口内场景，`count` 也随之变成窗口内总数（实测同演员 380→18），通常一页 100 条就取完。多留一天是因为 `GREATER_THAN` 是严格大于，边界当天的场景会被源剔掉，而客户端窗口（`rd < cutoff` 才丢）本该保留。**`GREATER_THAN_OR_EQUALS` 不是合法 modifier**（实测报错）。排序字段 `DATE|TITLE|DURATION` 与 `ASC|DESC` 在 javstash / stashdb 实测都生效；TPDB 见下。**「演员数」源端没有对应枚举**（`SortEnum` 只有 DATE/TITLE/DURATION/CREATED_AT/UPDATED_AT/TRENDING/POPULARITY/RANDOM…，且 TRENDING 是筛选不是重排），所以按 `sort: DATE` 取回窗口内全集后本地按 `scene.performers` 条目数排（`serverSortField()`）；也正因为它仍是日期序，`boxPageOutOfWindow` 照常生效。
+- **`per_page` 上限**：javstash / stashdb 实测接受 200、500（380 条一次回完）；TPDB REST 顶 100（`per_page=200` 直接 422）。界面仍按 20–100 自适应，别指望一次拉几百条——每页 100 条已约 480KB。
 - **弹窗详情**：打开时 `findScene(id)` 补全（director、production_date、urls、performers 含 `images { url }`——头像数据已自带）。
 - **头像卡**（点弹窗演员 pill）：
   - 头像零请求：本地映射（发现页打开时已查好的 `_state.localPerformerMaps`）→ `/performer/<local_id>/image`；无映射用 box `images[0].url`。
@@ -41,7 +43,8 @@ TPDB 的 GraphQL 只有 11 个 query，`queryScenes` 恒返回 `{count, scenes:n
 
 - **批量过滤是 deepObject**：`/scenes?performers[88334]=x&performers[94042]=x`，**值被忽略、只认键**；多键按 OR 合并，`meta.total` 直接相加。写 `performers[]=uuid` 或用 uuid 当键 → 200 但 `total:0`，**静默空集、不报错**，最容易误判成「这演员没片」。
 - **键必须是整数 id**：演员用 `_id`（`/performers/{uuid}`），站点用 `id`（`/sites/{uuid}`）。
-- **演员 id 分两层**：`is_parent:false` 是站点级记录，打 `/performers/{uuid}/scenes` 直接 404。旧实现用 `Promise.all` 零容错，一个这种 id 就让总览三块一起红（论坛反馈的实际根因）；现在解析失败只进 `skipped[]`。反过来 **parent uuid 打 `/performers/{uuid}/scenes` 是 200**，吃 `per_page`/`page`/`date`/`orderBy`、字段与 `/scenes` 一致 —— 单演员分页可以完全不解析整数 id，省一次请求。
+- **演员 id 分两层**：`is_parent:false` 是站点级记录，打 `/performers/{uuid}/scenes` 直接 404。旧实现用 `Promise.all` 零容错，一个这种 id 就让总览三块一起红（论坛反馈的实际根因）；现在解析失败只进 `skipped[]`。反过来 **parent uuid 打 `/performers/{uuid}/scenes` 是 200**，吃 `per_page`/`page`/`orderBy`、字段与 `/scenes` 一致 —— 单演员分页可以完全不解析整数 id，省一次请求。
+- **但子资源不吃 `date`**（2026-11-14 复测，推翻上一条里「吃 date」的旧说法）：`/performers/{uuid}/scenes?...&date=…&date_operation=>` 直接 **`Failed to fetch`**（uuid 三种写法都试过；不带 date 的同一路径 200）；用整数 id 打子资源则**静默忽略 date**（`total` 仍 2163）。时间窗口只能在批量路径上生效：`/scenes?performers[83047]=x&per_page=100&page=1&orderBy=recently_released&date=…&date_operation=>` → `total` 2163→17。所以发现 tab 里 TPDB 一旦带窗口，就不能再走子资源分页。
 - **没有批量解析 uuid 的接口**：`ids[]=` / `ids=a,b` / `uuid[]=` / `performer_ids[]=` 全被忽略（返回默认列表，不报错）。首次进页面必然有 N 次解析请求，结果落 `localStorage` 的 `ssd.tpdb.intIds`（`{id,p}`，`p=0` 为站点级；失败记 `{bad:1,t}`，7 天内不重试）。
 - **当前实现口径**：单演员 DESC 直接打 `/performers/{uuid}/scenes`，不写整数缓存；该路径 404（站点级/已删）才回退——先解析 parent 整数 id，再不行按名字找**完全同名**的 parent，命中时 UI 显示「编号在源上查不到，已按名字匹配」。坏缓存只记 404，网络/超时/401 不记（本地网络抖一下不该让这个演员 7 天查不出东西）。
 - `per_page` 硬顶 100；`total` 封顶 10000，`page > 100` 数据错乱；`date` 与 `orderBy` 可同时给。`/changes` 只回溯 14 天，不能当全量增量源。
@@ -107,6 +110,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 - **已落地（discover.js `sweepOrphanCaches()`，挂载发现页时跑一次）**：实测 `SSD:*` 699,353 → **118,828**、总占用 719,415 → 139,061、`orphanChars` 580,525 → **0**，与预估一致。
 - **读时 shape 校验**：`saneCacheEntry()` 逐条丢弃坏场景（非对象 / id 不是非空字符串），全部坏才当 miss。探针 `probe_cache_shape.js`：混入 `{title}`/`null`/`42`/`{id:""}` 后仍走 `fresh` 且好条目全留；全部坏则返回 `fromCache:"network"`，两种情况都不抛异常。
 - **`stash_dev.py eval` 踩坑**：`cmd_eval` 原先用同步 `Runtime.evaluate`，返回 Promise 的表达式会被序列化成 `{}`。已改为走 `eval_async`（`awaitPromise:true`），async 探针才能拿到真实值。
+- **演员页发现 tab 的工具栏：只有 `ssdDisplayMode`（grid|list）落 localStorage**（2026-11-15 实测）。排序字段/方向、每页个数、搜索词、卡片大小滑块**都不落盘**；它们只活在内存快照 `_tabSnap`（`stashDiscover.js` `TAB_SNAP_TTL_MS` = 10 分钟）里，随 `currentPage`/`cachedMissing` 一起存、离开演员页再回来还原，刷新即回默认（40 / 日期）。实测量法：改 perPage=80 + 排序「标题」→ localStorage 键列表前后完全一致 → 重启浏览器后 UI 回默认。
 
 ## 忽略记录（`SSD:dp:ignore.v1`，2026-10-29 实测）
 

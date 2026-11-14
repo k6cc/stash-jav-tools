@@ -1784,9 +1784,31 @@
     if (!q) return list;
     return list.filter(function (it) { return itemHaystack(it).indexOf(q) !== -1; });
   }
+  // 场景内演员数（找单人场景用）。performers 元素有两种形态：stash-box 的
+  // {as, performer} 与本地场景的 {performer}，都按「有 performer 主体」计数，
+  // 别用数组长度——空占位元素也算进去会让 0 人场景不沉底。
+  function perfCountOf(sc) {
+    var list = (sc && sc.performers) || [];
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (p && (p.performer || p.name)) n++;
+    }
+    return n;
+  }
   function sortItems(list, sort) {
     var out = list.slice();
-    if (sort === "date-asc") {
+    if (sort === "perf-asc" || sort === "perf-desc") {
+      var sign = sort === "perf-asc" ? 1 : -1;
+      out.sort(function (a, b) {
+        var na = perfCountOf(a.scene), nb = perfCountOf(b.scene);
+        // 没有演员主体的场景恒沉底，与方向无关
+        if (!na && !nb) return 0;
+        if (!na) return 1;
+        if (!nb) return -1;
+        return (na - nb) * sign;
+      });
+    } else if (sort === "date-asc") {
       out.sort(function (a, b) { return String(a.scene.release_date || "").localeCompare(String(b.scene.release_date || "")); });
     } else if (sort === "title") {
       out.sort(function (a, b) {
@@ -2727,6 +2749,23 @@
       tc("所有模块已隐藏，可在设置中重新开启。", "All modules are hidden — re-enable them in Settings.")));
   }
 
+  // 全局排序下拉对总览模块的生效规则（用户 2026-11-15 选 B：按模块决定）：
+  //   最新发布 / 工作室新发布 —— 跟随所选排序
+  //   即将发布 —— 日期方向恒为「档期近的在前」（预告按日期倒序毫无意义），
+  //               标题 / 演员数照选
+  //   热门 —— 不跟随：按日期重排就不再是「全站榜」，榜单序是该模块的语义
+  //   有新发布的演员 / 发现演员 —— 不跟随：演员维度的迷你卡，没有场景字段可排
+  function orderModuleItems(mod, list) {
+    list = list || [];
+    var sort = _dp.sort;
+    if (!sort || sort === "hot") return list;
+    if (mod === "latest" || mod === "studios") return sortItems(list, sort);
+    if (mod === "preview") {
+      return sortItems(list, sort === "date-desc" || sort === "date-asc" ? "date-asc" : sort);
+    }
+    return list;
+  }
+
   function renderModule(id, parent, rows) {
     var d = _dp.d.latest, t = _dp.d.trending, st = _dp.d.studios, tp = _dp.d.trendingPerf;
 
@@ -2788,7 +2827,7 @@
       if (!d) modPlaceholder(s2, "scene", rows.latest, _dp.err.latest, retryLatest);
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
-        var g2 = sceneGrid(d.latest.slice(0, prefetchLimit(rows.latest)));
+        var g2 = sceneGrid(orderModuleItems("latest", d.latest).slice(0, prefetchLimit(rows.latest)));
         g2.classList.add("ssd-dp-grid");
         s2.appendChild(g2);
         trimRows(g2, rows.latest);
@@ -2829,7 +2868,7 @@
       if (!d) modPlaceholder(s4, "scene", rows.preview, _dp.err.latest, retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
-        var g4 = sceneGrid(d.preview.slice(0, prefetchLimit(rows.preview)), { days: true });
+        var g4 = sceneGrid(orderModuleItems("preview", d.preview).slice(0, prefetchLimit(rows.preview)), { days: true });
         g4.classList.add("ssd-dp-grid");
         s4.appendChild(g4);
         trimRows(g4, rows.preview);
@@ -2851,7 +2890,7 @@
           : tc("收藏的工作室暂无新作品", "No new releases from favorite studios")));
       }
       else {
-        var g5 = sceneGrid(st.items.slice(0, prefetchLimit(rows.studios)));
+        var g5 = sceneGrid(orderModuleItems("studios", st.items).slice(0, prefetchLimit(rows.studios)));
         g5.classList.add("ssd-dp-grid");
         s5.appendChild(g5);
         trimRows(g5, rows.studios);
@@ -5814,7 +5853,10 @@
     refs.sort.title = tc("排序方式", "Sort by");
     refs.sort.setAttribute("aria-label", tc("排序方式", "Sort by"));
     [["date-desc", tc("发布日期 ↓", "Date ↓")], ["date-asc", tc("发布日期 ↑", "Date ↑")],
-     ["title", tc("标题 A-Z", "Title A-Z")], ["hot", tc("原榜顺序", "List order")]].forEach(function (o) {
+     ["title", tc("标题 A-Z", "Title A-Z")],
+     // 演员数：↑ 少→多（找单人场景），↓ 多→少
+     ["perf-asc", tc("演员数 ↑", "Performers ↑")], ["perf-desc", tc("演员数 ↓", "Performers ↓")],
+     ["hot", tc("原榜顺序", "List order")]].forEach(function (o) {
       var op = document.createElement("option");
       op.value = o[0];
       op.textContent = o[1];

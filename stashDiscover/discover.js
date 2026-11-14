@@ -5602,22 +5602,24 @@
     selPos.value = dpBadgePos();
     selPos.addEventListener("change", function () {
       dpSetPrefs({ badgePos: selPos.value });
-      // 自定义角标要占左上 → 工作室角标（若也在左上）让到右上
-      if (selPos.value === "tl" && dpStudioBadge() === "tl") dpSetPrefs({ studioBadge: "tr" });
+      // 自定义角标要占的角若有工作室角标 → 工作室让到右上（它的默认位，
+      // 永远不会被另两组占用），见下方 setStudio 的对称规则
+      if (selPos.value === dpStudioBadge()) dpSetPrefs({ studioBadge: "tr" });
       syncBadgeSelects();
       applyBadgePrefs();
     });
     rowB3.appendChild(selPos);
     secB.appendChild(rowB3);
 
-    // 工作室名（原生 .studio-overlay）：隐藏 / 右上（默认）/ 左上
-    // 「左上」与「默认角标位置 = 左上」互斥 —— 左上角只放一组，选了这边另一组
-    // 自动让位（见下方 setStudio / setPos 的联动）
+    // 工作室名（原生 .studio-overlay）：隐藏 / 右上（默认）/ 左上 / 左下
+    // 左半边两条（左上、左下）与「默认角标位置」互斥 —— 同一个角只放一组，选了
+    // 这边另一组自动让到另一边（见下方 setStudio 的联动）
     var rowB1 = el("div", "ssd-dp-setrow");
     rowB1.appendChild(el("span", "ssd-dp-setname", tc("显示工作室角标", "Show studio badge")));
     var selStudio = document.createElement("select");
     selStudio.className = "ssd-dp-setsel";
-    [["none", tc("隐藏", "Hidden")], ["tr", tc("右上", "Top right")], ["tl", tc("左上", "Top left")]]
+    [["none", tc("隐藏", "Hidden")], ["tr", tc("右上", "Top right")], ["tl", tc("左上", "Top left")],
+     ["bl", tc("左下", "Bottom left")]]
       .forEach(function (o) {
         var op = document.createElement("option");
         op.value = o[0];
@@ -5627,8 +5629,9 @@
     selStudio.value = dpStudioBadge();
     var setStudio = function (v) {
       dpSetPrefs({ studioBadge: v });
-      // 工作室占住左上 → 自定义角标让到左下
+      // 工作室占住左侧某角 → 自定义角标让到另一角（左上 ⇄ 左下）
       if (v === "tl") dpSetPrefs({ badgePos: "bl" });
+      if (v === "bl") dpSetPrefs({ badgePos: "tl" });
       syncBadgeSelects();
       applyBadgePrefs();
     };
@@ -6367,11 +6370,11 @@
   // 三项都是纯 CSS 开关：只切 .ssd-dp-page / 弹层上的 data-* 属性，不重建卡片
   // （重建会打断弹层、丢滚动位置）。作用范围仅限发现页与演员弹层，演员详情
   // 「发现」tab 不经过这些选择器，保持原样。
-  // "tr" 右上（默认）/ "tl" 左上 / "none" 隐藏。布尔值是上一版未发版实现的残留，
-  // 顺手归一以免旧 localStorage 让下拉落到空值。
+  // "tr" 右上（默认）/ "tl" 左上 / "bl" 左下 / "none" 隐藏。布尔值是上一版未发版
+  // 实现的残留，顺手归一以免旧 localStorage 让下拉落到空值。
   function dpStudioBadge() {
     var v = dpPrefs().studioBadge;
-    if (v === "tl") return "tl";
+    if (v === "tl" || v === "bl") return v;
     if (v === "none" || v === 0 || v === false) return "none";
     return "tr";
   }

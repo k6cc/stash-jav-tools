@@ -649,6 +649,10 @@
   right: 6px;
   font-size: 10.5px;
   line-height: 1.2;
+  /* 宿主全局把字距压到 -0.04em，10.5px 下「1:21:34」的冒号只剩 1.9px、两侧各被
+     吃掉 0.42px，看着像一串连续数字。这里还原成正常字距（实测冒号 1.9 → 2.3px，
+     整串宽 29.9 → 32.9px，右对齐不受影响）。用户 2026-11-15。 */
+  letter-spacing: normal;
 }
 .ssd-dp-page .ssd-card-grid .scene-specs-overlay .overlay-duration,
 .ssd-dp-modal-scenes .ssd-card-grid .scene-specs-overlay .overlay-duration {
@@ -706,16 +710,48 @@
   max-width: 100%;
 }
 
-/* 工作室角标（原生 .studio-overlay）—— 隐藏 / 右上（默认）/ 左上（用户 2026-10-28）。
-   盒子是 shrink-to-fit 绝对定位（max-width 40%），换到左上要把 right 让出来：
-   一旦 left 与 right 同时有值且 width:auto，盒子会被拉成整行宽。其三档内缩
+/* 工作室角标（原生 .studio-overlay）—— 隐藏 / 右上（默认）/ 左上 / 左下（用户 2026-10-28、11-15）。
+   盒子是 shrink-to-fit 绝对定位（max-width 40%），换到左边要把 right 让出来、
+   换到底部要把 top 让出来：一旦 left 与 right 同时有值且 width:auto，盒子会被
+   拉成整行宽；top 与 bottom 同时有值时高度同理被撑满。其三档内缩
    （6 / 大档 8 / ≤480 4px）跟随各自的原生贴边规则，见下面各处。 */
 .ssd-dp-page[data-studio-badge="none"] .studio-overlay,
 .ssd-dp-modal-scenes[data-studio-badge="none"] .studio-overlay { display: none; }
+/* 名字最多两行，超出省略号（用户 2026-11-15）。行数截断必须落在真正装文字的元素上：
+   原生把名字包在 inline-block 的 <a> 里，父 div 只有一个原子子盒，clamp 不到内部的行。
+   两处都写，卡片有没有那层 <a> 都截得住。
+   高度也得放回自动：原生 `height:10%` 是单行的高度，配合下面的 overflow:hidden 会把
+   第二行直接裁掉（省略号都看不到）；左下还需要它来自下而上长高，不然溢出封面。 */
+.ssd-dp-page .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes .ssd-card-grid .studio-overlay,
+.ssd-dp-page .ssd-card-grid .studio-overlay > a,
+.ssd-dp-modal-scenes .ssd-card-grid .studio-overlay > a {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  height: auto;
+  overflow: hidden;
+}
 .ssd-dp-page[data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
 .ssd-dp-modal-scenes[data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
   left: 6px;
   right: auto;
+  text-align: left;
+}
+.ssd-dp-page[data-studio-badge="bl"] .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes[data-studio-badge="bl"] .ssd-card-grid .studio-overlay {
+  top: auto;
+  bottom: 6px;
+  left: 6px;
+  right: auto;
+  text-align: left;
+}
+/* 左侧两档还要管住 <a> 自己的右对齐（原生 `.studio-overlay a{text-align:right}`），
+   否则两行名字在左角里右参差；没那层 <a> 的卡走上面的 text-align:left。 */
+.ssd-dp-page[data-studio-badge="tl"] .ssd-card-grid .studio-overlay > a,
+.ssd-dp-modal-scenes[data-studio-badge="tl"] .ssd-card-grid .studio-overlay > a,
+.ssd-dp-page[data-studio-badge="bl"] .ssd-card-grid .studio-overlay > a,
+.ssd-dp-modal-scenes[data-studio-badge="bl"] .ssd-card-grid .studio-overlay > a {
   text-align: left;
 }
 
@@ -751,9 +787,16 @@
 .ssd-dp-modal-scenes[data-csize="2"] .ssd-card-grid .scene-specs-overlay .overlay-duration {
   font-size: 14px;
 }
-/* 左上 + 大档：贴边跟到 8px（多一个属性选择器，压过上面等特异性的 right: 8px） */
+/* 左上 + 大档：贴边跟到 8px（多一个属性选择器，压过上面等特异性的 top/right: 8px） */
 .ssd-dp-page[data-csize="2"][data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
 .ssd-dp-modal-scenes[data-csize="2"][data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
+  left: 8px;
+  right: auto;
+}
+.ssd-dp-page[data-csize="2"][data-studio-badge="bl"] .ssd-card-grid .studio-overlay,
+.ssd-dp-modal-scenes[data-csize="2"][data-studio-badge="bl"] .ssd-card-grid .studio-overlay {
+  top: auto;
+  bottom: 8px;
   left: 8px;
   right: auto;
 }
@@ -4171,6 +4214,14 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   }
   .ssd-dp-page[data-studio-badge="tl"] .ssd-card-grid .studio-overlay,
   .ssd-dp-modal-scenes[data-studio-badge="tl"] .ssd-card-grid .studio-overlay {
+    left: 4px;
+    right: auto;
+    text-align: left;
+  }
+  .ssd-dp-page[data-studio-badge="bl"] .ssd-card-grid .studio-overlay,
+  .ssd-dp-modal-scenes[data-studio-badge="bl"] .ssd-card-grid .studio-overlay {
+    top: auto;
+    bottom: 4px;
     left: 4px;
     right: auto;
     text-align: left;

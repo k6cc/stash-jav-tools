@@ -123,7 +123,7 @@ stash-testkit/
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
-| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
+| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、布局回归（骨架占位 / 模块刷新 / 分页判到底）、请求分布诊断、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
 | `tests/ImageMetaSync/` | 图库图片元数据回填：全库口径审计、受控 E2E（建库钩子/竞态等待/编号/开关）、无图库兜底、锁与队列、schema 探针；**脚本逐个用途与副作用见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 

@@ -2362,6 +2362,74 @@
 .ssd-dp-sec > .ssd-dp-grid { width: 100%; }
 .ssd-dp-grid { margin-top: 4px; }
 
+/* 局部刷新时插在原位置的临时容器：display:contents 让新模块直接参与父级布局
+   （trimRows 要真实列数才数得对），建完就拆掉。 */
+.ssd-dp-swap { display: contents; }
+
+/* 骨架占位（总览加载态）。尺寸与真实卡一致，数据落地时模块高度不变：
+   场景卡 = 缩略图 238:138 + 文案/角标区（高度随卡档变，见下面的三个实测值）；
+   迷你卡复用 .ssd-dp-mini 盒模型（10px 内边距 + 44px 头像 = 65px）。 */
+.ssd-skel-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--sx-line2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.ssd-skel-thumb {
+  width: 100%;
+  aspect-ratio: 238 / 138;
+  background: var(--sx-bg2);
+}
+.ssd-skel-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: var(--ssd-skel-text-h, 152px);
+  padding: 10px;
+}
+/* 文案区高度 = 真实卡整高 - 缩略图 - 边框，三档实测：
+   卡宽 176 → 224-102-2；卡宽 238 → 291-137-2；卡宽 363 → 340-210-2。
+   不跟档位走的话落差 20~40px，落地时整页会跳一下。 */
+.ssd-dp-page[data-csize="0"] { --ssd-skel-text-h: 120px; }
+.ssd-dp-page[data-csize="2"] { --ssd-skel-text-h: 128px; }
+.ssd-skel-text::before,
+.ssd-skel-text::after {
+  content: "";
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: var(--sx-bg2);
+}
+.ssd-skel-text::before { width: 78%; }
+.ssd-skel-text::after { width: 52%; }
+
+.ssd-dp-mini.is-skel { cursor: default; }
+.ssd-skel-ava {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--sx-bg2);
+}
+.ssd-skel-l {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ssd-skel-l i { display: block; height: 10px; border-radius: 4px; background: var(--sx-bg2); }
+.ssd-skel-l i:first-child { width: 72%; }
+.ssd-skel-l i:last-child { width: 46%; }
+
+@keyframes ssd-skel-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.is-skel .ssd-skel-thumb,
+.is-skel .ssd-skel-text::before,
+.is-skel .ssd-skel-text::after,
+.is-skel .ssd-skel-ava,
+.is-skel .ssd-skel-l i { animation: ssd-skel-pulse 1.7s ease-in-out infinite; }
+
 /* 迷你演员卡（§3.2 模块 1/6）*/
 .ssd-dp-grid.mini {
   display: grid;
@@ -4663,40 +4731,43 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   white-space: nowrap;
 }
 .ssd-test-ico { font-size: 0.92em; }
-.ssd-test-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  background: rgba(0, 0, 0, 0.55);
-}
-.ssd-test-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: min(520px, 100%);
-  max-height: min(80vh, 640px);
-  max-height: min(80dvh, 640px);
-  padding: 16px;
-  border: 1px solid var(--ssd-modal-border);
-  border-radius: 12px;
+
+/* 面板结构照 EPL：Bootstrap Modal 的 Header / Body / Footer。
+   Header 下沿与 Footer 上沿各一条细线，X 在右上角（closeButton）。 */
+.modal-dialog.ssd-test-dialog { max-width: 520px; }
+.modal-content.ssd-test-content {
   background: var(--ssd-modal-bg);
   color: var(--ssd-modal-text);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--ssd-modal-border);
+  border-radius: 12px;
 }
-.ssd-test-title {
-  font-size: 15px;
-  font-weight: 600;
+.ssd-test-content .modal-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ssd-modal-border);
 }
+.ssd-test-content .modal-title { font-size: 15px; font-weight: 600; }
+.ssd-test-content .modal-footer {
+  padding: 12px 16px;
+  gap: 8px;
+  border-top: 1px solid var(--ssd-modal-border);
+}
+/* Bootstrap 4 的 X 是 .close（深色字 + 白 text-shadow），Bootstrap 5 是 .btn-close；
+   本版 Stash 实测是前者，两个都兜住：反色、去阴影，深底上才看得见。 */
+.ssd-test-content .close,
+.ssd-test-content .btn-close {
+  color: var(--ssd-modal-text);
+  text-shadow: none;
+  opacity: 0.65;
+  font-weight: 400;
+}
+.ssd-test-content .btn-close { filter: invert(1) grayscale(1) brightness(1.6); }
+.ssd-test-content .close:hover,
+.ssd-test-content .btn-close:hover { opacity: 1; color: var(--ssd-modal-text); }
+
 .ssd-test-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 .ssd-test-row {
   display: flex;
@@ -4723,4 +4794,3 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   color: var(--ssd-modal-muted);
 }
 .ssd-test-err { font-size: 12px; color: var(--ssd-danger); word-break: break-word; }
-.ssd-test-foot { display: flex; justify-content: flex-end; gap: 8px; }

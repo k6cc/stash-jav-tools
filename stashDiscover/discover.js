@@ -376,8 +376,8 @@
 
   // ── 2.6 会话级本地查询 memo（refresh / SCENE_SAVED_EVENT 时失效）─────────
   var _memo = { linked: {}, owned: null, studios: null };
-  // 入库后 ownedKeys 变了：光清内存不够，local.v1 里那份旧快照（无 TTL）会被
-  // loadLinkedOwned 直接读回来 —— 表现就是「已经入库的片还在最新里挂着」。
+  // 入库后 ownedKeys 变了：光清内存不够，owned.v1 里那份旧快照会被 loadLinkedOwned
+  // 直接读回来 —— 表现就是「已经入库的片还在最新里挂着」。置脏即跳过磁盘快照。
   var _localDirty = false;
 
   function invalidateLocalMemos() {
@@ -481,7 +481,7 @@
 
   // 一批演员（≤100）的新场景：date GREATER_THAN + performers INCLUDES，懒分页。
   // null = 该批失败（调用方不得把部分结果当全量缓存）；[] = 确实没有。
-  function fetchScenesBatch(box, performerStashIds, sinceIsoDate) {
+  function fetchScenesBatch(box, performerStashIds, sinceIsoDate, prio) {
     var out = [];
     var page = 1;
     function one() {
@@ -495,7 +495,7 @@
         if (sinceIsoDate) input.date = { value: sinceIsoDate, modifier: "GREATER_THAN" };
         // TPDB 的 queryScenes 恒返回空 → 内部自动切 REST（按演员逐个取并筛日期）
         return SSD.callBoxSceneList(box, input, BOX_TIMEOUT_HEAVY);
-      });
+      }, prio);
     }
     function next(qs) {
       if (!qs || !qs.scenes) return null; // 无应答 ≠ 空结果（binge 教训）
@@ -515,9 +515,11 @@
   // 会话内 in-flight 去重（binge 模式）。
   var _newScenesFlight = null;
 
-  function fetchNewScenesForPerformers(box, performerStashIds, sinceIsoDate, onProgress) {
+  function fetchNewScenesForPerformers(box, performerStashIds, sinceIsoDate, onProgress, prio) {
     if (!performerStashIds.length) return Promise.resolve([]);
-    var key = box.host + "|" + sinceIsoDate + "|" + performerStashIds.length;
+    // 键要含「具体是哪些演员」，不能只数个数：忽略 A、取消忽略 B 之后数量不变，
+    // 会命中上一次还在飞的请求，拿回旧结果（缺 B、多 A 的片）。
+    var key = box.host + "|" + sinceIsoDate + "|" + performerStashIds.join(",");
     if (_newScenesFlight && _newScenesFlight.key === key) return _newScenesFlight.value;
     var p = (function () {
       var batches = [];
@@ -531,7 +533,7 @@
         if (idx >= batches.length) return merged;
         var wave = [];
         for (var w = 0; w < BATCH_CONCURRENCY && idx < batches.length; w++) wave.push(batches[idx++]);
-        return Promise.all(wave.map(function (b) { return fetchScenesBatch(box, b, sinceIsoDate); })).then(function (results) {
+        return Promise.all(wave.map(function (b) { return fetchScenesBatch(box, b, sinceIsoDate, prio); })).then(function (results) {
           for (var r = 0; r < results.length; r++) {
             if (results[r] == null) return null; // 部分失败 → 整体 null
             merged = merged.concat(results[r]);
@@ -559,18 +561,18 @@
   }
 
   // §5 热门榜：TRENDING 全站原样（不过滤库内演员、无日期窗），30 条
-  function fetchTrendingScenes(box) {
+  function fetchTrendingScenes(box, prio) {
     return SSD.boxRateLimiter.submit(function () {
       return SSD.callBoxSceneList(box, {
         sort: "TRENDING", direction: "DESC", page: 1, per_page: TRENDING_PER_PAGE,
       }, BOX_TIMEOUT);
-    }).then(function (qs) {
+    }, prio).then(function (qs) {
       return (qs && qs.scenes) || null; // null = 失败
     });
   }
 
   // §4.6 工作室新发布：收藏工作室单查询 studios INCLUDES + date 窗，懒分页
-  function fetchStudioScenes(box, studioStashIds, sinceIsoDate) {
+  function fetchStudioScenes(box, studioStashIds, sinceIsoDate, prio) {
     var out = [];
     var page = 1;
     function one() {
@@ -581,7 +583,7 @@
           sort: "DATE", direction: "DESC",
           page: page, per_page: STUDIO_PAGE_SIZE,
         }, BOX_TIMEOUT_HEAVY);
-      });
+      }, prio);
     }
     function next(qs) {
       if (!qs || !qs.scenes) return null;
@@ -599,7 +601,7 @@
 
   // §3.5 发现演员·热门演员榜（复用 binge getTrendingStashDBPerformers）：
   // 宽页不带 gender（实测 1.5s vs 6-19s）→ 本地过滤 → 不足 12 才按性别逐查（20s）
-  function fetchTrendingPerformers(box, perPage, genders) {
+  function fetchTrendingPerformers(box, perPage, genders, prio) {
     perPage = perPage || 24;
     var allowed = {};
     (genders && genders.length ? genders : ["FEMALE"]).forEach(function (g) { allowed[g] = true; });
@@ -633,7 +635,7 @@
       return SSD.callBoxPerformerList(box,
         { sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: Math.max(perPage * 3, 90) },
         BOX_TIMEOUT);
-    }).then(function (data) {
+    }, prio).then(function (data) {
       var rows = ((data || {}).performers) || [];
       var kept = rows.filter(function (r) { return r.gender && allowed[r.gender]; });
       if (kept.length >= Math.min(perPage, 12)) {
@@ -648,7 +650,7 @@
           return SSD.callBoxPerformerList(box,
             { gender: g, sort: "LAST_SCENE", direction: "DESC", page: 1, per_page: perPage },
             20000);
-        }).then(function (d) {
+        }, prio).then(function (d) {
           return ((d || {}).performers) || [];
         }).catch(function () { return []; });
       })).then(function (perGender) { return { performers: interleave(perGender), degraded: true }; });
@@ -859,10 +861,10 @@
   // cacheWrite 只清「同 host + 同 family」的旧版本键；某个源升级后再没被访问过，
   // 它的旧版本条目就永远留着且不会自己消失 —— 实测 javstash 的 .v2 一项 410 KB，
   // 全部孤儿 580,525 字符 = 插件存储的 83%。
-  // 只认 cacheKey() 产出的 <host>:<family>.v<N>：local.v1 / follow.v1 / unread.v1 /
-  // poll.v1 / trendingPerf.v1 的版本号是各存储自己的，按「以 .v1 结尾」删会丢用户
-  // 数据（已读、关注都在里面）。host 可能带端口（URL.host 含 ":9999"），所以不能
-  // 假设 host 里没有冒号，用贪婪前缀 + 固定家族名兜住。
+  // 只认 cacheKey() 产出的 <host>:<family>.v<N>：owned.v1 / linked.v1 / follow.v1 /
+  // unread.v1 / poll.v1 / trendingPerf.v1 的版本号是各存储自己的，按「以 .v1 结尾」
+  // 删会丢用户数据（已读、关注、入库快照都在里面）。host 可能带端口（URL.host 含
+  // ":9999"），所以不能假设 host 里没有冒号，用贪婪前缀 + 固定家族名兜住。
   var CACHE_KEY_TAIL_RE = /^(.*):(newScenes|trending|studios)\.v(\d+)$/;
   function sweepOrphanCaches() {
     var removed = 0, chars = 0;
@@ -1012,33 +1014,95 @@
     });
   }
 
-  // linked + ownedKeys 不随场景缓存轮转：单独 key、无 TTL（本地查询，便宜且稳定）。
-  // 读路径：缓存命中 → 否则会话 memo → 否则现场查。
-  function cacheWriteLinkedOwned(host, linked, ownedKeys) {
+  // 本地快照拆两条键：owned（入库键集合）随库规模线性长，是「写不下」的那一份；
+  // linked（库内演员）小且变化慢。拆开后大的写失败不连累小的，也能各自设 TTL。
+  // 预算：该源 localStorage 实测 5,109,375 字符，其余缓存还要占，各留 1.2M。
+  var LOCAL_OWNED_TTL_MS = 10 * 60 * 1000;
+  var LOCAL_LINKED_TTL_MS = 60 * 60 * 1000;
+  var LOCAL_OWNED_BUDGET = 1200000;
+  var LOCAL_LINKED_BUDGET = 1200000;
+  var _localWarned = {};
+
+  function lsRead(key) {
     try {
-      localStorage.setItem(LS_PREFIX + host + ":local.v1", JSON.stringify({ fetchedAt: Date.now(), linked: linked, ownedKeys: ownedKeys }));
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  function lsReadFresh(key, ttl) {
+    var e = lsRead(key);
+    return e && e.fetchedAt && (Date.now() - e.fetchedAt) < ttl ? e : null;
+  }
+
+  // 写失败（超预算 / 配额满）必须出声：症状是「每次打开都重跑全量本地查询」，
+  // 没有任何提示的话只能靠猜。同一条键一个会话只报一次，别刷屏。
+  function lsWrite(key, payload, budget, label) {
+    var chars = payload.length;
+    if (chars > budget) {
+      if (!_localWarned[label]) {
+        _localWarned[label] = true;
+        console.warn("[SSD] " + label + " skipped:", chars, "chars > budget", budget);
+      }
+      return false;
+    }
+    try {
+      localStorage.setItem(key, payload);
+      return true;
+    } catch (e) {
+      if (!_localWarned[label]) {
+        _localWarned[label] = true;
+        console.warn("[SSD] " + label + " write failed:", chars, "chars,", (e && e.name) || e);
+      }
+      return false;
+    }
+  }
+
+  function localKey(host, name) { return LS_PREFIX + host + ":" + name; }
+
+  function cacheWriteOwned(host, ownedKeys, at) {
+    lsWrite(localKey(host, "owned.v1"),
+      JSON.stringify({ fetchedAt: at || Date.now(), keys: ownedKeys }), LOCAL_OWNED_BUDGET, "owned.v1");
+  }
+
+  function cacheWriteLinked(host, linked, at) {
+    lsWrite(localKey(host, "linked.v1"),
+      JSON.stringify({ fetchedAt: at || Date.now(), performers: linked }), LOCAL_LINKED_BUDGET, "linked.v1");
+  }
+
+  // 旧版单键 local.v1（linked + ownedKeys 合在一起）→ 拆成两条，然后删掉旧键。
+  // 不清掉的话它会一直白占配额，且不会被 scanOrphans 认领（那是缓存键的白名单）。
+  function migrateLocalV1(host) {
+    var old = lsRead(localKey(host, "local.v1"));
+    if (!old) return;
+    try {
+      if (Array.isArray(old.linked) && !lsRead(localKey(host, "linked.v1"))) {
+        cacheWriteLinked(host, old.linked, old.fetchedAt);
+      }
+      if (old.ownedKeys && typeof old.ownedKeys === "object" && !lsRead(localKey(host, "owned.v1"))) {
+        cacheWriteOwned(host, old.ownedKeys, old.fetchedAt);
+      }
+      localStorage.removeItem(localKey(host, "local.v1"));
     } catch (_) {}
   }
 
+  // 读路径：owned / linked 各自独立命中，缺哪份查哪份（linked 变慢，1h）
   function loadLinkedOwned(host, endpoint) {
-    if (!_localDirty) {
-      try {
-        var raw = localStorage.getItem(LS_PREFIX + host + ":local.v1");
-        if (raw) {
-          var e = JSON.parse(raw);
-          // 10 分钟 TTL：这份快照原先「无 TTL」，入库只改数据库不改它，于是
-          // 关掉页面再回来，已入库的片还挂在最新里（得等缓存整体过期）。
-          // 本地查询本身很便宜，过期重算的成本可以忽略。
-          var fresh = e && (Date.now() - (e.fetchedAt || 0)) < 10 * 60 * 1000;
-          if (fresh && Array.isArray(e.linked) && e.ownedKeys && typeof e.ownedKeys === "object") {
-            return Promise.resolve({ linked: e.linked, ownedKeys: e.ownedKeys });
-          }
-        }
-      } catch (_) {}
-    }
-    return Promise.all([loadLinkedPerformers(endpoint), loadOwnedKeys()]).then(function (r) {
-      cacheWriteLinkedOwned(host, r[0], r[1]);
-      _localDirty = false;
+    migrateLocalV1(host);
+    var oe = _localDirty ? null : lsReadFresh(localKey(host, "owned.v1"), LOCAL_OWNED_TTL_MS);
+    var le = lsReadFresh(localKey(host, "linked.v1"), LOCAL_LINKED_TTL_MS);
+    var ownedKeys = oe && oe.keys && typeof oe.keys === "object" ? oe.keys : null;
+    var linked = le && Array.isArray(le.performers) ? le.performers : null;
+    if (ownedKeys && linked) return Promise.resolve({ linked: linked, ownedKeys: ownedKeys });
+    return Promise.all([
+      linked ? Promise.resolve(linked) : loadLinkedPerformers(endpoint),
+      ownedKeys ? Promise.resolve(ownedKeys) : loadOwnedKeys(),
+    ]).then(function (r) {
+      if (!linked) cacheWriteLinked(host, r[0]);
+      if (!ownedKeys) {
+        cacheWriteOwned(host, r[1]);
+        _localDirty = false;
+      }
       return { linked: r[0], ownedKeys: r[1] };
     });
   }
@@ -1056,11 +1120,15 @@
           });
         }
       }
-      // SWR：陈旧缓存立刻出，后台静默刷新（不等待）
+      // SWR：陈旧缓存立刻出，后台静默刷新（不等待）。失败只留痕不弹错——
+      // 这次失败不该影响已经用陈旧数据渲染好的页面；但不接住会变成
+      // unhandled rejection（控制台一条红字，且没有任何上下文）。
       if (!opts.force && !opts.noStale) {
         var stale = cacheReadStale(host, "newScenes");
         if (stale) {
-          refreshDiscover(base, opts);
+          refreshDiscover(base, opts).catch(function (e) {
+            console.warn("[SSD] background refresh failed:", (e && e.ssdKind) || e);
+          });
           return loadLinkedOwned(host, base.source.endpoint).then(function (lo) {
             return buildResult(base, { scenes: stale.scenes, totalSeen: stale.totalSeen, fetchedAt: stale.fetchedAt, linked: lo.linked, ownedKeys: lo.ownedKeys }, "stale");
           });
@@ -1112,11 +1180,12 @@
           ids = ids.filter(function (id) { return !ig[ep + String(id).toLowerCase()]; });
         }
       } catch (_) {}
-      return Promise.all([loadOwnedKeys(), fetchNewScenesForPerformers(box, ids, base.since, opts && opts.onProgress)]).then(function (r) {
+      return Promise.all([loadOwnedKeys(), fetchNewScenesForPerformers(box, ids, base.since, opts && opts.onProgress, opts && opts.prio)]).then(function (r) {
         var ownedKeys = r[0], scenes = r[1];
         if (scenes == null) throw { ssdKind: "box", message: "partial fetch failure" };
         cacheWrite(host, "newScenes", base.since, scenes);
-        cacheWriteLinkedOwned(host, linked, ownedKeys);
+        cacheWriteLinked(host, linked);
+        cacheWriteOwned(host, ownedKeys);
         return buildResult(base, { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: scenes, linked: linked, ownedKeys: ownedKeys }, "network");
       });
     });
@@ -1132,7 +1201,7 @@
         if (fresh) return buildTrending(base, fresh, "fresh");
       }
       var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
-      return fetchTrendingScenes(box).then(function (scenes) {
+      return fetchTrendingScenes(box, opts.prio).then(function (scenes) {
         if (scenes == null) throw { ssdKind: "box", message: "trending fetch failed" };
         cacheWrite(host, "trending", null, scenes);
         return buildTrending(base, { fetchedAt: Date.now(), scenes: scenes }, "network");
@@ -1194,7 +1263,7 @@
           return buildStudio(base, emptyEntry, "network");
         }
         var ids = studios.map(function (s) { return s.stashId; });
-        return fetchStudioScenes(box, ids, base.since).then(function (scenes) {
+        return fetchStudioScenes(box, ids, base.since, opts.prio).then(function (scenes) {
           if (scenes == null) throw { ssdKind: "box", message: "studio fetch failed" };
           cacheWrite(host, "studios", base.since, scenes);
           return buildStudio(base, { sinceIsoDate: base.since, fetchedAt: Date.now(), scenes: scenes, ownedKeys: ownedKeys, studios: studios }, "network");
@@ -1281,7 +1350,7 @@
         } catch (_) {}
       }
       var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
-      return fetchTrendingPerformers(box, opts.perPage || 30, genders).then(function (r) {
+      return fetchTrendingPerformers(box, opts.perPage || 30, genders, opts.prio).then(function (r) {
         try {
           localStorage.setItem(LS_PREFIX + host + ":trendingPerf.v1", JSON.stringify({ v: 2, fetchedAt: Date.now(), performers: r.performers, degraded: r.degraded }));
         } catch (_) {}
@@ -1294,6 +1363,9 @@
   // 本地 memo（linked/owned/收藏工作室）一并失效——会话内收藏了新工作室、
   // 或库变动后点刷新，工作室模块才不会继续读到旧 memo（空收藏）。
   function refreshAll() {
+    // 先丢配置缓存：用户点了刷新就是要按当前插件设置重来（改了回看窗口 /
+    // 默认源 / 加了新 box 之后，不该读到 30s 内的旧配置）。
+    try { if (SSD.clearConfigCache) SSD.clearConfigCache(); } catch (_) {}
     return resolveBase().then(function (base) {
       cacheInvalidate(base.source.host);
       invalidateLocalMemos();
@@ -1755,6 +1827,42 @@
     var keep = cols * n;
     if (kids.length > keep) kids.slice(keep).forEach(function (k) { k.remove(); });
   }
+  // 骨架占位（总览加载态）：盒模型与真实卡一致，数据落地时模块高度不变。
+  // 场景卡容器必须直接用真实的 .ssd-card-grid —— 列宽/间距由
+  // repeat(auto-fill, minmax(--ssd-card-min,1fr)) 决定，自己另起一个类会拿到
+  // display:block，卡片变成整宽竖排（trimRows 只数到 1 列，骨架高达 2099）。
+  // 缩略图 238:138 + 固定 173px 文案区（实测 312-138-1）；迷你卡 = 10px 内边距
+  // + 44px 头像（实测 65）。行数由 trimRows 按实际列数裁。
+  function skelGrid(kind, nRows) {
+    var mini = kind === "mini";
+    var g = el("div", (mini ? "ssd-dp-grid mini" : "ssd-card-grid ssd-dp-grid") + " is-skel");
+    var n = Math.max(1, nRows) * 12;
+    for (var i = 0; i < n; i++) {
+      if (mini) {
+        var m = el("div", "ssd-dp-mini is-skel");
+        m.appendChild(el("span", "ssd-skel-ava"));
+        var t = el("div", "ssd-skel-l");
+        t.appendChild(el("i")); t.appendChild(el("i"));
+        m.appendChild(t);
+        g.appendChild(m);
+      } else {
+        var c = el("div", "ssd-skel-card");
+        c.appendChild(el("div", "ssd-skel-thumb"));
+        c.appendChild(el("div", "ssd-skel-text"));
+        g.appendChild(c);
+      }
+    }
+    return g;
+  }
+
+  // 模块占位：有错给三态框（带重试），否则给等高骨架
+  function modPlaceholder(s, kind, nRows, err, retryFn) {
+    if (err) { secBody(s, "error", errText(err), retryFn); return; }
+    var g = skelGrid(kind, nRows);
+    s.appendChild(g);
+    trimRows(g, nRows);
+  }
+
   function stateBox(kind, msg, retryFn) {
     var b = el("div", "ssd-dp-state");
     if (kind === "loading") {
@@ -1796,7 +1904,7 @@
   // 每次发起领一个号：新的接管后，旧请求回来只丢弃、不覆盖状态。
   // 否则"重试 → 旧请求超时回来 → 界面又跳回错误"。
   var _dataSeq = {};
-  function ensureData(keys, force) {
+  function ensureData(keys, force, prio) {
     var started = false;
     keys.forEach(function (k) {
       if (!DATASETS[k]) return;
@@ -1809,26 +1917,78 @@
       _dp.loading[k] = true; _dp.err[k] = null;
       if (k === "latest") _dp.progress = null;
       started = true;
-      DATASETS[k]({ force: !!force, onProgress: k === "latest" ? updateFetchProgress : null }).then(function (r) {
+      DATASETS[k]({ force: !!force, prio: !!prio, onProgress: k === "latest" ? updateFetchProgress : null }).then(function (r) {
         if (_dataSeq[k] !== seq) return;
         _dp.d[k] = r; _dp.loading[k] = false;
         if (k === "latest") _dp.progress = null;
         _dp.fetchedAt = Math.max(_dp.fetchedAt, r.fetchedAt || 0);
         if (k === "latest") { _dp.boxes = r.boxes || []; syncSourceSelect(); }
         emitUnread();
-        render();
+        afterDataset(k);
       }).catch(function (e) {
         if (_dataSeq[k] !== seq) return;
         _dp.loading[k] = false;
         if (k === "latest") _dp.progress = null;
         _dp.err[k] = e;
-        render();
+        afterDataset(k);
       });
     });
     // 重试要立刻有反馈：以前只清 err 不重绘，错误框会原地停到下次超时，
     // 看起来就是"点了重试毫无反应"（用户 2026-11-12）
-    if (started && force) render();
+    if (started && force) {
+      var patched = false;
+      keys.forEach(function (k) { if (refreshModules([k])) patched = true; });
+      if (!patched) render();
+    }
   }
+  // 数据集 → 依赖它的总览模块。落地时只重画这几块，别整页 innerHTML="" 重建：
+  // 一重建就 6 块一起拆、封面重新解码、模块高度抖一次（实测文档高度 1523→1917）。
+  var MODULES_OF_DATASET = {
+    latest: ["actors", "latest", "preview", "performers"],
+    trending: ["trending"],
+    studios: ["studios"],
+    trendingPerf: ["performers"],
+  };
+
+  function afterDataset(k) {
+    syncChrome();
+    if (refreshModules([k])) return;
+    render();
+  }
+
+  // 就地把这些数据集对应的模块换掉；返回 false = 当前视图不能局部刷新（调用方 render）
+  function refreshModules(datasetKeys) {
+    if (_dp.view !== "overview") return false;
+    var c = _dp.refs.content;
+    if (!c) return false;
+    var rows = overviewRows();
+    var ids = [];
+    (datasetKeys || []).forEach(function (k) {
+      (MODULES_OF_DATASET[k] || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+    });
+    var done = 0;
+    ids.forEach(function (id) {
+      if (!moduleShown(id)) return;
+      var old = c.querySelector('.ssd-dp-sec[data-mod="' + id + '"]');
+      if (!old || !old.parentNode) return;
+      // 占位容器先插进原位置再建：trimRows 靠真实布局数每行列数，脱离文档会全塌成 1 列
+      var holder = el("div", "ssd-dp-swap");
+      old.parentNode.insertBefore(holder, old);
+      old.parentNode.removeChild(old);
+      renderModule(id, holder, rows);
+      var p = holder.parentNode;
+      while (holder.firstChild) p.insertBefore(holder.firstChild, holder);
+      p.removeChild(holder);
+      done++;
+    });
+    if (!done) return false;
+    SSD.layoutCardGrid();
+    applySelMarks();
+    if (_dp.sel.on) syncSelBar();
+    return true;
+  }
+
+
   // 4a：批量进度只刷新加载态文案；节流避免整页高频重绘（用户 2026-10-26）
   var _progressTimer = 0;
   function updateFetchProgress(done, total) {
@@ -1836,8 +1996,9 @@
     if (_progressTimer) return;
     _progressTimer = setTimeout(function () {
       _progressTimer = 0;
-      // 仅当当前视图会展示 latest 且仍在加载时重绘，避免打断设置页输入
-      if (_dp.loading.latest && _dp.progress && viewDataKeys(_dp.view).indexOf("latest") >= 0) render();
+      // 总览的占位是骨架、不显示批次数 → 别为进度每 400ms 重画整页
+      if (_dp.loading.latest && _dp.view !== "overview" && _dp.progress &&
+          viewDataKeys(_dp.view).indexOf("latest") >= 0) render();
     }, 400);
   }
   function loadingText() {
@@ -2584,7 +2745,7 @@
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
         more: function () { dpSetPrefs({ perfSrc: "local" }); switchView("performers"); },
       });
-      if (!d) secBody(s1, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
+      if (!d) modPlaceholder(s1, "mini", rows.actors, _dp.err.latest, retryLatest);
       else if (!aw.length) {
         // 区分「没有可匹配的演员」与「窗口内确实没有新作品」（用户 2026-10-26）
         var noLinked = !(d.linked || []).length;
@@ -2624,7 +2785,7 @@
         count: d ? tc((d.latest || []).length + " 部未拥有", (d.latest || []).length + " unowned") : "",
         more: function () { switchView("latest"); },
       });
-      if (!d) secBody(s2, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
+      if (!d) modPlaceholder(s2, "scene", rows.latest, _dp.err.latest, retryLatest);
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
         var g2 = sceneGrid(d.latest.slice(0, prefetchLimit(rows.latest)));
@@ -2645,7 +2806,7 @@
             ' <span class="ssd-dp-sec-x">· ' + tc("不限库内", "not library-filtered") + "</span>") : "",
         more: function () { switchView("trending"); },
       });
-      if (!t) secBody(s3, _dp.err.trending ? "error" : "loading", _dp.err.trending ? errText(_dp.err.trending) : null, function () { retryDataset("trending"); });
+      if (!t) modPlaceholder(s3, "scene", rows.trending, _dp.err.trending, function () { retryDataset("trending"); });
       else if (!(t.items || []).length) secBody(s3, null).appendChild(stateBox("empty", tc("榜单暂无内容", "Empty list")));
       else {
         var g3 = sceneGrid(t.items.slice(0, prefetchLimit(rows.trending)), { inlib: true, owned: true });
@@ -2665,7 +2826,7 @@
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
-      if (!d) secBody(s4, _dp.err.latest ? "error" : "loading", _dp.err.latest ? errText(_dp.err.latest) : loadingText(), retryLatest);
+      if (!d) modPlaceholder(s4, "scene", rows.preview, _dp.err.latest, retryLatest);
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
         var g4 = sceneGrid(d.preview.slice(0, prefetchLimit(rows.preview)), { days: true });
@@ -2682,7 +2843,7 @@
         count: st ? tc((st.studioCount || 0) + " 个工作室", (st.studioCount || 0) + " studios") : "",
         more: function () { switchView("studios"); },
       });
-      if (!st) secBody(s5, _dp.err.studios ? "error" : "loading", _dp.err.studios ? errText(_dp.err.studios) : null, function () { retryDataset("studios"); });
+      if (!st) modPlaceholder(s5, "scene", rows.studios, _dp.err.studios, function () { retryDataset("studios"); });
       else if (!(st.items || []).length) {
         // 区分「还没有收藏工作室」与「收藏的工作室窗口内无新片」（用户 2026-10-26）
         secBody(s5, null).appendChild(stateBox("empty", !st.studioCount
@@ -2715,8 +2876,7 @@
         for (var mi = 0; mi < miss.length; mi++) {
           if (_dp.err[miss[mi]]) { e6 = _dp.err[miss[mi]]; break; }
         }
-        if (e6) secBody(s6, "error", errText(e6), function () { retryDatasets(miss); });
-        else secBody(s6, "loading", null);
+        modPlaceholder(s6, "mini", rows.performers, e6, function () { retryDatasets(miss); });
       }
       else {
         var g6 = el("div", "ssd-dp-grid mini");
@@ -2748,7 +2908,9 @@
   // 缺哪个就重试哪个，别只重试一个）
   function retryDatasets(keys) {
     keys.forEach(function (k) { _dp.err[k] = null; });
-    ensureData(keys, true);
+    // 重试是用户当场点的，必须插到限流队头：整屏扫描会把 3 个槽位占十几秒，
+    // 排在队尾的重试要等半分钟才动，看着就是"点了没反应"。
+    ensureData(keys, true, true);
   }
 
   // 共同出演上限：数据全部来自已在内存的 actorsWithNew（场景缓存），纯本地

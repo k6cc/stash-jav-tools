@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.7.11";
+  var PLUGIN_VERSION = "2.8.0";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -984,24 +984,53 @@
   // ─── Config ───────────────────────────────────────────────────────────────
 
   var _boxConfig = null;
+  // 发现页每个数据集各调一次 resolveBase()，两个配置查询因此被同步打多枪：
+  // 实测一次刷新里 configuration{plugins} 打了 5 次（4 数据集 + 刷新入口），
+  // 每份 24KB；冷加载整页 11 份。这里只做「并发去重 + 一定时间内复用」。
+  var _boxConfigFlight = null;
+  var _settingsCache = null, _settingsAt = 0, _settingsFlight = null;
+  // 只吞掉「同一次加载里并发打的那几枪」，所以寿命给短：10s 足够覆盖一轮
+  // 首屏（4 个数据集在 100ms 内先后问），又不至于让用户改完设置后长时间读到旧值。
+  var SETTINGS_TTL_MS = 10 * 1000;
 
   function getStashBoxes() {
     if (_boxConfig) return Promise.resolve(_boxConfig);
-    return callGQL("query { configuration { general { stashBoxes { name endpoint api_key } } } }")
+    if (_boxConfigFlight) return _boxConfigFlight;
+    var p = callGQL("query { configuration { general { stashBoxes { name endpoint api_key } } } }")
       .then(function (data) {
         var boxes = (((data.configuration || {}).general || {}).stashBoxes) || [];
         _boxConfig = boxes.filter(function (b) { return b && b.endpoint; });
         return _boxConfig;
       });
+    _boxConfigFlight = p;
+    p.catch(function () { if (_boxConfigFlight === p) _boxConfigFlight = null; });
+    return p;
   }
 
   function getPluginSettings() {
     // configuration.plugins 是 PluginConfigMap（JSON 对象，key=插件ID，value=设置），不带 subfields
-    return callGQL("query{configuration{plugins}}")
+    if (_settingsCache && Date.now() - _settingsAt < SETTINGS_TTL_MS) {
+      return Promise.resolve(_settingsCache);
+    }
+    if (_settingsFlight) return _settingsFlight;
+    var p = callGQL("query{configuration{plugins}}")
       .then(function (data) {
         var plugins = (data.configuration || {}).plugins || {};
-        return plugins[PLUGIN_ID] || {};
+        _settingsCache = plugins[PLUGIN_ID] || {};
+        _settingsAt = Date.now();
+        return _settingsCache;
       });
+    _settingsFlight = p;
+    p.catch(function () { if (_settingsFlight === p) _settingsFlight = null; });
+    p.then(function () { if (_settingsFlight === p) _settingsFlight = null; });
+    return p;
+  }
+
+  // 显式刷新（发现页「刷新」按钮）要读到最新配置：这层缓存只为合并一次首屏的
+  // 并发请求，不该让用户改完插件设置后点刷新还是旧值。
+  function clearConfigCache() {
+    _boxConfig = null; _boxConfigFlight = null;
+    _settingsCache = null; _settingsAt = 0; _settingsFlight = null;
   }
 
   // ─── Rate limiter (box queries) ──────────────────────────────────────────
@@ -1019,9 +1048,13 @@
         .catch(function (e) { active--; task.reject(e); tryDispatch(); });
     }
     return {
-      submit: function (fn) {
+      submit: function (fn, priority) {
         return new Promise(function (resolve, reject) {
-          queue.push({ fn: fn, resolve: resolve, reject: reject });
+          var task = { fn: fn, resolve: resolve, reject: reject };
+          // 默认 FIFO；priority 任务插到队头。整屏扫描会把 3 个槽位占十几秒，
+          // 排在队尾的重试看起来就是「点了没反应」（实测冷加载时 latest 的两个
+          // 请求要等到 t+5.7s 才拿到槽位）。
+          if (priority) queue.unshift(task); else queue.push(task);
           tryDispatch();
         });
       }
@@ -1112,6 +1145,7 @@
     boxStashIds: {},           // endpoint -> box performer stash_id
     boxCursors: {},            // endpoint -> next page to fetch (1-based)
     boxExhausted: {},          // endpoint -> true
+    boxLastSig: {},            // endpoint -> 上一页指纹（判「源没认 page」）
     boxPageSize: 100,          // dynamic per-page for box queries (adjusted by missing density)
     boxFetchedTotal: 0,        // scenes fetched from boxes so far (density denominator)
     boxTotalCount: 0,          // sum of box count fields (approx, includes owned)
@@ -1246,6 +1280,11 @@
   // 20s + 一次重试仍在 45s 总预算内。
   var BOX_PAGE_TIMEOUT_MS = 20000;
 
+  // 发现 tab 的翻页硬上限，与发现页 BOX_MAX_PAGES 同口径。正常源靠 count 就会停，
+  // 这层是兜「count 不可信、页页还不重复」的情况 —— 没有它时实测一个每页都回同一批
+  // 的源，14s 内发了 47 次请求仍不停。
+  var TAB_MAX_PAGES = 50;
+
   // Fetch ONE page from a stash-box (lazy loading — never pulls all 1000+ scenes).
   // 每页 100 条（约 480KB）：缺失率低的库一页就能填满一屏，少一次往返；
   // 单次超时/断连由 callBoxGQL 的重试兜住。页大小按实测缺失密度自适应（20–100）。
@@ -1267,7 +1306,9 @@
       // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
       return callBoxSceneList(box, input, BOX_PAGE_TIMEOUT_MS);
     }).then(function (result) {
-      if (!result || !result.scenes) return { scenes: [], count: 0, hasMore: false };
+      if (!result || !result.scenes) {
+        return { scenes: [], count: 0, perPage: boxPerPage, hasMore: false, sig: "" };
+      }
       var items = result.scenes.map(function (sc) {
         return {
           box: box,
@@ -1277,11 +1318,16 @@
           images: (sc.images || []).map(function (img) { return { url: img.url, type: "image" }; }),
         };
       });
+      var len = items.length;
       return {
         scenes: items,
         count: result.count || 0,
         perPage: boxPerPage,
-        hasMore: result.hasMore != null ? result.hasMore : result.scenes.length >= boxPerPage,
+        // queryScenes 不返回 hasMore，只有 TPDB 的 meta 有真值 —— 其余留 null，
+        // 交给调用方用 count 判，别再拿「本页有没有回满」猜。
+        hasMore: result.hasMore == null ? null : !!result.hasMore,
+        // 整页指纹：源无视 page 参数时每页都一样，用来判死循环
+        sig: len ? (items[0].scene.id + "|" + items[len - 1].scene.id + "|" + len) : "",
         truncated: !!result.truncated,
         skipped: result.skipped || [],
       };
@@ -1367,16 +1413,27 @@
           });
           _state.boxSkipped[b.endpoint] = prev;
         }
-        // queryScenes 没有 hasMore 字段，只能靠「本页是否回满」推断 —— 源偷降
-        // per_page 时（请求 100 回 20）会误判到底、真的少显示。count 是总数，
-        // 本页没回满且已取条数达到它就一定取完了，用这个兜底；回满的一页仍
-        // 按「还有更多」走，宁可多发一次空请求。
-        if (!result.hasMore) _state.boxExhausted[b.endpoint] = true;
-        else if (result.count > 0 && fetched >= result.count &&
-          result.scenes.length < (result.perPage || 1)) _state.boxExhausted[b.endpoint] = true;
-        // Window early-stop: the page's boundary date crossed the window,
-        // every later page is outside it as well
+        // 判到底，按可靠性从高到低：
+        // 1) 整页与上一页完全相同 → 源没认 page 参数（或一直回同一批），再翻也没用
+        // 2) TPDB 的 meta 直接给了「有没有下一页」
+        // 3) 空页
+        // 4) 已取满 count —— count 与 scenes 同在一个响应里，比「回没回满」可靠
+        // 5) 没有 count 时才退回旧的「没回满即到底」推断
+        // 6) 窗口早停：本页边界日期已越过窗口，后面几页只会更早
+        // 7) 页数硬上限
+        var sig = result.sig || "";
+        var left = result.count > 0 ? result.count - fetched : -1;
+        if (sig && sig === (_state.boxLastSig[b.endpoint] || "")) _state.boxExhausted[b.endpoint] = true;
+        else if (result.hasMore === false) _state.boxExhausted[b.endpoint] = true;
+        else if (!result.scenes.length) _state.boxExhausted[b.endpoint] = true;
+        else if (left === 0) _state.boxExhausted[b.endpoint] = true;
+        else if (left < 0 && result.scenes.length < (result.perPage || 1)) _state.boxExhausted[b.endpoint] = true;
         else if (boxPageOutOfWindow(result.scenes)) _state.boxExhausted[b.endpoint] = true;
+        else if (pageNum >= TAB_MAX_PAGES) {
+          _state.boxExhausted[b.endpoint] = true;
+          _state.boxTruncated[b.endpoint] = true;
+        }
+        _state.boxLastSig[b.endpoint] = sig;
         if (result.count && !_state.boxTotalCount) _state.boxTotalCount = result.count;
         return result.scenes;
       }).catch(function (e) {
@@ -1612,6 +1669,7 @@
     _state.cachedMissing = [];
     _state.boxCursors = {};
     _state.boxExhausted = {};
+    _state.boxLastSig = {};
     _state.boxFailed = {};
     _state.boxStatus = {};
     _state.boxFetched = {};
@@ -1639,6 +1697,9 @@
   function loadMissingScenes(force) {
     var performerId = _state.performerId;
     if (!performerId) return Promise.resolve();
+
+    // 主动刷新/重试/换窗口 = 用户要按当前插件设置重来，别读 10s 内的配置缓存
+    if (force) clearConfigCache();
 
     // 命中快照先把上次的结果画出来：多源扫描要几秒，别让用户盯着骨架。
     // 随后仍会查设置/本地 key 校验，通过就只做一次在库过滤（不碰源）。
@@ -1859,6 +1920,7 @@
     _state.cachedMissing = [];
     _state.boxCursors = {};
     _state.boxExhausted = {};
+    _state.boxLastSig = {};
     _state.boxFailed = {};
     _state.boxStatus = {};
     _state.boxFetched = {};
@@ -9359,6 +9421,7 @@
     // config
     getStashBoxes: getStashBoxes,
     getPluginSettings: getPluginSettings,
+    clearConfigCache: clearConfigCache,
     // i18n / dates
     tc: tc,
     isZh: isZh,
@@ -9481,19 +9544,18 @@
   }
 
   // 角标要和关注页同口径，就得知道「本地已拥有」和「本地演员有没有链到这个源」。
-  // 发现页把这两份数据写在 local.v1（无 TTL，打开发现页即刷新），轮询直接读它，
-  // 比现场扫全库便宜得多。快照缺失 → 返回 null，不加过滤（退回旧行为），
+  // 发现页把这两份数据分别写在 owned.v1 / linked.v1（打开发现页即刷新），轮询直接
+  // 读它们，比现场扫全库便宜得多。任一份缺失 → 返回 null，不加过滤（退回旧行为），
   // 宁可多报也不要在没数据时把角标压成 0。
   function pollLocalSnap(endpoint) {
     try {
       var host = new URL(endpoint).host;
-      var raw = localStorage.getItem("SSD:dp:" + host + ":local.v1");
-      if (!raw) return null;
-      var o = JSON.parse(raw);
-      if (!o || !o.ownedKeys || typeof o.ownedKeys !== "object") return null;
+      var oe = JSON.parse(localStorage.getItem("SSD:dp:" + host + ":owned.v1") || "null");
+      if (!oe || !oe.keys || typeof oe.keys !== "object") return null;
+      var le = JSON.parse(localStorage.getItem("SSD:dp:" + host + ":linked.v1") || "null");
       var linked = {};
-      (o.linked || []).forEach(function (p) { if (p && p.stashId) linked[String(p.stashId)] = true; });
-      return { owned: o.ownedKeys, linked: linked };
+      ((le && le.performers) || []).forEach(function (p) { if (p && p.stashId) linked[String(p.stashId)] = true; });
+      return { owned: oe.keys, linked: linked };
     } catch (_) { return null; }
   }
 
@@ -10022,12 +10084,14 @@
     var Api = window.PluginApi;
     if (!Api || !Api.patch || !Api.React) return;
     var React = Api.React;
-    var ReactDOM = Api.ReactDOM;
     // Stash 的 PluginApi.components 里没有 Button（External Player Launcher 取的是
     // 这个位置，在本版本拿到 undefined，按钮就静默不出现）—— 按钮在 Bootstrap 里。
     var Bootstrap = (Api.libraries || {}).Bootstrap || {};
     var Button = Bootstrap.Button || (Api.components || {}).Button;
-    if (!Button || !ReactDOM || typeof ReactDOM.createPortal !== "function") return;
+    // 弹窗用 Stash 的 Bootstrap Modal（EPL 同款）：X 按钮、Esc、点遮罩关闭（自带
+    // 拖拽防误触）和背景滚动锁都是现成的，别自己写 portal。
+    var Modal = Bootstrap.Modal;
+    if (!Button || !Modal || !Modal.Header) return;
     // 图标：Stash 暴露的是 ReactFontAwesome（组件）+ FontAwesomeSolid（图标定义），
     // 不是 FontAwesome 一个包。缺了就不画图标，按钮照常可用。
     var FAComp = (Api.libraries || {}).ReactFontAwesome || {};
@@ -10083,9 +10147,63 @@
       );
     }
 
+    // 弹窗里的点击必须就地截断：DOM 层面它挂在 body（Modal 自带 portal），但
+    // React 事件仍沿 React 树冒泡回设置卡片头部 —— 卡片头是折叠开关，于是点弹窗
+    // 任意位置都会把卡片展开/收起（实测 132↔1338）。stopPropagation 要在自己的
+    // 子树顶上做，光换挂载点没用。
+    function stopBubble(e) { e.stopPropagation(); }
+
     function TestDialog(props) {
       var st = props.state;
-      function close(e) { if (e && e.target !== e.currentTarget) return; props.onClose(); }
+      // 遮罩/拖拽两条路自己接管（backdrop:"static" 关掉自带的 onHide）：
+      // 1) 遮罩上轻轻一点 → 关闭；
+      // 2) 从面板里按住拖到面板外松手 → 不关闭。react-bootstrap 这版只判
+      //    click.target 是不是 .modal，从面板拖到遮罩松手时 target 恰好是它
+      //    （最近公共祖先）→ 误关。
+      // 3) 拖拽松手产生的 click，target 是「按下点与松手点的最近公共祖先」，
+      //    可能是遮罩，也可能是设置卡片头本身 —— 后者会把插件卡片展开/收起。
+      //    这条 click 已经跑出了弹窗子树，Header/Body/Footer 上的 stopPropagation
+      //    管不到，只能在 document 捕获阶段拦（捕获早于 React 的冒泡处理）。
+      React.useEffect(function () {
+        if (!props.show) return undefined;
+        var content = document.querySelector(".ssd-test-content");
+        var root = content && content.closest(".modal");
+        if (!root) return undefined;
+        var pressed = false, dragged = false, sx = 0, sy = 0;
+
+        function onDown(e) {
+          pressed = true; dragged = false;
+          sx = e.clientX; sy = e.clientY;
+        }
+        function onMove(e) {
+          if (!pressed) return;
+          if (Math.abs(e.clientX - sx) > 8 || Math.abs(e.clientY - sy) > 8) dragged = true;
+        }
+        function onClick(e) {
+          var inside = content.contains(e.target);
+          // 面板内、且不是拖拽松手 → 正常点击，交给按钮自己的 React 处理
+          if (inside && !dragged) { pressed = false; return; }
+          // 其余情况（遮罩、拖出面板后的落点）全部就地吞掉
+          e.stopPropagation();
+          e.preventDefault();
+          if (!dragged && e.target === root) props.onClose();
+          pressed = false; dragged = false;
+        }
+        function reset() { pressed = false; dragged = false; }
+
+        root.addEventListener("pointerdown", onDown, true);
+        document.addEventListener("pointermove", onMove, true);
+        document.addEventListener("click", onClick, true);
+        document.addEventListener("pointercancel", reset, true);
+        window.addEventListener("blur", reset);
+        return function () {
+          root.removeEventListener("pointerdown", onDown, true);
+          document.removeEventListener("pointermove", onMove, true);
+          document.removeEventListener("click", onClick, true);
+          document.removeEventListener("pointercancel", reset, true);
+          window.removeEventListener("blur", reset);
+        };
+      }, [props.show]);
       var body;
       if (st.loading) {
         body = React.createElement("div", { className: "ssd-test-wait" },
@@ -10099,18 +10217,23 @@
           return React.createElement(TestRow, { key: i, item: it });
         });
       }
-      var foot = React.createElement("div", { className: "ssd-test-foot" },
-        React.createElement(Button, { variant: "secondary", onClick: props.onRun, disabled: st.loading },
-          tc("重新测试", "Test again")),
-        React.createElement(Button, { variant: "primary", onClick: props.onClose },
-          tc("关闭", "Close")));
-      return ReactDOM.createPortal(
-        React.createElement("div", { className: "ssd-test-overlay", onClick: close },
-          React.createElement("div", { className: "ssd-test-panel", role: "dialog" },
-            React.createElement("div", { className: "ssd-test-title" }, tc("连接测试", "Connection test")),
-            React.createElement("div", { className: "ssd-test-list" }, body),
-            foot)),
-        document.body);
+      return React.createElement(Modal, {
+        show: !!props.show,
+        onHide: props.onClose,
+        backdrop: "static",
+        centered: true,
+        dialogClassName: "ssd-test-dialog",
+        contentClassName: "ssd-test-content",
+      },
+        React.createElement(Modal.Header, { closeButton: true, onClick: stopBubble, onMouseDown: stopBubble },
+          React.createElement(Modal.Title, null, tc("连接测试", "Connection test"))),
+        React.createElement(Modal.Body, { onClick: stopBubble, onMouseDown: stopBubble },
+          React.createElement("div", { className: "ssd-test-list" }, body)),
+        React.createElement(Modal.Footer, { onClick: stopBubble, onMouseDown: stopBubble },
+          React.createElement(Button, { variant: "secondary", onClick: props.onRun, disabled: st.loading },
+            tc("重新测试", "Test again")),
+          React.createElement(Button, { variant: "primary", onClick: props.onClose },
+            tc("关闭", "Close"))));
     }
 
     function TestButton() {
@@ -10150,9 +10273,10 @@
 
       return React.createElement(React.Fragment, null,
         trigger,
-        open ? React.createElement(TestDialog, {
-          state: state, onClose: function () { setOpen(false); }, onRun: run,
-        }) : null);
+        React.createElement(TestDialog, {
+          show: open, state: state,
+          onClose: function () { setOpen(false); }, onRun: run,
+        }));
     }
 
     try {

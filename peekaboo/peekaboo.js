@@ -14,7 +14,7 @@
   window.__peekabooLoaded = true;
 
   var PLUGIN_ID = "peekaboo";
-  var PLUGIN_VERSION = "1.0.0";
+  var PLUGIN_VERSION = "1.0.1";
   var LS_KEY = "peekaboo.on";
   var BTN_ID = "plugin-peekaboo";
   var WRAP_ID = "plugin-peekaboo-wrap";
@@ -251,6 +251,8 @@
     // 先备好 data URI：重载插件时旧 <defs> 还在，但这里是新的实例，href 表还是空的
     if (!ART_HREF.length) {
       for (var k = 0; k < ART_COUNT; k++) ART_HREF[k] = artHref(k);
+      // 播放器那块用同一张图案当背景（见 peekaboo.css），视频本身不参与绘制
+      document.documentElement.style.setProperty("--peekaboo-cover", "url(\"" + ART_HREF[0] + "\")");
     }
     if (document.getElementById(DEFS_ID)) return;
     var parts = ["<defs>"];
@@ -739,16 +741,16 @@
       attributeFilter: ["src", "poster"]
     });
 
+    // 浏览器标题：文字被改、或 SPA 换页时整个 <title> 被换掉，都要重新遮。
+    // 观察 head 的子树就够，换元素和换文字都在里面，不用定时重挂
     var titleObs = new MutationObserver(function () {
       if (state.on && !cfg.textReadable) maskTitle();
     });
-    var watch = function () {
-      var t = document.querySelector("title");
-      if (t) titleObs.observe(t, { childList: true, characterData: true, subtree: true });
-    };
-    watch();
-    // SPA 换页后 <title> 可能被整体替换
-    setInterval(watch, 5000);
+    titleObs.observe(document.head || document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
   }
 
   // ===== 视频 =====
@@ -873,6 +875,9 @@
   function peekHost(e) {
     var t = e.target;
     if (!t || !t.closest) return null;
+    // 播放页：画面、海报、盖在它们上面的背景图都挂在 .video-js 里，露的时候整块一起露
+    var player = t.closest(".video-js");
+    if (player) return player;
     var card = t.closest(HOST_SEL);
     if (card) {
       if (card.querySelector("img, video, [" + ART_ATTR + "]")) return card;

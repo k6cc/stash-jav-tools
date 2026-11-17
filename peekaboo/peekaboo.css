@@ -86,6 +86,23 @@ html.peekaboo-on .peekaboo-peek .gallery-card-preview-video {
     visibility: visible !important;
 }
 
+/* 播放器：视频与海报都是整个播放器那么大，滤镜每帧都要在 CPU 上重算整块，
+   手机上滚一下就掉帧。图案本来就和画面帧无关，所以藏掉它们、由容器画同一张图案，
+   观感不变，代价从「整块滤镜」降到「画一张图」。
+   用 opacity 而不是 visibility：video.js 靠点视频区域切播放，藏掉就点不到了。 */
+html.peekaboo-on .video-js {
+    background-image: var(--peekaboo-cover, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+html.peekaboo-on .video-js video,
+html.peekaboo-on .video-js .vjs-poster {
+    filter: none !important;
+    opacity: 0 !important;
+}
+
 /* 悬停预览：整张卡片（含 Stash 悬停插入的预览视频）临时露出原图。
    规则必须排在上面的编号规则之后（同优先级，靠顺序生效）。 */
 html.peekaboo-on .peekaboo-peek,
@@ -110,4 +127,24 @@ html.peekaboo-on.peekaboo-reveal img,
 html.peekaboo-on.peekaboo-reveal video,
 html.peekaboo-on.peekaboo-reveal [data-peekaboo-art] {
     filter: none !important;
+}
+
+/* 露出时播放器那两块得放回来，否则掀开盖子只有一个空图案 */
+html.peekaboo-on.peekaboo-reveal .video-js {
+    background-image: none;
+}
+
+html.peekaboo-on.peekaboo-reveal .video-js video,
+html.peekaboo-on.peekaboo-reveal .video-js .vjs-poster {
+    opacity: 1 !important;
+}
+
+/* 长按播放器露原图：同上两件事 */
+html.peekaboo-on .video-js.peekaboo-peek {
+    background-image: none;
+}
+
+html.peekaboo-on .video-js.peekaboo-peek video,
+html.peekaboo-on .video-js.peekaboo-peek .vjs-poster {
+    opacity: 1 !important;
 }

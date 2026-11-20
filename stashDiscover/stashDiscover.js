@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.4";
+  var PLUGIN_VERSION = "2.8.5";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -5656,7 +5656,7 @@
     // 外观与「演员详情弹层」的忽略按钮同源（用户 2026-10-30）。
     var banBtn = ssdBanButton({
       label: tc("忽略", "Ignore"),
-      title: tc("从发现页忽略这条（设置 → 已忽略管理 可恢复）", "Ignore this scene (restore under Settings → Ignored)"),
+      title: tc("忽略这条场景（可在忽略记录里恢复）", "Ignore this scene (restore from the ignore records)"),
       aria: tc("忽略这条场景", "Ignore this scene"),
       onConfirm: function () { toggleIgnoreScene(item); },
     });

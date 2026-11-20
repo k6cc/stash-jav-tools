@@ -3576,8 +3576,8 @@
   function perfIgnoreButton(endpoint, p, after) {
     return SSD.banButton({
       label: tc("忽略", "Ignore"),
-      title: tc("忽略这位演员（设置 → 已忽略管理 可恢复）",
-                "Ignore this performer (restore under Settings → Ignored)"),
+      title: tc("忽略这位演员（可在忽略记录里恢复）",
+                "Ignore this performer (restore from the ignore records)"),
       aria: tc("忽略这位演员", "Ignore this performer"),
       onConfirm: function () {
       var r = SSD.dpIgnore.ignorePerformer({

@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.1";
+  var PLUGIN_VERSION = "0.1.2";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -866,7 +866,7 @@
       isWsp() ? null : { id: "results", label: tc("有结果", "Results"), n: found.length, hue: "gr", icon: "check" },
       { id: "downloading", label: isWsp() ? tc("Whisparr", "Whisparr") : tc("下载中", "Downloading"), n: live.length, hue: "cy", icon: "download" },
       { id: "done", label: tc("已完成", "Done"), n: done.length, hue: "bl", icon: "folder" },
-      { id: "ignored", label: tc("已忽略", "Ignored"), n: ignored.length, hue: "tx3", icon: "ban" },
+      { id: "ignored", label: tc("已忽略", "Ignored"), n: ignored.length, hideCount: true, hue: "tx3", icon: "ban" },
       { id: "settings", label: tc("设置", "Settings"), n: 0, hue: "tx3", icon: "info" },
     ].filter(Boolean);
 
@@ -2577,18 +2577,20 @@
       var busy2 = liveList.filter(function (p) { return !p.ready && p.state !== "missing"; });
       VIS = liveList.map(function (p) { return String(p.sceneId); });
       var showReady = filter !== "ready";
+      // 没有任务时按钮照常占位（置灰），否则这行只剩连接状态，高度会比有卡片时矮一截
+      var noLive = !live.length;
       var bulk = [
         isWsp() ? null : h("button", {
-          className: "sf-btn sf-btn-sm", key: "b1", disabled: busy === "bulk:resume",
+          className: "sf-btn sf-btn-sm", key: "b1", disabled: noLive || busy === "bulk:resume",
           onClick: function () { doBulk("resume"); },
         }, ico("play"), tc("全部下载", "Resume all")),
         isWsp() ? null : h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost", key: "b2", disabled: busy === "bulk:pause",
+          className: "sf-btn sf-btn-sm sf-btn-ghost", key: "b2", disabled: noLive || busy === "bulk:pause",
           onClick: function () { doBulk("pause"); },
         }, ico("pause"), tc("全部暂停", "Pause all")),
         h("button", {
           className: "sf-btn sf-btn-sm sf-btn-ghost", key: "b3",
-          disabled: busy === "bulk:remove_missing" || !anyMissing,
+          disabled: noLive || busy === "bulk:remove_missing" || !anyMissing,
           title: anyMissing ? "" : (isWsp()
             ? tc("Whisparr 里都还在", "Nothing is missing")
             : tc("下载器里都还在", "Nothing is missing")),
@@ -2598,7 +2600,7 @@
       // 窄屏这几个按钮跟着工具条的「更多」走
       MEXTRA.push(h("div", { className: "sf-listbar-btns", key: "bulk-mob" }, bulk));
       body = h("div", { className: "sf-stack" },
-        listBar(connLine(), live.length ? bulk : null, true),
+        listBar(connLine(), bulk, true),
         section("ready", "bl", "download", tc("待入库", "Ready"), ready, progressCard, progressRow),
         showReady ? section("busy", "cy", "download",
           isWsp() ? tc("Whisparr 处理中", "In Whisparr") : tc("下载中", "Downloading"),
@@ -2693,7 +2695,7 @@
             className: "sf-tab is-h-" + t.hue + (tab === t.id ? " is-on" : ""),
             onClick: function () { switchTab(t.id); },
           }, ico(t.icon), t.label,
-            t.n ? h("span", { className: "sf-count" + (t.id === "pending" ? " is-hot" : "") }, t.n) : null);
+            t.n && !t.hideCount ? h("span", { className: "sf-count" + (t.id === "pending" ? " is-hot" : "") }, t.n) : null);
         }))),
 
       statsRow(),

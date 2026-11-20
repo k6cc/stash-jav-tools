@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.

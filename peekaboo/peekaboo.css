@@ -53,8 +53,9 @@ html.peekaboo-on [data-peekaboo-art="29"] { filter: url(#peekaboo-art-29) !impor
 html.peekaboo-on [data-peekaboo-art="30"] { filter: url(#peekaboo-art-30) !important; }
 html.peekaboo-on [data-peekaboo-art="31"] { filter: url(#peekaboo-art-31) !important; }
 
-/* 被遮的文字统一中性灰：标签之类原本是深色字，块会和背景混在一起看不见 */
-html.peekaboo-on [data-peekaboo-masked] {
+/* 被遮的文字默认保留原色；登记进 grey 名单的才统一中性灰（原生标签之类原本是深色字，
+   块会和背景混在一起看不见）。black / white 纯色块对所有被遮元素生效，见下。 */
+html.peekaboo-on [data-peekaboo-grey] {
     color: #8b95a1 !important;
 }
 

@@ -50,6 +50,9 @@
   var COMPAT_ATTR = compatList("attr").join(",");   // 控件 title/alt 里的库内容
   var COMPAT_BG = compatList("bg").join(",");       // 背景图画面，命中即遮
   var COMPAT_TAIL = compatList("tail").join(",");   // 「名字 · 计数」里只遮名字，计数留着
+  var COMPAT_GREY = compatList("grey").join(",");   // 中性灰名单：只有登记过的才刷灰，默认保留原色
+  var COMPAT_SCOPE = compatList("scope").join(",");   // 整块兜底容器：里面自己的文字都遮
+  var COMPAT_IGNORE = compatList("ignore").join(","); // scope 里要放过的界面文字
 
   var SEL = "img, video";
   // 背景图形式的画面（播放器海报、进度条预览气泡、拖动预览的雪碧图）不经过 <img>
@@ -241,6 +244,18 @@
   }
 
   var ART_HREF = [];                       // 图案 data URI，feImage 的 href
+  var COVER_URL = "";                      // <html> 上的封面改用 blob，避免整段 data URI 占据 DOM
+
+  function coverUrl() {
+    if (COVER_URL) return COVER_URL;
+    try {
+      if (window.Blob && window.URL && URL.createObjectURL) {
+        COVER_URL = URL.createObjectURL(new Blob([artSvg(0)], { type: "image/svg+xml" }));
+        return COVER_URL;
+      }
+    } catch (e) { /* 回退到 data URI */ }
+    return ART_HREF[0];
+  }
 
   function artHref(k) {
     // encodeURIComponent 不转义单引号，而 SVG 属性用的就是单引号 —— 不替换会截断 href
@@ -252,7 +267,7 @@
     if (!ART_HREF.length) {
       for (var k = 0; k < ART_COUNT; k++) ART_HREF[k] = artHref(k);
       // 播放器那块用同一张图案当背景（见 peekaboo.css），视频本身不参与绘制
-      document.documentElement.style.setProperty("--peekaboo-cover", "url(\"" + ART_HREF[0] + "\")");
+      document.documentElement.style.setProperty("--peekaboo-cover", "url(\"" + coverUrl() + "\")");
     }
     if (document.getElementById(DEFS_ID)) return;
     var parts = ["<defs>"];
@@ -549,17 +564,20 @@
     return !(field && safe.contains(field));
   }
 
-  // 遮字元素的配色可能与本来的背景一样暗（标签就是深灰字），块会看不见；统一给中性灰
+  // 遮字元素默认保留原色；只有登记进 grey 名单的才统一中性灰（原生字段常是低对比深色字，
+  // 块会和背景糊在一起，第三方插件自己的配色则没必要动）
   function markMasked(el) {
     if (el.__peekabooMasked) return;
     el.__peekabooMasked = true;
     el.setAttribute("data-peekaboo-masked", "");
+    if (COMPAT_GREY && el.matches(COMPAT_GREY)) el.setAttribute("data-peekaboo-grey", "");
   }
 
   function unmaskEls() {
     var list = document.querySelectorAll("[data-peekaboo-masked]");
     for (var i = 0; i < list.length; i++) {
       list[i].removeAttribute("data-peekaboo-masked");
+      list[i].removeAttribute("data-peekaboo-grey");
       list[i].__peekabooMasked = false;
     }
   }
@@ -576,6 +594,7 @@
     var els = root.querySelectorAll("[data-peekaboo-masked]");
     for (var j = 0; j < els.length; j++) {
       els[j].removeAttribute("data-peekaboo-masked");
+      els[j].removeAttribute("data-peekaboo-grey");
       els[j].__peekabooMasked = false;
     }
     var keep = [];
@@ -612,6 +631,68 @@
     if (masked) markMasked(el);                                         // 没遮的标签保持原色
   }
 
+  // ===== scope 兜底：第三方没给逐字段类名时，容器内按元素整块替换 =====
+  // 只取「元素自己的直接文本」，子元素各算一块；控件、白名单与已登记的字段不碰。
+  function scopeSkip(el) {
+    if (el.closest(SAFE_SEL)) return true;
+    if (el.closest(FIELD_SEL)) return true;
+    if (COMPAT_IGNORE && el.closest(COMPAT_IGNORE)) return true;
+    return false;
+  }
+
+  function maskOwnText(el) {
+    var nodes = [];
+    for (var c = el.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType === 3 && /\S/.test(c.nodeValue)) nodes.push(c);
+    }
+    if (!nodes.length) return false;
+    var orig = "";
+    var done = true;
+    var i;
+    for (i = 0; i < nodes.length; i++) {
+      var rec = textOrig.get(nodes[i]);
+      orig += rec ? rec.orig : nodes[i].nodeValue;
+      if (!rec || rec.masked !== nodes[i].nodeValue) done = false;
+    }
+    if (done || !orig.trim()) return false;
+    var masked = maskValue(orig, hash((el.getAttribute("class") || el.tagName) + "|" + orig), 0, false);
+    if (cfg.textStyle === "sunny") masked += " ";
+    var target = 0;
+    for (var t = 0; t < nodes.length; t++) {
+      if (((textOrig.get(nodes[t]) || {}).orig || nodes[t].nodeValue).trim()) { target = t; break; }
+    }
+    for (var j = 0; j < nodes.length; j++) {
+      var node = nodes[j];
+      var o = (textOrig.get(node) || {}).orig || node.nodeValue;
+      var mm = j === target ? masked : "";
+      textOrig.set(node, { orig: o, masked: mm });
+      if (node.nodeValue !== mm) node.nodeValue = mm;
+    }
+    return true;
+  }
+
+  function maskScopeEl(el) {
+    if (!el || el.nodeType !== 1) return;
+    var list = [el].concat(Array.prototype.slice.call(el.querySelectorAll("*")));
+    for (var i = 0; i < list.length; i++) {
+      var n = list[i];
+      if (scopeSkip(n)) continue;
+      if (maskOwnText(n)) markMasked(n);
+    }
+  }
+
+  function maskScopeTree(root) {
+    if (!COMPAT_SCOPE || !root.matches) return;
+    var host = root.closest(COMPAT_SCOPE);
+    if (host) {
+      maskScopeEl(root);                                                // 新增节点落在兜底容器里
+      return;
+    }
+    if (root.matches(COMPAT_SCOPE)) { maskScopeEl(root); return; }      // 新增的就是容器本身
+    var inner = root.querySelectorAll(COMPAT_SCOPE);                    // 新增节点里带着容器
+    for (var i = 0; i < inner.length; i++) maskScopeEl(inner[i]);
+  }
+
   function maskTree(root) {
     if (!root || cfg.textReadable || !state.on) return;
     if (state.reveal && cfg.revealText) return;                         // 正按 Shift 全页露原图，别遮回去
@@ -623,6 +704,10 @@
       var unit = p.closest(UNIT_SEL);
       if (unit) {
         if (maskUnit(unit, wordsFor(unit, unit.textContent))) markMasked(unit);
+        return;
+      }
+      if (COMPAT_SCOPE && p.closest(COMPAT_SCOPE) && !p.closest(FIELD_SEL)) {
+        if (maskOwnText(p)) markMasked(p);
         return;
       }
       if (!p.closest(FIELD_SEL)) return;                                // 只处理字段区，别把界面文字也遮了
@@ -642,6 +727,7 @@
       var extra = root.querySelectorAll(COMPAT_ATTR);
       for (var k = 0; k < extra.length; k++) maskAttrs(extra[k]);
     }
+    maskScopeTree(root);
   }
 
   function unmaskAll() {

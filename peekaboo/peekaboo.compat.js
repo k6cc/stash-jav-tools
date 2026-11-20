@@ -11,6 +11,11 @@
  *   attr  被塞进控件 title/alt 的库内容（控件本身免遮，但这两个属性要遮）
  *   bg    背景图形式的画面：命中就遮，不看 URL（外站直链的封面认不出来）
  *   tail  「名字 · 计数」只遮名字、计数留着（计数是插件自己的统计，不是库内容）
+ *   grey  遮完刷中性灰的元素（默认保留原色）。原生字段的低对比深色字登记在这里；
+ *         第三方插件自己的配色默认不动，需要灰再往里加
+ *   scope  整块兜底的可选容器：里面每个元素自己的文字都替换（控件与 ignore 除外）。
+ *          给没有逐字段类名的插件用，不用对方配合；代价是插件自己的统计也会被遮。
+ *   ignore scope 里要放过的界面文字（状态行、计数、说明）
  *
  * 不写进来的：插件自己的按钮文字、表单、搜索/导入弹窗 —— 那些是操作对象，
  * 遮了就没法确认自己在点什么、在导什么。
@@ -18,6 +23,29 @@
  * 本文件必须排在 peekaboo.js 之前（见 peekaboo.yml 的 ui.javascript 顺序）。
  */
 window.__peekabooCompat = [
+  // ══ Stash 原生 ═══════════════════════════════════════════════════════════
+  // 只登记「刷灰」这一件事：原生字段里的日期、标签、详情值多是低对比深色字，
+  // 换成块会和背景糊在一起。原生之外的插件默认保留自己的配色。
+  {
+    id: "stashNative",
+    grey: [
+      // 卡片与详情
+      ".TruncatedText", ".tag-item", ".detail-item", ".detail-item-title", ".detail-item-value",
+      ".scene-details h6", ".scene-details a", ".details-list h6",
+      ".gallery-details h6", ".image-details h6",
+      ".scene-description", ".gallery-description", ".expandable-text", ".pre",
+      ".scene-subheader .date", ".card-section", ".studio-overlay", ".file-path",
+      // 卡片角标与日期
+      ".performer-card__age", ".scene-card__date", ".group-card__date",
+      ".gallery-card__date", ".image-card__date",
+      // 名字与链接
+      'a[href^="/studios/"]', 'a[href^="/performers/"]', ".stash-id-pill",
+      ".scene-header", ".performer-head", ".studio-head", ".gallery-head",
+      ".image-head", ".group-head",
+      ".performer-name", ".performer-disambiguation", ".alias-head",
+      ".group-name", ".tag-name", ".studio-name"
+    ]
+  },
   // ══ stashDiscover ══════════════════════════════════════════════════════════
   // 覆盖：演员小卡（发现页 mini 卡）、本地演员展开（演员过滤视图头部）、
   //       工作室钻取（入口药丸 + 展开后的头部）、场景详情弹窗（.ssd-modal）、
@@ -55,5 +83,28 @@ window.__peekabooCompat = [
     ],
     bg: [".ssd-carousel-hero", ".ssd-dp-studiopic"],
     tail: [".ssd-dp-grpchip"]
+  },
+  // ══ SceneBackfill ═══════════════════════════════════════════════════════════
+  // 补档页（/plugins/SceneBackfill）：卡片、列表行与两个弹窗都是自绘的 sf-* 类名。
+  // 库内容优先认该插件的 sf-lib（一行库内容）/ sf-lib-desc（简介）标记，精度最高；
+  // 标记之外还写了一份纯选择器版本，标记被删掉时依然能遮（列表行副标题是库内容与
+  // 「大小 · 时间」拼在同一节点，纯选择器会一起遮，所以保留标记做精确化）。
+  {
+    id: "SceneBackfill",
+    // 卡片、列表行、弹窗封面：悬停 / 长按整块露原图
+    host: [".sf-tile", ".sf-row", ".sf-modal-shot"],
+    unit: [
+      // 语义标记（有就用，精度最高）
+      ".sf-lib",
+      // 纯选择器兜底：这些类名本身只装库内容
+      ".sf-tile-title", ".sf-row-title", ".sf-modal-title", ".sf-modal-code",
+      ".sf-shot-code", ".sf-shot-ph", ".sf-cand-title", ".sf-pick-name",
+      ".sf-dl-name", ".sf-row-release", ".sf-tag:not(.sf-tag-more)",
+      // 副标题行（演员 / 日期 / 片商）紧跟标题，统计行在它后面，用相邻兄弟避开
+      ".sf-tile-title + .sf-meta", ".sf-modal-info > .sf-meta"
+    ],
+    desc: [".sf-lib-desc", ".sf-modal-details"],
+    // 「+3」的 title 里是没显示出来的标签名
+    attr: [".sf-tag-more"]
   }
 ];

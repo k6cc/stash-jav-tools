@@ -25,6 +25,8 @@
 | 测演员解析类插件（performerCreate 钩子） | 直接 `performerCreate` mutation，不用视频 | 骨架见 `README.md` E2E 节；用例见 `tests/javstashAutofill/test_e2e.py` |
 | 测 tagCreate 失败兜底（nfoSceneParser） | `tests/nfoSceneParser/test_tag_create_fallback.py` | `python tests/nfoSceneParser/test_tag_create_fallback.py offline <插件目录>` |
 | 测 tagCreate 兜底真库端到端 | `tests/nfoSceneParser/test_tag_create_fallback_live.py` | 自动挑候选源名，测完自清理 |
+| 跑插件 op 且参数复杂（多行规则/正则/嵌套） | `tests/SceneBackfill/sf_op.py` | `python tests/SceneBackfill/sf_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'`（或 `--file args.json`） |
+| 改插件状态做 UI 验证前存/还原 | `tests/SceneBackfill/state_snapshot.py` | `snap` → 测 → `restore`（先停守护，否则 90 s 内被整份覆盖） |
 | tagMerge 映射维护/校验 | `tests/tagMerge/tools/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/NOTES.md`） |
 | 探 javstash 某番号/演员 | `tests/javstashAutofill/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
 | 诊断某番号为何没进 binge 首页热门 | `tests/binge/probe_trending_filter.py` | `python probe_trending_filter.py [番号] [lookback天数]`（模拟前端过滤链，逐条打印 SKIP 原因） |

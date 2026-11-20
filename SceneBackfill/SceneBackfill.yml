@@ -1,0 +1,75 @@
+name: Scene Backfill
+description: Fills metadata-only scenes via Jackett/Prowlarr and qBittorrent/Motrix, or via Whisparr v3; finished files are scanned in place and linked back.
+version: 0.1.0
+url: https://discourse.stashapp.cc/t/scene-backfill/21655
+errLog: info
+
+settings:
+  pipeline:
+    displayName: "Fill Mode (self / whisparr)"
+    description: "self: search with an indexer and push to a downloader. whisparr: hand the scene to Whisparr v3. Empty = self."
+    type: STRING
+  indexer:
+    displayName: "Indexer (jackett / prowlarr)"
+    description: "self mode. Pick the one the URL and key below belong to."
+    type: STRING
+  indexerUrl:
+    displayName: "Indexer URL"
+    description: "Jackett (port 9117) or Prowlarr (port 9696) base URL. Use the host IP in Docker, not localhost."
+    type: STRING
+  indexerApiKey:
+    displayName: "Indexer API Key"
+    description: "API key of the indexer above."
+    type: STRING
+  netTimeout:
+    displayName: "Network Timeout (seconds)"
+    description: "Indexer search and torrent prefetch timeout. Leave empty for 120; max 600."
+    type: STRING
+  downloader:
+    displayName: "Downloader (qb / motrix)"
+    description: "self mode. qb = qBittorrent, motrix = Motrix (desktop or Server/NAS)."
+    type: STRING
+  downloaderUrl:
+    displayName: "Downloader URL"
+    description: "qBittorrent Web UI (8090), Motrix desktop RPC (16800) or Motrix Server Web UI (8066). Use the host IP in Docker."
+    type: STRING
+  downloaderUsername:
+    displayName: "Downloader Username"
+    description: "qBittorrent login name. Ignored by Motrix."
+    type: STRING
+  downloaderKey:
+    displayName: "Downloader Password / RPC Secret"
+    description: "qBittorrent password, Motrix desktop --rpc-secret, or Motrix Server Web login key."
+    type: STRING
+  whisparrUrl:
+    displayName: "Whisparr URL"
+    description: "Whisparr v3 (Eros) address, port 6969. whisparr mode only."
+    type: STRING
+  whisparrApiKey:
+    displayName: "Whisparr API Key"
+    description: "API key of the Whisparr above."
+    type: STRING
+  whisparrStashRoot:
+    displayName: "Whisparr Root Folder (as Stash sees it)"
+    description: "Whisparr's root folder named the way Stash sees it. Must be inside a Stash library path. Leave empty when both use the same path."
+    type: STRING
+  savePath:
+    displayName: "Download Folder (downloader side)"
+    description: "Finished-download folder as the downloader sees it, e.g. /downloads/input or E:/Downloads. Same field for qBittorrent and Motrix."
+    type: STRING
+  stashPath:
+    displayName: "Download Folder (Stash side)"
+    description: "The same folder as Stash sees it, e.g. /qb/input or \\\\nas\\media\\downloads\\input. Auto import scans it in place, so it must be inside a Stash library path."
+    type: STRING
+
+exec:
+  - python
+  - "{pluginDir}/SceneBackfill.py"
+
+interface: raw
+
+ui:
+  javascript:
+    - scenebackfill.js
+  css:
+    - scenebackfill.css

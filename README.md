@@ -19,7 +19,7 @@ Stash 插件工具集 — Python + UI 混合插件合集。
 | [stashDiscover](./stashDiscover/) | 2.8.4 | Python + UI | 演员页 / 工作室页「发现」标签 + 主导航「发现」页：找出 stash-box 上本地未拥有的场景，浏览、加入库、找资源、推送下载（qBittorrent / Motrix / Whisparr）；含关注新作提醒、忽略管理与多选批量 |
 | [ImageMetaSync](./ImageMetaSync/) | 1.0.4 | 纯后台 | 把场景级元数据（演员/工作室/日期/tag/标题/番号）回填到场景图库的图片记录（封面+fanart+剧照）；多演员/无演员图库跳过并记录日志 |
 | [peekaboo](./peekaboo/) | 1.1.0 | 纯 UI | 把所有封面/缩略图/视频画面换成生成的 SVG 图案（不是模糊），可连标题/简介/人名/别名/标签一起遮，stashDiscover / SceneBackfill 的界面一并覆盖；悬停或按住 Shift 临时露原图，状态存库配置 |
-| [SceneBackfill](./SceneBackfill/) | 0.1.0 | Python + UI | JAV 补档：捕获无文件场景，按规则搜索并推送 qBittorrent / Motrix，完成后原地扫描关联；或直接交给 Whisparr v3 |
+| [SceneBackfill](./SceneBackfill/) | 0.1.0 | Python + UI | 把只有元数据、没有文件的场景补齐：搜资源、交给 qBittorrent / Motrix 或 Whisparr，完成后把文件关联回原场景；全程不搬动文件 |
 
 ## 安装
 
@@ -57,6 +57,7 @@ plugins/
   stashDiscover/       # 解压 stashDiscover-vX.Y.Z.zip
   ImageMetaSync/       # 解压 ImageMetaSync-vX.Y.Z.zip
   peekaboo/            # 解压 peekaboo-vX.Y.Z.zip
+  SceneBackfill/       # 解压 SceneBackfill-vX.Y.Z.zip
 ```
 
 ## 前置依赖
@@ -113,6 +114,7 @@ pip3 install requests
 | stashDiscover | Python + UI | 演员页/工作室页「发现」标签 + 主导航「发现」页 + 手动任务 |
 | ImageMetaSync | 纯后台 | Gallery.Create.Post / Gallery.Update.Post 钩子 + 手动任务 |
 | peekaboo | 纯 UI | 导航栏眼睛按钮 + 快捷键 `Shift+Alt+B` |
+| SceneBackfill | Python + UI | 补档页手动搜索 / 推送 / 入库 + 三个自动化开关（后台守护进程） |
 
 各插件详细使用说明见对应目录下的 `README.md`。
 

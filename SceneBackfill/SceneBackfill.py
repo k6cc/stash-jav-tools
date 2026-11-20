@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -481,7 +481,7 @@ class QB:
         req = urllib.request.Request(url, data=data, headers=h,
                                      method="POST" if data is not None else "GET")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with self.opener.open(req, timeout=timeout) as r:
                 body = r.read().decode("utf-8", "replace")
                 return r.status, body, r.headers
         except urllib.error.HTTPError as e:
@@ -1325,9 +1325,10 @@ def in_stash_lib(ctx, path):
         stashes = ((data.get("configuration") or {}).get("general") or {}).get("stashes") or []
     except Exception:
         return None
-    target = os.path.normpath(local_path(path or "")).lower()
+    # normcase: 大小写与分隔符只在 Windows 上归一，Linux 容器里的路径保持区分大小写
+    target = os.path.normcase(os.path.normpath(local_path(path or "")))
     for s in stashes:
-        root = os.path.normpath(local_path(s.get("path") or "")).lower()
+        root = os.path.normcase(os.path.normpath(local_path(s.get("path") or "")))
         if not root:
             continue
         if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
@@ -2273,9 +2274,9 @@ def _check_temp_outside_lib(ctx, cfg, roots):
     temp = prefs.get("temp_path") or ""
     dl = _settings_str(cfg, "stashPath")
     mapped = map_path(temp, _settings_str(cfg, "savePath"), dl)
-    cand = os.path.normpath(local_path(mapped)).lower()
+    cand = os.path.normcase(os.path.normpath(local_path(mapped)))
     for root in roots:
-        r = os.path.normpath(local_path(root)).lower()
+        r = os.path.normcase(os.path.normpath(local_path(root)))
         if cand == r or cand.startswith(r.rstrip(os.sep) + os.sep):
             return False, t_(ctx, "qB 临时目录在库路径内，半成品会被扫进库",
                              "temp_path sits inside the library; partial files get scanned")

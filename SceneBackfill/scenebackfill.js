@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.0";
+  var PLUGIN_VERSION = "0.1.1";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -100,8 +100,24 @@
   }
 
   // ─── GraphQL ────────────────────────────────────────────────────────────
+  // Stash 挂在反代子路径（如 https://host/stash/）时，页面会被改写 <base href>；
+  // 根绝对路径会绕过它打到域名根，所以内部 URL 一律经这里解析。
+  function appUrl(path) {
+    var p = String(path == null ? "" : path);
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(p) ||
+      p.indexOf("data:") === 0 || p.indexOf("blob:") === 0) return p;
+    try {
+      var base = new URL(document.baseURI || (location.origin + "/"));
+      var prefix = base.pathname;                 // "/" 或 "/stash/"
+      // Stash 自己返回的媒体路径已经带上反代前缀（BaseURL 中间件加的），别再套一次
+      if (prefix.length > 1 && p.charAt(0) === "/" &&
+        (p + "/").indexOf(prefix) === 0) return p;
+      return new URL(p.replace(/^\/+/, ""), base).toString();
+    } catch (e) { return p; }
+  }
+
   function callGQL(query, variables) {
-    return fetch("/graphql", {
+    return fetch(appUrl("/graphql"), {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -411,6 +427,9 @@
 
     var loadCapture = useCallback(function () {
       return op({ mode: "capture" }).then(function (d) {
+        (d.scenes || []).forEach(function (s) {
+          if (s && s.shot) s.shot = appUrl(s.shot);
+        });
         remember("cap", d);
         setCap(d);
       }).catch(function (e) {
@@ -421,6 +440,7 @@
     var loadProgress = useCallback(function () {
       return op({ mode: "progress" }).then(function (d) {
         var rows = settle((d && d.torrents) || []);
+        rows.forEach(function (r) { if (r && r.shot) r.shot = appUrl(r.shot); });
         remember("prog", rows);
         if (d && d.conn) { remember("conn", d.conn); setConn(d.conn); }
         setProg(rows);
@@ -1728,7 +1748,7 @@
         id: p.sceneId, code: p.code || s.code || "", duration: s.duration || 0,
         shot: p.shot || s.shot || "",
       }, statusPill("imported"), null, function () { openDl(p.sceneId); }), body, [
-        h("a", { className: "sf-btn sf-btn-md sf-btn-link", href: "/scenes/" + p.sceneId },
+        h("a", { className: "sf-btn sf-btn-md sf-btn-link", href: appUrl("/scenes/" + p.sceneId) },
           tc("打开", "Open")),
       ]);
     }
@@ -1745,7 +1765,7 @@
         state: statusPill("imported"),
         badges: [durBadge(s.duration)],
         actions: [h("a", {
-          className: "sf-icb", href: "/scenes/" + p.sceneId, target: "_blank",
+          className: "sf-icb", href: appUrl("/scenes/" + p.sceneId), target: "_blank",
           rel: "noreferrer", title: tc("打开场景", "Open scene"),
         }, ico("external"))],
       });
@@ -2307,7 +2327,7 @@
         }, ico("search"), searching ? tc("搜索中…", "Searching…") : tc("重新搜索", "Search again")),
         h("a", {
           className: "sf-btn sf-btn-md sf-btn-ghost sf-btn-link",
-          href: "/scenes/" + s.id, target: "_blank", rel: "noreferrer",
+          href: appUrl("/scenes/" + s.id), target: "_blank", rel: "noreferrer",
         }, ico("external"), tc("打开场景", "Open scene")),
         s.status === "ignored" ? h("button", {
           className: "sf-btn sf-btn-md sf-btn-ghost",
@@ -2445,7 +2465,7 @@
       }
       actions.push(h("a", {
         className: "sf-btn sf-btn-md sf-btn-ghost sf-btn-link",
-        href: "/scenes/" + dlId, target: "_blank", rel: "noreferrer",
+        href: appUrl("/scenes/" + dlId), target: "_blank", rel: "noreferrer",
       }, ico("external"), tc("打开场景", "Open scene")));
 
       return h("div", { className: "sf-modal-back", onClick: close },

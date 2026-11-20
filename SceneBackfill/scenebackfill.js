@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.2";
+  var PLUGIN_VERSION = "0.1.3";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -244,6 +244,32 @@
       "aria-hidden": "true",
       dangerouslySetInnerHTML: { __html: ICONS[name] || "" },
     });
+  }
+
+  // 点遮罩关闭的防误触：click 的 target 是按下与松开的最近公共祖先，从弹窗内
+  // 按住拖到遮罩上松手时 target 就是遮罩，只判 e.target === 遮罩会误关。要求：
+  // 按下时就在遮罩本身、位移 < 8px、且不是长按（> 700ms）才关。
+  function ModalBack(props) {
+    var React = Api.React;
+    var down = React.useRef(null);
+    return React.createElement("div", {
+      className: "sf-modal-back",
+      onPointerDown: function (e) {
+        down.current = {
+          on: e.target === e.currentTarget,
+          x: e.clientX, y: e.clientY, t: Date.now(),
+        };
+      },
+      onClick: function (e) {
+        var d = down.current;
+        down.current = null;
+        if (e.detail === 0 || !d || !d.on) return;          // 键盘 / 脚本触发
+        if (e.target !== e.currentTarget) return;
+        if (Math.abs(e.clientX - d.x) > 8 || Math.abs(e.clientY - d.y) > 8) return;
+        if (Date.now() - d.t > 700) return;                 // 长按选词后松手
+        if (props.onClose) props.onClose();
+      },
+    }, props.children);
   }
 
   // ─── 状态 → 图标 / 语义色 / 文案（唯一来源）───────────────────────────────
@@ -2378,8 +2404,8 @@
           })));
       }
 
-      return h("div", { className: "sf-modal-back", onClick: close },
-        h("div", { className: "sf-modal", onClick: function (e) { e.stopPropagation(); } },
+      return h(ModalBack, { onClose: close },
+        h("div", { className: "sf-modal" },
           h("button", { className: "sf-modal-x", onClick: close, title: tc("关闭", "Close") },
             ico("x")),
           h("div", { className: "sf-modal-head" },
@@ -2468,10 +2494,9 @@
         href: appUrl("/scenes/" + dlId), target: "_blank", rel: "noreferrer",
       }, ico("external"), tc("打开场景", "Open scene")));
 
-      return h("div", { className: "sf-modal-back", onClick: close },
+      return h(ModalBack, { onClose: close },
         h("div", {
           className: "sf-modal sf-modal--dl",
-          onClick: function (e) { e.stopPropagation(); },
         },
           h("button", { className: "sf-modal-x", onClick: close, title: tc("关闭", "Close") },
             ico("x")),

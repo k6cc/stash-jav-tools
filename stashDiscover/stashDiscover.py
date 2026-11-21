@@ -1,7 +1,7 @@
 """
 stashDiscover backend
 
-Handles Jackett resource search and downloader push (qBittorrent).
+Handles Jackett resource search and downloader push (qBittorrent / Motrix).
 
 Results are written to cache/<kind>-<rid>.json inside the plugin directory and
 picked up by the frontend over the plugin's own asset route. They are NOT sent
@@ -10,13 +10,15 @@ line over 64KB, so large payloads silently disappeared.
 
 Modes:
   search          — Jackett Torznab search, args: query
-  push_download   — push magnet to qBittorrent, args: magnet, (optional) savepath
+  push_download   — push a torrent to the downloader,
+                    args: magnet / link (Torznab download URL), (optional) savepath
 """
 
 import sys
 import json
 import os
 import re
+import base64
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -347,7 +349,7 @@ def do_search(stash, query, zh=True):
     })
 
 
-def do_push_download(stash, magnet, savepath="", zh=True):
+def do_push_download(stash, magnet="", link="", savepath="", zh=True):
     cfg = stash.get_plugin_config()
     dl_type = (cfg.get("downloaderType") or "qbittorrent").strip().lower()
     dl_url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
@@ -357,18 +359,97 @@ def do_push_download(stash, magnet, savepath="", zh=True):
     if not dl_url:
         emit_error(_t(zh, "下载器地址未填写。", "Downloader URL not configured."))
         return
-    if not magnet:
-        emit_error(_t(zh, "没有拿到磁力链接。", "No magnet link provided."))
+
+    # 有 .torrent 就传种子本体：磁力会丢 announce list 和 private 标志，
+    # 私有站可能永远拿不到 metadata。只有磁力的结果仍按磁力推。
+    raw, link_magnet = b"", ""
+    if link and not str(link).startswith("magnet:"):
+        raw, link_magnet = _fetch_torrent(link)
+        if raw and not _torrent_meta(raw)[0]:
+            # 个别索引器的 link 是详情页而不是种子，退回磁力
+            log_warn("link did not return a torrent; using the magnet instead")
+            raw = b""
+    magnet = magnet or link_magnet
+    if not raw and not magnet:
+        emit_error(_t(zh, "没有拿到种子或磁力链接。", "No torrent or magnet link available."))
         return
 
     if dl_type in ("qbittorrent", "qb", "qbit"):
-        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, savepath, zh)
+        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, raw, savepath, zh)
     elif dl_type in ("motrix", "motrix2", "aria2"):
-        _push_motrix(dl_url, dl_pass, magnet, zh)
+        _push_motrix(dl_url, dl_pass, magnet, raw, zh)
     else:
         emit_error(_t(zh,
                       f"暂不支持下载器类型 {dl_type}，可选 qbittorrent 或 motrix。",
                       f"Unsupported downloader type: {dl_type}. Use qbittorrent or motrix."))
+
+
+# ─── 种子本体 ──────────────────────────────────────────────────────────────
+# Jackett 的每条结果同时给磁力与 .torrent 下载地址（link），后者才是原件。
+
+class _MagnetRedirect(urllib.request.HTTPRedirectHandler):
+    """照常跟随 http(s) 跳转，只把指向 magnet 的跳转停下交给调用方。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if (newurl or "").startswith("magnet:"):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_torrent(link, timeout=30):
+    """返回 (种子字节, 磁力)；索引器把连接直接跳到磁力时只有后者。"""
+    opener = urllib.request.build_opener(_MagnetRedirect)
+    req = urllib.request.Request(link, headers={"User-Agent": PLUGIN_ID})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.read(), ""
+    except urllib.error.HTTPError as e:
+        loc = e.headers.get("Location") or ""
+        if e.code in (301, 302, 303, 307) and loc.startswith("magnet:"):
+            return b"", loc
+        log_warn(f"torrent fetch HTTP {e.code}")
+    except Exception as e:
+        log_warn(f"torrent fetch failed: {_safe_text(str(e))[:120]}")
+    return b"", ""
+
+
+def _bdecode(data, i=0):
+    c = data[i:i + 1]
+    if c == b"d":
+        i += 1
+        out = {}
+        while data[i:i + 1] != b"e":
+            k, i = _bdecode(data, i)
+            v, i = _bdecode(data, i)
+            out[k] = v
+        return out, i + 1
+    if c == b"l":
+        i += 1
+        out = []
+        while data[i:i + 1] != b"e":
+            v, i = _bdecode(data, i)
+            out.append(v)
+        return out, i + 1
+    if c == b"i":
+        j = data.index(b"e", i)
+        return int(data[i + 1:j]), j + 1
+    j = data.index(b":", i)
+    n = int(data[i:j])
+    return data[j + 1:j + 1 + n], j + 1 + n
+
+
+def _torrent_meta(raw):
+    """(文件数, 名称)。单文件种子没有 info.files，也算 1 个文件。"""
+    try:
+        meta, _ = _bdecode(raw)
+    except Exception:
+        return 0, ""
+    info = meta.get(b"info") or {}
+    name = (info.get(b"name") or b"").decode("utf-8", "replace")
+    files = info.get(b"files")
+    if files:
+        return len(files), name
+    return (1 if name else 0), name
 
 
 def _session_cookie(headers):
@@ -394,7 +475,7 @@ def _session_cookie(headers):
     return "; ".join(pairs)
 
 
-def _push_qbittorrent(base_url, username, password, magnet, savepath, zh=True):
+def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=True):
     login_url = f"{base_url}/api/v2/auth/login"
     status, body, headers = http_request(
         login_url, method="POST",
@@ -421,28 +502,62 @@ def _push_qbittorrent(base_url, username, password, magnet, savepath, zh=True):
         return
 
     add_url = f"{base_url}/api/v2/torrents/add"
-    form_data = {"urls": magnet}
-    if savepath:
-        form_data["savepath"] = savepath
-
-    status, body, _ = http_request(
-        add_url, method="POST", data=form_data,
-        headers={"Cookie": cookie},
-        timeout=15,
-    )
-    if status == 200:
-        log_info(f"Pushed magnet to qBittorrent: {magnet[:60]}...")
+    if raw:
+        body, ctype = _qb_multipart(raw, savepath)
+        status, text, _ = http_request(
+            add_url, method="POST", data=body,
+            headers={"Cookie": cookie, "Content-Type": ctype},
+            timeout=30,
+        )
+    else:
+        form_data = {"urls": magnet}
+        if savepath:
+            form_data["savepath"] = savepath
+        status, text, _ = http_request(
+            add_url, method="POST", data=form_data,
+            headers={"Cookie": cookie},
+            timeout=15,
+        )
+    if status in (200, 201):
+        # 老版本回 200 + "Fails."；5.x 对已在会话里的重复种子回 409
+        # （任务刚推入、qB 还没落库时连续再推，两次都是 200，故两种都要认）
+        if text.strip().lower() == "fails.":
+            log_info("qBittorrent already has this torrent")
+            emit_result({"mode": "push_download", "ok": True, "duplicate": True,
+                         "message": "Already in downloader"})
+            return
+        log_info(f"Pushed to qBittorrent: {(magnet or 'torrent file')[:60]}...")
         emit_result({"mode": "push_download", "ok": True, "message": "Pushed to downloader"})
+    elif status == 409:
+        log_info("qBittorrent already has this torrent (409)")
+        emit_result({"mode": "push_download", "ok": True, "duplicate": True,
+                     "message": "Already in downloader"})
     else:
         emit_error(_t(zh,
-                      f"qBittorrent 添加任务失败（HTTP {status}）：{body[:200]}",
-                      f"qBittorrent add failed (HTTP {status}): {body[:200]}"))
+                      f"qBittorrent 添加任务失败（HTTP {status}）：{text[:200]}",
+                      f"qBittorrent add failed (HTTP {status}): {text[:200]}"))
+
+
+def _qb_multipart(raw, savepath):
+    """qB 的 /torrents/add 收 multipart；种子本体比磁力多带 announce 与 private 标志。"""
+    boundary = "----stashDiscover" + base64.b16encode(os.urandom(8)).decode()
+    parts = []
+    if savepath:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
+                     f'name="savepath"\r\n\r\n{savepath}\r\n'.encode("utf-8"))
+    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f'name="torrents"; filename="sd.torrent"\r\n'
+                 f"Content-Type: application/x-bittorrent\r\n\r\n".encode()
+                 + raw + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
 # ─── Motrix ────────────────────────────────────────────────────────────────
 # 桌面版与 Server 版是两套通道，插件按探测结果走，用户只填「地址 + 密钥」：
 #   桌面版 → POST {base}/jsonrpc              aria2 JSON-RPC（密钥见 高级 → RPC）
-#   Server → POST {base}/rpc/<kind>/<name>    Bearer operator-token
+#   Server → POST {base}/rpc/<kind>/<name>    空用户名 Basic（operator-token）
+# Server 版要求 2.4+：种子直接以 base64 建任务，选片在建任务时一次提交。
 # 不读 endpoint.json / settings.json：那是别的软件的私有状态，里面的 localToken
 # 还是鉴权凭据，插件去翻等于翻密码本（用户 2026-11-09 明确拒绝）。代价是密钥
 # 得用户自己复制一次；好处是两套 token 都持久化，配一次长期有效。
@@ -469,6 +584,15 @@ def _aria2_call(base, secret, method, params, timeout=15):
     return status, obj.get("result"), ""
 
 
+def _motrix_auth(secret):
+    """Server 的 operator token 走「空用户名 Basic」。
+
+    Bearer 在 HTTP 头的 latin-1 编码下会炸：token 里只要有空格或非 ASCII
+    字符就发不出去。Basic 把整段凭据 base64，这类 token 也安全。
+    """
+    return "Basic " + base64.b64encode((":" + secret).encode("utf-8")).decode()
+
+
 def _rpc_call(base, secret, name, args, timeout=15):
     """name 形如 command:createTask，路径是 /rpc/<kind>/<name>。
 
@@ -478,7 +602,7 @@ def _rpc_call(base, secret, name, args, timeout=15):
     kind = name.split(":", 1)[0]
     status, body, _ = _post_json(
         f"{base}/rpc/{kind}/{name}", {"args": args},
-        headers={"Authorization": "Bearer " + secret}, timeout=timeout,
+        headers={"Authorization": _motrix_auth(secret)}, timeout=timeout,
     )
     try:
         obj = json.loads(body)
@@ -489,15 +613,26 @@ def _rpc_call(base, secret, name, args, timeout=15):
     return status, obj, ""
 
 
+def _motrix_health(base):
+    """免鉴权的就绪探针：区分「服务没起来」和「密钥错」。"""
+    status, body, _ = http_request(base + "/healthz", timeout=5)
+    if status != 200:
+        return {}
+    try:
+        return json.loads(body) or {}
+    except ValueError:
+        return {}
+
+
 def _motrix_probe(base, secret):
-    """返回 (kind, version, why)。kind = "aria2" | "web" | ""。"""
-    status, res, err = _aria2_call(base, secret, "aria2.getVersion", [], timeout=10)
-    if status == 200 and isinstance(res, dict):
-        return "aria2", res.get("version") or "", ""
-    # auth/status 比 listTasks 轻，任务多的时候不会拖慢
+    """返回 (kind, version, why)。kind = "aria2" | "web" | ""。
+
+    先问 Web：Server 的 /jsonrpc 是 opt-in（MOTRIX_ARIA2_RPC_LISTEN_ALL），
+    用户一旦打开，先问 aria2 会把它判成桌面版，之后 /rpc/... 全走不通。
+    """
     status, body, _ = http_request(
         base + "/rpc/auth/status",
-        headers={"Authorization": "Bearer " + secret}, timeout=10,
+        headers={"Authorization": _motrix_auth(secret)}, timeout=10,
     )
     try:
         obj = json.loads(body)
@@ -505,27 +640,86 @@ def _motrix_probe(base, secret):
         obj = {}
     if status == 200 and obj.get("authed"):
         return "web", "", ""
+    status, res, err = _aria2_call(base, secret, "aria2.getVersion", [], timeout=10)
+    if status == 200 and isinstance(res, dict):
+        return "aria2", res.get("version") or "", ""
     return "", "", (err or body[:120] or f"HTTP {status}")
 
 
-def _push_motrix(base_url, secret, magnet, zh=True):
+# createTask 的四种结果里只有 created 是新建；reused / rechecked 都是同一种子
+# 已有任务，conflict 同样不是异常，带 reason 与既有任务名。
+MOTRIX_CONFLICT = {
+    "active-info-hash": ("同一种子已在下载器中", "The same torrent is already in the downloader"),
+    "selection-mismatch": ("同一种子已有任务，但选中的文件不同",
+                           "The same torrent exists with a different file selection"),
+    "existing-files": ("同一种子已有任务，文件也已在下载目录里",
+                       "The same torrent exists and its files are already on disk"),
+}
+
+
+def _motrix_conflict_text(conflict, zh):
+    reason = str((conflict or {}).get("reason") or "")
+    name = str((conflict or {}).get("existingTaskName") or "").strip()
+    zh_text, en_text = MOTRIX_CONFLICT.get(
+        reason, ("同一种子已有任务", "The same torrent already has a task"))
+    text = _t(zh, zh_text, en_text)
+    if not name:
+        return text
+    return f"{text}（{name}）" if zh else f"{text} ({name})"
+
+
+def _motrix_error(status, err, zh):
+    if status == 413:
+        return _t(zh,
+                  "种子超过 Motrix Server 的请求体上限（默认 8 MiB，可用 MOTRIX_TORRENT_BODY_LIMIT_MIB 调大）",
+                  "The torrent exceeds Motrix Server's request body limit (8 MiB by default; raise MOTRIX_TORRENT_BODY_LIMIT_MIB)")
+    if status == 429:
+        return _t(zh, "Motrix Server 正在处理其它大请求，稍后再推",
+                  "Motrix Server is busy with other large requests; retry in a moment")
+    if status in (401, 403) or "unauthorized" in (err or "").lower():
+        return _t(zh, "Motrix 鉴权失败：检查 operator token",
+                  "Motrix auth failed; check the operator token")
+    if err:
+        return _t(zh, f"Motrix 添加任务失败：{err}", f"Motrix add failed: {err}")
+    return _t(zh, f"Motrix 返回 HTTP {status}", f"Motrix returned HTTP {status}")
+
+
+def _motrix_no_connection_text(base, why, zh):
+    """探测失败时再问一次免鉴权的 /healthz：服务通了就是密钥的问题。"""
+    health = _motrix_health(base)
+    state = str((health.get("engine") or {}).get("state")
+                or health.get("status") or "") if health else ""
+    if health and not health.get("ok"):
+        return _t(zh, f"Motrix Server 引擎未就绪（{state or '未知'}）",
+                  f"Motrix Server engine is not ready ({state or 'unknown'})")
+    if health:
+        return _t(zh, "Motrix 鉴权失败：检查 operator token",
+                  "Motrix auth failed; check the operator token")
+    return _t(zh,
+              f"连不上 Motrix（{why}）。桌面版地址填 http://127.0.0.1:16800，密钥在 高级 → RPC。",
+              f"Can't reach Motrix ({why}). Desktop: use http://127.0.0.1:16800 and the key from Advanced → RPC.")
+
+
+def _push_motrix(base_url, secret, magnet, raw, zh=True):
     kind, _ver, why = _motrix_probe(base_url, secret)
     if not kind:
-        emit_error(_t(zh,
-                      f"连不上 Motrix（{why}）。桌面版地址填 http://127.0.0.1:16800，密钥在 高级 → RPC。",
-                      f"Can't reach Motrix ({why}). Desktop: use http://127.0.0.1:16800 and the key from Advanced → RPC."))
+        emit_error(_motrix_no_connection_text(base_url, why, zh))
         return
 
     if kind == "aria2":
-        status, res, err = _aria2_call(base_url, secret, "aria2.addUri", [[magnet]])
+        if raw:
+            status, res, err = _aria2_call(
+                base_url, secret, "aria2.addTorrent", [base64.b64encode(raw).decode()])
+        else:
+            status, res, err = _aria2_call(base_url, secret, "aria2.addUri", [[magnet]])
         if res:
-            log_info(f"Pushed magnet to Motrix: {magnet[:60]}...")
+            log_info(f"Pushed to Motrix: {(magnet or 'torrent file')[:60]}...")
             emit_result({"mode": "push_download", "ok": True, "message": "Pushed to downloader"})
             return
-        # 同一磁力重复推送：aria2 报 already registered，对用户来说任务已在队列里
+        # 同一种子重复推送：aria2 报 already registered，对用户来说任务已在队列里
         low = (err or "").lower()
         if "already registered" in low or "duplicate" in low:
-            emit_result({"mode": "push_download", "ok": True,
+            emit_result({"mode": "push_download", "ok": True, "duplicate": True,
                          "message": "Already in downloader"})
             return
         emit_error(_t(zh, f"Motrix 添加任务失败：{err}", f"Motrix add failed: {err}"))
@@ -541,16 +735,42 @@ def _push_motrix(base_url, secret, magnet, zh=True):
                       "读不到 Motrix 的默认下载目录，请先在 Motrix 里设置一个。",
                       "Couldn't read Motrix's default download folder — set one in Motrix first."))
         return
-    task = {"type": "bt", "payload": {"kind": "magnet", "uri": magnet}, "saveDir": save_dir}
-    status, res, err = _rpc_call(base_url, secret, "command:createTask", [task])
-    outcome = (res or {}).get("outcome") if isinstance(res, dict) else ""
-    if outcome in ("created", "conflict"):
-        log_info(f"Pushed magnet to Motrix server ({outcome}): {magnet[:60]}...")
+
+    if raw:
+        count, name = _torrent_meta(raw)
+        if not count:
+            emit_error(_t(zh, "种子文件里读不到文件清单。",
+                          "Couldn't read the file list from the torrent."))
+            return
+        # torrent-base64 时 selectedFiles 必填，空选要显式给全部索引
+        task = {
+            "type": "bt",
+            "payload": {"kind": "torrent-base64",
+                        "base64": base64.b64encode(raw).decode()},
+            "selectedFiles": list(range(count)),
+            "saveDir": save_dir,
+        }
+        if name:
+            task["displayName"] = name
+    else:
+        task = {"type": "bt", "payload": {"kind": "magnet", "uri": magnet},
+                "saveDir": save_dir}
+
+    status, res, err = _rpc_call(base_url, secret, "command:createTask", [task], timeout=30)
+    outcome = str((res or {}).get("outcome") or "") if isinstance(res, dict) else ""
+    if outcome in ("created", "reused", "rechecked"):
+        log_info(f"Pushed to Motrix server ({outcome}): {(magnet or 'torrent file')[:60]}...")
         emit_result({"mode": "push_download", "ok": True,
+                     "duplicate": outcome != "created",
                      "message": "Pushed to downloader" if outcome == "created" else "Already in downloader"})
         return
-    emit_error(_t(zh, f"Motrix 添加任务失败：{err or res}",
-                  f"Motrix add failed: {err or res}"))
+    if outcome == "conflict":
+        text = _motrix_conflict_text((res or {}).get("conflict") or {}, zh)
+        log_info(f"Motrix createTask conflict: {text}")
+        emit_result({"mode": "push_download", "ok": True, "duplicate": True, "message": text})
+        return
+    emit_error(_motrix_error(status, err or json.dumps(res, ensure_ascii=False)[:160], zh))
+
 
 
 # ─── 连接测试（设置页「测试」按钮，用户 2026-11-02）─────────────────────
@@ -628,11 +848,44 @@ def _test_motrix(url, secret, zh=True):
         save_dir = ""
         if isinstance(settings, dict):
             save_dir = ((settings.get("app") or {}).get("defaultSaveDir") or "")
-        if save_dir:
-            item["hint"] = _t(zh, f"默认保存路径 {save_dir}", f"Default save path {save_dir}")
+        # Server 只肯写到 MOTRIX_ALLOWED_SAVE_DIRS 下面，提前问清楚，
+        # 免得第一次推送才报 outside roots
+        _, dirs, _ = _rpc_call(url, secret, "query:listAllowedSaveDirs", [{}])
+        roots = []
+        if isinstance(dirs, dict):
+            roots = [str(p.get("path") or "").rstrip("/")
+                     for p in (dirs.get("paths") or []) if p.get("path")]
+        if not roots:
+            item["hint"] = _t(zh, "需要 Motrix Server 2.4 或更新版本",
+                              "Motrix Server 2.4 or newer is required")
+            return item
+        inside = (not save_dir) or any(
+            save_dir == r or save_dir.startswith(r + "/") for r in roots)
+        if not inside:
+            item["ok"] = False
+            item["hint"] = _t(zh,
+                              f"Server 只接受这些根目录下的路径：{', '.join(roots)}；把 Motrix 的默认下载目录改到其中",
+                              f"The server only accepts paths under: {', '.join(roots)} — move Motrix's default folder inside one")
+            return item
+        item["hint"] = _t(zh, f"默认保存路径 {save_dir or roots[0]}",
+                          f"Default save path {save_dir or roots[0]}")
         return item
-    item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
-    item["hint"] = (why or "")[:150]
+
+    health = _motrix_health(url)
+    engine = (health.get("engine") or {}) if health else {}
+    state = str(engine.get("state") or health.get("status") or "")
+    if health and not health.get("ok"):
+        item["detail"] = _t(zh, f"{host} 未就绪", f"{host} not ready")
+        item["hint"] = _t(zh, f"服务在运行但引擎未就绪（{state or '未知'}）",
+                          f"The server runs but its engine is not ready ({state or 'unknown'})")
+    elif health:
+        # /healthz 免鉴权，能通说明服务和端口都没问题，剩下的就是密钥
+        item["detail"] = _t(zh, f"{host} 拒绝了这个密钥", f"{host} rejected the key")
+        item["hint"] = _t(zh, "服务正常。服务端填 operator token（不是 Web 登录密码）",
+                          "The server is fine. Use the operator token, not the Web login password")
+    else:
+        item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
+        item["hint"] = (why or "")[:150]
     return item
 
 
@@ -1030,8 +1283,9 @@ def main():
                 do_search(stash, query, zh)
         elif mode == "push_download":
             magnet = _safe_text(stash.get_arg("magnet", ""))
+            link = _safe_text(stash.get_arg("link", ""))
             savepath = _safe_text(stash.get_arg("savepath", ""))
-            do_push_download(stash, magnet, savepath, zh)
+            do_push_download(stash, magnet=magnet, link=link, savepath=savepath, zh=zh)
         elif mode == "whisparr_status":
             do_whisparr_status(stash, _safe_text(stash.get_arg("stash_id", "")), zh)
         elif mode == "whisparr_push":

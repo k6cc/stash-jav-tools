@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.6";
+  var PLUGIN_VERSION = "2.8.7";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -8807,7 +8807,7 @@
       actions.appendChild(openLinkBtn);
     }
 
-    if (res.magnet) {
+    if (res.magnet || res.link) {
       var pushBtn = document.createElement("button");
       pushBtn.type = "button";
       pushBtn.className = "ssd-dp-btn tonal sm";
@@ -8815,8 +8815,18 @@
       pushBtn.onclick = function () {
         pushBtn.disabled = true;
         pushBtn.textContent = tc("推送中...", "Pushing...");
-        runPluginOp({ mode: "push_download", magnet: res.magnet }).then(function () {
-          pushBtn.textContent = tc("已推送 ✓", "Pushed ✓");
+        // link 是 .torrent 下载地址：后端优先传种子本体，磁力只作兜底
+        runPluginOp({
+          mode: "push_download",
+          magnet: res.magnet || "",
+          link: res.link || "",
+        }).then(function (out) {
+          if (out && out.duplicate) {
+            pushBtn.textContent = tc("已在下载器", "Already queued");
+            showModalNotice(out.message || tc("同一种子已在下载器中", "The same torrent is already in the downloader"), "info");
+          } else {
+            pushBtn.textContent = tc("已推送 ✓", "Pushed ✓");
+          }
           pushBtn.classList.add("ok");
           setTimeout(function () {
             pushBtn.disabled = false;

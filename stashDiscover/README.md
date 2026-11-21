@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.8.6：新增「Scene code dedupe」设置项（默认关，只按 stash-box 场景 ID 判重与判在库）；关着时入库不再强制保存番号。
+> v2.8.7：推送优先传种子本体（qB 与 Motrix 都是），Motrix Server 需 2.4+；已在下载器的同一资源按钮显示「已在下载器」。
 
 Stash 插件（`interface: raw` + UI）：从已配置的 stash-box 实例中找出本地库未拥有的场景，浏览、加入库、找资源并推送到下载器。
 
@@ -10,7 +10,7 @@ Stash 插件（`interface: raw` + UI）：从已配置的 stash-box 实例中找
 - Python 3.8+（仅找资源与推送下载需要）
 - 已配置至少一个 stash-box 实例（设置 → 元数据提供者）
 - 演员 / 工作室已关联对应 stash-box ID
-- （可选）Jackett 实例、qBittorrent / Motrix、Whisparr v3
+- （可选）Jackett 实例、qBittorrent / Motrix（Server 版需 2.4+）、Whisparr v3
 
 ## 安装
 
@@ -45,9 +45,9 @@ USER stash
 | Jackett API Key | STRING | — | Jackett API Key |
 | Jackett Timeout (seconds) | STRING | 120 | 搜索超时秒数，留空 = 120，上限 600。慢 NAS 或索引器多时调大 |
 | Downloader Type | STRING | qbittorrent | `qbittorrent` 或 `motrix`，留空 = qbittorrent |
-| Downloader URL | STRING | — | qBittorrent 填 Web UI 地址；Motrix 桌面版填 RPC 地址 `http://127.0.0.1:16800`，Docker 版填 Web 地址 |
+| Downloader URL | STRING | — | qBittorrent 填 Web UI 地址；Motrix 桌面版填 RPC 地址 `http://127.0.0.1:16800`，Server 版填 Web 地址 |
 | Downloader Username | STRING | — | 仅 qBittorrent，Motrix 留空 |
-| Downloader Password | STRING | — | qBittorrent Web UI 密码；Motrix 填「高级 → RPC」的密钥（桌面版）或 operator-token（Docker 版） |
+| Downloader Password | STRING | — | qBittorrent Web UI 密码；Motrix 填「高级 → RPC」的密钥（桌面版）或 operator-token（Server 版） |
 | Whisparr URL | STRING | — | Whisparr v3 地址，如 `http://127.0.0.1:6969`，留空 = 不使用 Whisparr |
 | Whisparr API Key | STRING | — | Whisparr → 设置 → 通用 → API Key |
 | Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空 = 查询全部已配置实例 |
@@ -116,6 +116,6 @@ USER stash
 - **资源搜索是同步请求**：Jackett 慢时请求会一直挂着，最长到 `jackettTimeout`（默认 120 秒）。**反向代理若设 60 秒超时需放宽到 180 秒以上**，否则会被提前切断。
 - **源限流自动退避**：源返回 429 时按它要求的间隔重试，两次仍被拒才报错；被限流过的源随后五分钟内自动拉大请求间隔。超时、网络与鉴权错误不重试。
 - **qBittorrent 4.x / 5.x**：两代都能推送。
-- **Motrix 不用填保存目录**：桌面版走 aria2 默认下载目录，Docker 版从 Motrix 自己的设置里读。
+- **Motrix 不用填保存目录**：桌面版走 aria2 默认下载目录，Server 版从 Motrix 自己的设置里读（自检会核对它是否落在 Server 允许的根目录下）。
 - **Whisparr 质量档案**在发现页「设置 → 推送质量档案」里选；默认「自动」= 先找名为 Any 的档案，再退到 id 最小的那个。根目录取 Whisparr 里的第一个。
 - **更新插件后按 Ctrl+F5 强刷**：前端 JS/CSS 由 Stash 静态下发、不带版本号，浏览器会继续用旧的。

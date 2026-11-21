@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.8.5：关掉「发现页」开关后，忽略按钮的提示不再指向打不开的「已忽略管理」页。
+> v2.8.6：新增「Scene code dedupe」设置项（默认关，只按 stash-box 场景 ID 判重与判在库）；关着时入库不再强制保存番号。
 
 Stash 插件（`interface: raw` + UI）：从已配置的 stash-box 实例中找出本地库未拥有的场景，浏览、加入库、找资源并推送到下载器。
 
@@ -51,6 +51,7 @@ USER stash
 | Whisparr URL | STRING | — | Whisparr v3 地址，如 `http://127.0.0.1:6969`，留空 = 不使用 Whisparr |
 | Whisparr API Key | STRING | — | Whisparr → 设置 → 通用 → API Key |
 | Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空 = 查询全部已配置实例 |
+| Scene code dedupe | BOOLEAN | OFF | 关闭时只认 stash-box 场景 ID；打开后同番号也算同一条场景（欧美站的 code 多为站内编号或哈希，别开）。改后刷新页面 |
 | Discover page | BOOLEAN | ON | 发现页总闸：关闭后整页与关注新作提醒一并停用；演员 / 工作室 tab 不受影响 |
 
 ## 入口与覆盖范围

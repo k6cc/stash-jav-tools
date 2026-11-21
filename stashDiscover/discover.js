@@ -412,8 +412,15 @@
     return p;
   }
 
+  // 番号判重开关（yml codeDedupe，默认关）：关着时「库里同番号」不算已拥有。
+  // 主 JS 负责解析设置并缓存，这里只读同步判定值 —— 每轮管线取一次即可。
+  function codeDedupeOn() {
+    try { return !!(SSD && SSD.codeDedupeOn && SSD.codeDedupeOn()); } catch (_) { return false; }
+  }
+
   // 全库已拥有键（§4.3 双键）：stash_id_endpoint NOT_NULL 一次性扫（binge 实测：
   // 131k 场景库 2.64MB/1.19s，不加过滤反而 4.47MB/12s）
+  // code 键照建不误，用不用由 codeDedupeOn() 在比较处决定（开关切换不必重扫）。
   function loadOwnedKeys() {
     if (_memo.owned) return _memo.owned;
     var p = SSD.callGQL(
@@ -896,6 +903,7 @@
     var today = SSD.localDateStr(new Date());
     var seenCode = {}, latest = [], preview = [];
     var byActor = {}; // localId → {performer, items, newest}
+    var codeDedupe = codeDedupeOn();   // 番号算不算「已拥有」，见 yml codeDedupe
 
     // 忽略记录（§5.1 第 1 处）：在管线入口剪一次，最新 / 关注 / 工作室 /
     // 总览计数 / 未读角标全部一次生效。读的是 SSD.dpIgnore 的内存副本，
@@ -913,7 +921,7 @@
       if (ownedKeys[epKey]) return;                       // 已拥有：stash_id 键
       if (sc.code) {
         var ck = "code:" + String(sc.code).trim().toLowerCase();
-        if (ownedKeys[ck]) return;                        // 已拥有：code 键
+        if (codeDedupe && ownedKeys[ck]) return;          // 已拥有：code 键
         if (seenCode[ck]) return;                         // code 跨源去重
         seenCode[ck] = true;
       }
@@ -1237,6 +1245,7 @@
     var linkedPromise = loadLinkedPerformers(base.source.endpoint);
     return Promise.all([linkedPromise, loadOwnedKeys()]).then(function (res) {
       var linked = res[0] || [], ownedKeys = res[1] || {};
+      var codeDedupe = codeDedupeOn();
       linked.forEach(function (p) { linkedSet[p.stashId] = true; });
       var epPrefix = String(base.source.endpoint).toLowerCase() + ":", seenCode = {};
       var items = [];
@@ -1249,7 +1258,8 @@
           seenCode[ck] = true;
         }
         var item = shapeBoxItem(box, sc);
-        item.owned = !!(ownedKeys[epPrefix + String(sc.id).toLowerCase()] || (ck && ownedKeys[ck]));
+        item.owned = !!(ownedKeys[epPrefix + String(sc.id).toLowerCase()] ||
+                        (codeDedupe && ck && ownedKeys[ck]));
         var hasLocal = false;
         var perfs = sc.performers || [];
         for (var i = 0; i < perfs.length; i++) {
@@ -1313,13 +1323,14 @@
       studios.forEach(function (s) { studioByStashId[String(s.stashId).toLowerCase()] = s; });
       var today = SSD.localDateStr(new Date());
       var seenCode = {}, items = [], byStudio = {};
+      var codeDedupe = codeDedupeOn();
       (entry.scenes || []).forEach(function (sc) {
         if (!sc || !sc.studio) return;
         var epKey = box.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase();
         if (ownedKeys[epKey]) return;
         if (sc.code) {
           var ck = "code:" + String(sc.code).trim().toLowerCase();
-          if (ownedKeys[ck] || seenCode[ck]) return;
+          if ((codeDedupe && ownedKeys[ck]) || seenCode[ck]) return;
           seenCode[ck] = true;
         }
         var item = shapeBoxItem(box, sc);
@@ -5033,26 +5044,31 @@
       }
     }
 
-    // 必要字段：置顶、勾着、不可取消（§C6）
+    // 置顶组（§C6）：源编号（演员还有名字）永远必需；场景的番号只在
+    // codeDedupe 打开时必需 —— 判重按它比对。关着时它就是个普通字段，
+    // 勾选状态与其余字段一样存在 bag 里。
+    var codeNeeded = isScene && codeDedupeOn();
     var req = el("div", "ssd-dp-fields ssd-dp-fields-req");
-    (isScene
-      ? [tc("番号", "Code"), tc("源编号", "Source ID")]
-      : [tc("名字", "Name"), tc("源编号", "Source ID")]
-    ).forEach(function (name) {
-      var row = el("label", "ssd-dp-field is-req");
+    function reqRow(name, locked) {
+      var row = el("label", "ssd-dp-field" + (locked ? " is-req" : ""));
       var cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = true;
-      cb.disabled = true;
+      cb.checked = locked ? true : bag.code !== false;
+      cb.disabled = locked;
+      if (!locked) cb.addEventListener("change", function () { setPatch({ code: cb.checked }); });
       row.appendChild(cb);
       row.appendChild(el("span", "ssd-dp-fieldname", name));
-      row.appendChild(el("span", "ssd-dp-fieldtag", tc("必需", "required")));
+      if (locked) row.appendChild(el("span", "ssd-dp-fieldtag", tc("必需", "required")));
       req.appendChild(row);
-    });
+    }
+    if (!isScene) reqRow(tc("名字", "Name"), true);
+    if (isScene) reqRow(tc("番号", "Code"), codeNeeded);
+    reqRow(tc("源编号", "Source ID"), true);
     body.appendChild(req);
 
     var list = el("div", "ssd-dp-fields");
     keys.forEach(function (k) {
+      if (isScene && k === "code") return;   // 已在置顶组渲染
       var row = el("label", "ssd-dp-field");
       var cb = document.createElement("input");
       cb.type = "checkbox";
@@ -5112,6 +5128,8 @@
           var patch = {};
           keys.forEach(function (k) { patch[k] = b[0] === "all"; });
           if (isScene) {
+            // 番号在 codeDedupe 打开时是强制项，不跟随「全不选」
+            if (codeNeeded) patch.code = true;
             patch.tags = b[0] === "all" ? "all" : "none";
             patch.studio = patch.tags;
             patch.performers = patch.tags;   // 演员也是三态了，跟着一起全开/全关

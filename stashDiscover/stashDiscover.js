@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.5";
+  var PLUGIN_VERSION = "2.8.6";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -1033,6 +1033,30 @@
     _settingsCache = null; _settingsAt = 0; _settingsFlight = null;
   }
 
+  // ─── 番号判重开关（yml codeDedupe，默认关）─────────────────────────────────
+  // 一个开关管两层语义 —— 「库里同番号的另一条，算不算同一条场景」：
+  //   · 入库判重（findExistingSceneId）
+  //   · 在库隐藏（演员/工作室 tab、发现页管线、关注角标）
+  // 默认关：只认 stash-box 场景 ID。欧美站的 code 多是站内自增号或内容哈希
+  // （2026-11-21 采样 61 条：61% 纯数字、15% 哈希、25% 为空），拿它对全库
+  // 比对只会把不相干的记录当成「已在库」挡掉。JAV 番号可靠时才值得打开。
+  // 渲染逐条要用同步判定 → 读 localStorage 缓存；getPluginSettings 回来后用
+  // resolveCodeDedupe 校正，与 discoverCachedOn 同一套做法。
+  var CODE_DEDUPE_KEY = "SSD:codeDedupe";
+
+  function codeDedupeOn() {
+    try { return localStorage.getItem(CODE_DEDUPE_KEY) === "1"; } catch (_) { return false; }
+  }
+
+  // Stash 只记录用户碰过的设置，没碰过 = 取 yml 默认（关）。
+  // 个别版本把 BOOLEAN 读成字符串，两个都认。
+  function resolveCodeDedupe(settings) {
+    var v = settings && settings.codeDedupe;
+    var on = (v === true || v === "true");
+    try { localStorage.setItem(CODE_DEDUPE_KEY, on ? "1" : "0"); } catch (_) {}
+    return on;
+  }
+
   // ─── Rate limiter (box queries) ──────────────────────────────────────────
 
   function createRateLimiter(maxConcurrent, minIntervalMs) {
@@ -1263,6 +1287,8 @@
             }
           });
           if (s.code) {
+            // 番号键始终建好，由 isSceneOwned 按 codeDedupe 决定用不用
+            // （开关随时切，索引不必作废）
             keys["code:" + String(s.code).trim().toLowerCase()] = true;
           }
         });
@@ -1608,7 +1634,9 @@
     var owned = keys || _state.localSceneKeys;
     var epKey = item.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase();
     if (owned[epKey]) return true;
-    if (sc.code) {
+    // 番号键只在 codeDedupe 打开时参与比较；索引里始终留着 code 键，
+    // 这样切换开关不必重建缓存（见 loadLocalSceneKeys）
+    if (sc.code && codeDedupeOn()) {
       var codeKey = "code:" + String(sc.code).trim().toLowerCase();
       if (owned[codeKey]) return true;
     }
@@ -1784,6 +1812,7 @@
 
       _state.performerName = performer.name || "";
       _state.localSceneKeys = localKeys;
+      resolveCodeDedupe(settings);   // 索引里留着 code 键，开关值在这里定
       _state.performerStashIds = performer.stash_ids || [];
       _state.allBoxes = boxes;
 
@@ -7045,14 +7074,18 @@
     panel.appendChild(body);
     guardScrollChain(overlay);
 
-    // 必要字段：置顶、灰显、勾着且不可取消
+    // 置顶组：番号 + 源编号。源编号永远必需；番号只在 codeDedupe 打开时必需
+    // （判重按它比对），关闭时与普通字段一样可以取消勾选。
+    var codeLocked = codeDedupeOn();
     var req = document.createElement("div");
     req.className = "ssd-imp-req";
-    req.appendChild(impRow({
+    var codeRow = impRow({
       label: tc("番号", "Code"),
       value: sc.code || tc("（源里没有）", "(none on source)"),
-      locked: true,
-    }).row);
+      checked: codeLocked || prefs.code !== false,
+      locked: codeLocked,
+    });
+    req.appendChild(codeRow.row);
     req.appendChild(impRow({
       label: tc("源编号", "Source ID"),
       value: brandNameForEndpoint(draft.endpoint) + " : " + String(sc.id),
@@ -7280,6 +7313,7 @@
       err.textContent = "";
       ok.textContent = tc("入库中…", "Adding…");
       var pick = {
+        code: codeRow.cb.checked ? (sc.code || "") : "",
         title: getters.title ? getters.title() : "",
         date: getters.date ? getters.date() : "",
         details: getters.details ? getters.details() : "",
@@ -7324,22 +7358,31 @@
   // 会建出两条本地记录。卡片在「热门」这类不按已拥有过滤的视图里不会消失，
   // 关掉弹窗再点一次就是一次全新的 sceneCreate —— 原来单条入库这条路径上
   // 没有任何判重（批量入库只在两个页面各自按番号跳过，且都漏了 stash_id）。
-  // 两路一起查：stash_id 是权威键，番号兜住「早先手动加的、没写 stash_id」的记录。
+  // stash_id 永远是权威键；番号那一路只在 codeDedupe 打开时查（默认关，见
+  // codeDedupeOn 上方）。开关决定「建不建」，所以这里以插件设置为准、
+  // 不读 localStorage 缓存（getPluginSettings 自带 10s 缓存，命中时是同步 resolve）。
   function findExistingSceneId(endpoint, sc) {
     var ep = String(endpoint || "").toLowerCase();
     var sid = String((sc && sc.id) || "");
     var code = String((sc && sc.code) || "").trim();
     if (!sid && !code) return Promise.resolve(null);
-    return callGQL(
-      "query($ep:String!,$sid:String!,$code:String!){" +
-        "bySid:findScenes(scene_filter:{stash_id_endpoint:{endpoint:$ep,stash_id:$sid,modifier:EQUALS}},filter:{per_page:1}){scenes{id}} " +
-        "byCode:findScenes(scene_filter:{code:{value:$code,modifier:EQUALS}},filter:{per_page:1}){scenes{id}}}",
-      { ep: ep, sid: sid, code: code }
-    ).then(function (d) {
-      var bySid = (((d || {}).bySid || {}).scenes || [])[0];
-      // 番号是空串时不吃 byCode 的结果（EQUALS "" 的语义各版本不保证）
-      var byCode = code ? ((((d || {}).byCode || {}).scenes) || [])[0] : null;
-      return (bySid && bySid.id) || (byCode && byCode.id) || null;
+    return getPluginSettings().then(function (settings) {
+      var useCode = !!code && resolveCodeDedupe(settings);
+      // 番号是空串时不查 byCode（EQUALS "" 的语义各版本不保证）
+      var q = "query($ep:String!,$sid:String!){" +
+        "bySid:findScenes(scene_filter:{stash_id_endpoint:{endpoint:$ep,stash_id:$sid,modifier:EQUALS}},filter:{per_page:1}){scenes{id}}";
+      var vars = { ep: ep, sid: sid };
+      if (useCode) {
+        q = "query($ep:String!,$sid:String!,$code:String!){" +
+          "bySid:findScenes(scene_filter:{stash_id_endpoint:{endpoint:$ep,stash_id:$sid,modifier:EQUALS}},filter:{per_page:1}){scenes{id}} " +
+          "byCode:findScenes(scene_filter:{code:{value:$code,modifier:EQUALS}},filter:{per_page:1}){scenes{id}}";
+        vars.code = code;
+      }
+      return callGQL(q + "}", vars).then(function (d) {
+        var bySid = (((d || {}).bySid || {}).scenes || [])[0];
+        var byCode = useCode ? ((((d || {}).byCode || {}).scenes) || [])[0] : null;
+        return (bySid && bySid.id) || (byCode && byCode.id) || null;
+      });
     }).catch(function () {
       // 查不动就放行：宁可多建一条，也不要因为判重失败把入库整条挡死
       return null;
@@ -7484,7 +7527,8 @@
       if (pick.urlsSrc) urls = urls.concat(draft.urls.src);
 
       var input = {
-        code: sc.code || undefined,
+        // 空串 = 不写：codeDedupe 关着时用户可以取消番号（欧美站 code 常是站内号）
+        code: pick.code || undefined,
         urls: urls,
         performer_ids: ids,
         tag_ids: r[2] || [],
@@ -7532,6 +7576,8 @@
     var perfMode = p.performers === "existing" ? "existing"
       : (p.performers === false || p.performers === "none") ? "none" : "all";
     return {
+      // 番号：codeDedupe 打开时强制写（判重按它比对），关着时看设置页的勾选
+      code: (codeDedupeOn() || p.code !== false) ? (sc.code || "") : "",
       title: p.title ? (sc.title || "") : "",
       date: p.date ? (sc.release_date || "") : "",
       details: p.details ? (sc.details || "") : "",
@@ -9267,7 +9313,9 @@
   var DP_IMPORT_KEY = "SSD:dp:import.v1";
   // performers 不在这个布尔列表里：它改成三态（全写 / 只关联已有 / 不写），
   // 与 tags、studio 同一套存储（用户 2026-10-29）。
-  var IMPORT_SCENE_KEYS = ["title", "date", "details", "director", "cover",
+  // code 在列表里但渲染位置特殊（置顶，与源编号一组）：codeDedupe 打开时
+  // 是必需项、勾着不能取消；关闭时与其余字段一样可勾可取消。
+  var IMPORT_SCENE_KEYS = ["code", "title", "date", "details", "director", "cover",
                            "urlsWeb", "urlsSrc"];
   // 12 个可映射字段 + aliases + urls + image（演员 tags 不做 —— 这几个源本来
   // 就没有演员标签，写进去必然是空，C1）
@@ -9536,6 +9584,8 @@
     layoutCardGrid: layoutCardGrid,
     openModal: openModal,
     isSceneOwned: isSceneOwned,
+    // 番号判重开关（yml codeDedupe）：同步判定，读的是上次设置校正过的缓存
+    codeDedupeOn: codeDedupeOn,
     // UI atoms
     makeChip: makeChip,
     makePanelBtn: makePanelBtn,
@@ -9807,11 +9857,12 @@
           var sceneKey = r.ep + ":" + String(sc.id || "").toLowerCase();
           if (ignScenes[sceneKey]) return;
           if (readFresh(sceneKey)) return;
-          // 关注页的管线会剔除「本地已拥有」的场景（stash_id 键 + code 键）。
-          // 角标不剔除的话就是「角标 2、关注页一片空白」（用户 2026-11-02）。
+          // 关注页的管线会剔除「本地已拥有」的场景（stash_id 键 + 开关打开时的
+          // code 键）。角标不剔除的话就是「角标 2、关注页一片空白」（用户 2026-11-02）。
           if (snap) {
             if (snap.owned[sceneKey]) return;
-            if (sc.code && snap.owned["code:" + String(sc.code).trim().toLowerCase()]) return;
+            if (sc.code && codeDedupeOn() &&
+                snap.owned["code:" + String(sc.code).trim().toLowerCase()]) return;
           }
           ((sc.performers || [])).forEach(function (pf2) {
             var pid = pf2 && pf2.performer && pf2.performer.id;
@@ -10118,6 +10169,7 @@
     var cachedOn = discoverCachedOn();
     if (cachedOn) injectDiscoverScript(); // immediate: lands in the early script wave
     getPluginSettings().then(function (settings) {
+      resolveCodeDedupe(settings);   // 每次加载校正一次，页面各处的同步判定都读它
       var on = settings && settings.enableDiscoverPage;
       // Stash only records plugin settings the user has touched: a fresh
       // install (or a never-touched switch) has no entry at all, and the yml

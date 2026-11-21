@@ -10,6 +10,7 @@ stdout -- Stash degrades to a raw string the moment a second line appears.
 """
 
 import base64
+import hashlib
 import json
 import os
 import posixpath
@@ -32,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.8"
+PLUGIN_VERSION = "0.1.9"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -534,16 +535,30 @@ class QB:
         status, text, _ = self._req(
             "/api/v2/torrents/add", data=b"".join(parts),
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-        if status != 200:
+        if status == 409:
+            # qB 5.x throws Conflict (body is the bare word) when the add
+            # produced neither a new task nor a pending one, i.e. the info hash
+            # is already in the session. Back-to-back adds can still answer 200
+            # with the same id, because the first task has not reached the
+            # session yet.
+            h = self._hash_by_infohash(torrent_infohash(raw_bytes))
+            if not h:
+                raise QBError("add -> HTTP 409 and no matching torrent")
+        elif status != 200:
             raise QBError(f"add -> HTTP {status} {text[:80]}")
-        try:
-            payload = json.loads(text)
-        except Exception:
-            raise QBError(f"add returned '{text[:80]}'")
-        ids = payload.get("added_torrent_ids") or []
-        if not ids:
-            raise QBError(f"add accepted nothing (failure={payload.get('failure_count')})")
-        h = ids[0].lower()
+        else:
+            try:
+                payload = json.loads(text)
+            except Exception:
+                raise QBError(f"add returned '{text[:80]}'")
+            ids = payload.get("added_torrent_ids") or []
+            if ids:
+                h = ids[0].lower()
+            else:
+                # A duplicate can also come back as failure_count with no ids.
+                h = self._hash_by_infohash(torrent_infohash(raw_bytes))
+                if not h:
+                    raise QBError(f"add accepted nothing (failure={payload.get('failure_count')})")
         if selected is not None:
             # qB only knows its file list after the metadata is parsed.
             files = _wait_files(self, h)
@@ -560,6 +575,12 @@ class QB:
             return
         self.post("/api/v2/torrents/filePrio",
                   {"hash": h, "id": "|".join(str(i) for i in indexes), "priority": priority})
+
+    def _hash_by_infohash(self, infohash):
+        if not infohash:
+            return ""
+        rows = json.loads(self.api("/api/v2/torrents/info?hashes=" + infohash) or "[]")
+        return str(rows[0].get("hash") or "").lower() if rows else ""
 
     @staticmethod
     def _joined(h):
@@ -579,16 +600,19 @@ class QB:
                   {"hashes": self._joined(h), "deleteFiles": "true" if delete_files else "false"})
 
     def add_magnet(self, magnet, savepath, tags, stopped=True):
-        status, text, _ = self._req("/api/v2/torrents/add", data=urllib.parse.urlencode({
-            "urls": magnet, "savepath": savepath, "category": "SceneBackfill",
-            "tags": tags, "stopped": "true" if stopped else "false"}).encode(),
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
-        if status != 200:
-            raise QBError(f"add magnet -> HTTP {status}")
         m = re.search(r"btih:([0-9a-fA-F]{40}|[A-Za-z2-7]{32})", magnet)
         if not m:
             raise QBError("magnet has no infohash")
         h = m.group(1).lower()
+        if len(h) == 32:
+            h = base64.b32decode(h.upper()).hex()
+        status, text, _ = self._req("/api/v2/torrents/add", data=urllib.parse.urlencode({
+            "urls": magnet, "savepath": savepath, "category": "SceneBackfill",
+            "tags": tags, "stopped": "true" if stopped else "false"}).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        # 409 = same info hash already in the session; adopting it is the goal.
+        if status not in (200, 409):
+            raise QBError(f"add magnet -> HTTP {status}")
         self.start(h)
         return h
 
@@ -1573,7 +1597,9 @@ def fetch_torrent(link, timeout=60):
         return None, None
     if link.startswith("magnet:"):
         return None, link
-    opener = urllib.request.build_opener(_MagnetRedirect, urllib.request.ProxyHandler({}))
+    # Redirect handling only: the link comes from the indexer, so it follows the
+    # same environment-proxy policy as the search request (no forced bypass).
+    opener = urllib.request.build_opener(_MagnetRedirect)
     req = urllib.request.Request(link, headers={"User-Agent": f"{PLUGIN_ID}/{PLUGIN_VERSION}"})
     try:
         with opener.open(req, timeout=timeout) as r:
@@ -1587,6 +1613,24 @@ def fetch_torrent(link, timeout=60):
 
 
 # ─── bencode ─────────────────────────────────────────────────────────────
+
+def torrent_infohash(raw_bytes):
+    """v1 infohash (sha1 of the info dict). Used to adopt a duplicate task."""
+    try:
+        data, i = raw_bytes, 0
+        if data[i:i + 1] != b"d":
+            return ""
+        i += 1
+        while data[i:i + 1] != b"e" and i < len(data):
+            key, i = bdecode(data, i)
+            start = i
+            _, i = bdecode(data, i)
+            if key == b"info":
+                return hashlib.sha1(data[start:i]).hexdigest()
+    except Exception:
+        return ""
+    return ""
+
 
 def bdecode(data, i=0):
     c = data[i:i + 1]

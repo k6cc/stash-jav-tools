@@ -1,6 +1,6 @@
 # SceneBackfill
 
-> v0.1.8：Motrix Server 2.4 支持种子直传与建任务时选片，不再整包下载；`createTask` 去重结果正常处理；鉴权改空用户名 Basic；进度识别 `finalizing`；自检新增 Server 允许根目录。
+> v0.1.9：qBittorrent 5.x 重复种子（HTTP 409）复用已有任务，不再报错；种子下载链接不再强制绕过环境代理，与索引器搜索保持一致。
 
 Stash 插件：把只有元数据、没有文件的场景补齐——搜资源、交给下载器或 Whisparr，完成后把文件关联回原场景。全程不搬动文件。
 

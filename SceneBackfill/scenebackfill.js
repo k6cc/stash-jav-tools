@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.5";
+  var PLUGIN_VERSION = "0.1.6";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -2641,6 +2641,19 @@
           h("div", { className: "sf-dl-foot" }, actions)));
     }
 
+    // 括号说明整体不拆行：窄屏上「(Stash side)」不能一半在上一行、一半在下一行
+    function nbLabel(label) {
+      var s = String(label || "");
+      var i = s.indexOf(" (");
+      if (i < 0) i = s.indexOf("（");
+      if (i < 0) return s;
+      return [
+        h("span", { key: "p" }, s.slice(0, i)),
+        " ",
+        h("span", { className: "sf-nb", key: "nb" }, s.slice(i).trim()),
+      ];
+    }
+
     // 面板统一标题：彩色图标块 + 标题 + 右侧状态胶囊，设置页各卡片因此长一样的头
     function panelHead(iconName, zh, en, right) {
       return h("div", { className: "sf-panel-head" },
@@ -2700,7 +2713,7 @@
           self ? h("div", { className: "sf-checks" }, (self.checks || []).map(function (c) {
             return h("div", { className: "sf-check" + (c.ok ? " is-ok" : " is-bad"), key: c.key },
               pill(c.ok ? "gr" : "re", c.ok ? "OK" : "!"),
-              h("span", { className: "sf-check-name" }, c.label || c.key),
+              h("span", { className: "sf-check-name" }, nbLabel(c.label || c.key)),
               h("span", { className: "sf-meta" }, c.detail || ""),
               c.hint && !c.ok ? h("span", { className: "sf-hint" }, c.hint) : null);
           })) : h("div", { className: "sf-empty" }, tc("加载中…", "Loading…"))));

@@ -349,6 +349,11 @@
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
 }
+/* iPad mini 竖屏宽 768：250px 下限只能排两张，这一档固定三列；
+   900 以上回到 250px 自然排列，横屏（1024）仍是三张 */
+@media (min-width: 641px) and (max-width: 900px) {
+  .sf-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 .sf-tile {
   display: flex; flex-direction: column; min-width: 0;
   border: 1px solid var(--sf-line); border-radius: 11px;
@@ -818,6 +823,35 @@ select.sf-input option {
 .sf-check.is-ok { border-left-color: rgba(var(--sf-gr-rgb), .6); }
 .sf-check.is-bad { border-left-color: rgba(var(--sf-re-rgb), .7); }
 .sf-check-name { font-size: 12px; font-weight: 600; min-width: 128px; color: var(--sf-tx); }
+/* 宽屏与平板固定标签列：英文最长那条 "Download folder (downloader side)"
+   约 193px，留一点余量后各行的值正好从同一条竖线开始 */
+@media (min-width: 641px) {
+  .sf-check-name { flex: 0 0 196px; }
+}
+/* 手机：值挪到名称下方（与名称只隔 2px，不撑高）；
+   标签里括号外的部分和括号各占一行，括号整体不拆 */
+@media (max-width: 640px) {
+  .sf-check {
+    display: grid; align-items: center;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "pill name" ". value" ". hint";
+    column-gap: 10px; row-gap: 2px;
+  }
+  .sf-check > .sf-pill { grid-area: pill; align-self: start; }
+  .sf-check-name { grid-area: name; flex: none; min-width: 0; line-height: 1.35; }
+  .sf-check .sf-meta { grid-area: value; margin-top: 0; }
+  .sf-check .sf-hint { grid-area: hint; }
+}
+/* 括号说明整体不拆行，避免「(Stash / side)」跨两行 */
+.sf-nb { white-space: nowrap; }
+.sf-check-name > span { white-space: nowrap; }
+/* 值占剩下的宽度：先允许折成两行，两行还放不下才省略 */
+.sf-check .sf-meta {
+  flex: 1 1 0; min-width: 0;
+  white-space: normal; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
 
 /* 列表工具条（下载中 / 已完成 / 已忽略）：一条窄底框，左边一句话，右边批量动作 */
 .sf-listbar {
@@ -1194,14 +1228,13 @@ select.sf-input option {
   .sf-stat { padding: 7px 9px; gap: 1px; }
   .sf-stat-n { font-size: 17px; }
   .sf-stat-l { font-size: 10.5px; gap: 4px; }
-  .sf-stat-l::before { display: none; }
   .sf-stat--wide .sf-stat-n { font-size: 15px; }
   .sf-row { grid-template-columns: 74px minmax(0, 1fr) auto; }
   .sf-row-shot { width: 74px; padding-top: 42px; }
   .sf-row-state { display: none; }
   .sf-cand { flex-wrap: wrap; }
   .sf-tile-foot { gap: 6px; }
-  .sf-grid2 { grid-template-columns: 1fr; }
+  .sf-grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sf-select { max-width: 100%; }
   /* 连接那行在手机上也是一行；宽度够就显示全，真的窄才省略 */
   .sf-conn { flex: 1 1 auto; }

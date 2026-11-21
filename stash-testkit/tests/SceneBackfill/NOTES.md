@@ -7,6 +7,7 @@
 
 | 文件 | 用途 |
 |---|---|
+| `scripts/sf_verify.py` | 一键验收：selftest + 规则回读 + 下载器连接 + 守护心跳 + state 状态机巡检（只读） |
 | `../../plugin_op.py` | 任意插件跑 `runPluginOperation`，参数走 JSON（多行规则/正则在 shell 里必被吃引号） |
 | `../../state_snapshot.py` | `plugin-data/<id>/state.json` 快照/还原；改状态做 UI 验证前先 snap |
 
@@ -21,6 +22,8 @@ python stash-testkit/ui_probe.py --path /plugins/SceneBackfill \
 ```
 
 ## 一次完整验证
+
+一键（只读，不改配置/状态）：`python tests/SceneBackfill/scripts/sf_verify.py`。下面是分步排查时的手工口径。
 
 1. `{"mode":"selftest"}` 六项全绿（qB / 下载目录 / 入库目录 / 空间 / 索引器 / 后台认证）
 2. `{"mode":"capture"}` 看状态分布；`{"mode":"search","sceneId":X}` 看 `screen{pass,unknown,fail}`

@@ -119,7 +119,7 @@ stash-testkit/
 | `stash_client.py` | GraphQL 客户端：场景 CRUD / 扫描 / 轮询 / 封面字节 |
 | `gen_test_video.py` | 生成内容唯一测试视频 |
 | `db_cleanup.py` | 测试收尾 DB 孤儿清理（`--prefix` 白名单，`--dry-run` 预览） |
-| `screenshots/` | 论坛帖配图：起调试 Chrome → 自动登录 → 注入占位符 → 全页截图落 `docs/`；场景脚本按 `<插件名>-<视图>.mjs` 命名，用法与占位符规则见 `screenshots/NOTES.md` |
+| `screenshots/` | 论坛帖配图：起调试 Chrome → 自动登录 → 注入占位符 → 全页截图落 `docs/forum/img/`；场景脚本按 `<插件名>-<视图>.mjs` 命名，用法与占位符规则见 `screenshots/NOTES.md` |
 | `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |

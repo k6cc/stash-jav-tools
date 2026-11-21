@@ -6,7 +6,8 @@
  * （可靠时序波次）；本文件只提供页面组件（window.SSD.discoverMount +
  * "ssd:discover-ready" 事件）与页内全部内容渲染。
  * 依赖：window.SSD（主 JS 导出的共享命名空间，见 stashDiscover.js 尾部）。
- * 设计规范：docs/stashdiscover-design.md（唯一事实源）。
+ * 设计规范：docs/archive/stashdiscover/design.md（历史定稿）；当前开发上下文见
+ * docs/dev/stashdiscover/handoff.md。
  * 主题跟随：suiteTheme() 从页面采样派生 --sx-* token（移植自 LockdownI18n
  * 共享实现），换任何主题自动跟随；Flexoki 主题插件启用时用其精确值。
  * ────────────────────────────────────────────────────────────────────────── */

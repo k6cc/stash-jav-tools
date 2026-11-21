@@ -3,7 +3,7 @@
 import { createSession } from "../capture.mjs";
 import path from "node:path";
 
-const OUT = path.join(import.meta.dirname, "../../..", "docs");
+const OUT = path.join(import.meta.dirname, "../../..", "docs/forum/img");
 const s = await createSession({ port: 9333, width: 1600, height: 1000, dsf: 2 });
 await s.loginIfNeeded();
 await s.gotoDiscoverPage();

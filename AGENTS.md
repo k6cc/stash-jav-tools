@@ -39,7 +39,7 @@
 6. 验证：`gh run list --limit 1` 找 Release workflow → `gh run watch <id> --exit-status` 等待成功；`gh release view <tag> --json assets` 确认 zip 产物存在；`git status` 确认工作区干净
 7. **确认插件源（GitHub Pages）已换成新版本** —— Stash 读的是 `https://k6cc.github.io/stash-plugins/plugins/main/index.yml`，`raw.githubusercontent.com` 更新不代表它更新（v2.6.18 就卡在 Pages 部署失败，源上仍是上一版，用户点「更新插件」看不到新版）。查法：`curl -s "https://k6cc.github.io/stash-plugins/plugins/main/index.yml?cb=$(date +%s)" | grep -A4 "id: <插件>"` 看 version；`gh api repos/k6cc/stash-plugins/pages --jq .status` 应为 `built`。若 `errored`，看 `pages build and deployment` 那次 run 的 deploy 日志（常见 `updating_pages` 超时 / `Deployment cancelled`），重跑或在 stash-plugins 推一个空提交换 build version 重触发
 - Windows：git 提示 LF→CRLF 属正常，不影响内容；commit 用 `-m "..."`、命令链用 `;`（勿用 `&&`/`||`，PowerShell 5.1 不支持）；**受限沙箱环境下 `git push` 可能因 schannel TLS 握手失败被拦**（`fatal: unable to access ... schannel: failed to receive handshake`）——push/tag 推送需在沙箱外执行，commit/add 等本地操作不受影响
-- **新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/new-plugin-release.md`
+- **新插件首次发布**（仓库中无其发布条目时）另需 release.yml 白名单 + stash-plugins 占位符两步，见 `docs/reference/new-plugin-release.md`
 
 ## 文件编辑（agent 工作约定）
 
@@ -51,7 +51,7 @@
 
 | 插件类型 | 界面文案 | 设置项 displayName / description | yml 顶层 description |
 |---|---|---|---|
-| 有 UI 的公开插件 | 中英双语、跟随 Stash 界面语言（实现见 `docs/ui-guidelines.md`「多语言」节） | 英文 | 英文 |
+| 有 UI 的公开插件 | 中英双语、跟随 Stash 界面语言（实现见 `docs/reference/ui-guidelines.md`「多语言」节） | 英文 | 英文 |
 | 纯后台（`interface: raw`，无 UI 注入） | — | 英文 | 英文 |
 | 翻译插件 sceneTranslate / sceneTranslateAuto | 中英 | `中文 / English` 并列 | 英文 |
 | 第三方汉化插件（*I18n） | 全中文 | 全中文 | 中文 |
@@ -100,9 +100,9 @@ return max(LO, min(HI, v))
 
 ## 专题规范（按需 Read，不每次必读）
 
-- **改带 UI 的插件 `.js` 前**：读 `docs/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。
-- **写/改插件 README、论坛帖、或 yml 里 `displayName`/`description` 前**：读 `docs/docs-writing.md`（README 结构与取舍 + 论坛帖规则 + 设置文案规则 + 写完必做的「逐句三问」；论坛草稿在 `docs/forum-post-*.md`，已 gitignore）。
-- **新插件首次发布前**：读 `docs/new-plugin-release.md`（release.yml 白名单 + stash-plugins 占位符）。
+- **改带 UI 的插件 `.js` 前**：读 `docs/reference/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。
+- **写/改插件 README、论坛帖、或 yml 里 `displayName`/`description` 前**：读 `docs/reference/docs-writing.md`（README 结构与取舍 + 论坛帖规则 + 设置文案规则 + 写完必做的「逐句三问」；论坛草稿在 `docs/forum/`，已 gitignore）。
+- **新插件首次发布前**：读 `docs/reference/new-plugin-release.md`（release.yml 白名单 + stash-plugins 占位符）。
 
 ## 测试工具集（stash-testkit/）
 
@@ -112,6 +112,6 @@ return max(LO, min(HI, v))
 
 ## 其他
 
-- `.gitignore` 已忽略 `__pycache__`、备份文件、`docs/forum-post-*.md`（论坛草稿）、`stash-testkit/config.json`（含 API key），不要提交
+- `.gitignore` 已忽略 `__pycache__`、备份文件、`docs/forum/forum-post-*.md`（论坛草稿）、`docs/dev/stashdiscover/`（stashDiscover 开发文档）、`docs/archive/`（历史稿）、`stash-testkit/config.json`（含 API key），不要提交
 - 用户自定义映射文件（`tag_merge_map*.custom.json`）是本地产物，不入库、不推送
 - 本文件是 agent 协作约定，不随插件版本发布

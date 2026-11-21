@@ -1,6 +1,6 @@
 # 截图 — Stash UI → 论坛帖
 
-为插件生成可直接贴到论坛帖的截图（`docs/stashdiscover-*.png`）。演员 / 场景 / 工作室 / 标签 / 番号等真实内容统一替换为占位符。
+为插件生成可直接贴到论坛帖的截图（`docs/forum/img/stashdiscover-*.png`）。演员 / 场景 / 工作室 / 标签 / 番号等真实内容统一替换为占位符。
 
 ## 快速开始
 
@@ -11,7 +11,7 @@ stash-testkit\screenshots\launch-chrome.bat
 :: 2. 首次：复制凭据模板并填账号密码（creds.json 已 gitignore）
 copy stash-testkit\screenshots\creds.sample.json stash-testkit\screenshots\creds.json
 
-:: 3. 跑场景（输出写入仓库 docs\）
+:: 3. 跑场景（输出写入仓库 docs\forum\img\）
 node stash-testkit\screenshots\scenarios\stashdiscover-discover-page.mjs
 node stash-testkit\screenshots\scenarios\stashdiscover-performer-tab.mjs 136
 ```
@@ -26,7 +26,7 @@ node stash-testkit\screenshots\scenarios\stashdiscover-performer-tab.mjs 136
 | `anon-stash.js` | 占位符注入器（document-wide，覆盖发现页 / 演员·工作室详情页 / 弹窗） |
 | `launch-chrome.bat` | 起带 `--remote-debugging-port=9333` 的 Chrome |
 | `creds.sample.json` | 凭据模板 → `creds.json`（账号密码，已 gitignore） |
-| `scenarios/<插件名>-<视图>.mjs` | 场景脚本，输出固定写 `docs/<插件名>-*.png` |
+| `scenarios/<插件名>-<视图>.mjs` | 场景脚本，输出固定写 `docs/forum/img/<插件名>-*.png` |
 
 ## 占位符规范（anon-stash.js）
 
@@ -51,7 +51,7 @@ node stash-testkit\screenshots\scenarios\stashdiscover-performer-tab.mjs 136
 import { createSession } from "../capture.mjs";
 import path from "node:path";
 
-const OUT = path.join(import.meta.dirname, "../../..", "docs");
+const OUT = path.join(import.meta.dirname, "../../..", "docs/forum/img");
 const s = await createSession({ port: 9333, width: 1600, height: 1000, dsf: 2 });
 await s.loginIfNeeded();
 await s.navigate("http://localhost:9999/performers/136");

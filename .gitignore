@@ -49,7 +49,7 @@ stash-testkit/tests/**/_cfg.js
 stash-testkit/_archive/**/*.json
 
 # 第三方库副本（619KB，CDN 可重建，不提交）
-stash-testkit/tests/binge/hls.min.js
+stash-testkit/tests/**/hls.min.js
 
 # 系统文件
 Thumbs.db

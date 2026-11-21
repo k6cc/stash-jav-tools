@@ -61,7 +61,7 @@ JAV 片商/系列码（SSIS/SSNI/IPX/IPZZ/DVDES/FSDSS/JUL/BLK/PRED…）在 stas
 
 UI 填充 ID 预览卡片的外链按钮即用此规则（`boxTagUrl`）。
 
-## 工具（tools/）
+## 工具（scripts/）
 
 | 脚本 | 用途 |
 |---|---|

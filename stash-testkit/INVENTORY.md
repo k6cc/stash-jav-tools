@@ -22,17 +22,19 @@
 | **测试收尾清 DB 孤儿**（files + scenes_files + images_files + image_files + files_fingerprints + 孤儿 image） | `db_cleanup.py` | `python db_cleanup.py --prefix TST- --dry-run` → 确认清单 → 去掉 `--dry-run` 真跑（自动停/启 Stash） |
 | 生成论坛帖截图（演员/场景/工作室自动匿名化） | `screenshots/scenarios/*.mjs` | 先 `stash-testkit\screenshots\launch-chrome.bat`，`node stash-testkit/screenshots/scenarios/stashdiscover-discover-page.mjs`；输出落 `docs/forum/img/`，规则见 `screenshots/NOTES.md` |
 | 测新场景入库类插件（nfo / javstashAF+ / sceneGallerySync） | 流程：gen_test_video → 放同名 .nfo/-cover.jpg → trigger_scan → wait_for_scene → 给 hook 留延迟（javstashAF+ 默认 20s）→ 验证 → db_cleanup | 见 `README.md` 测试生命周期；图库钩子类（ImageMetaSync）见 `tests/ImageMetaSync/NOTES.md` |
-| 测演员解析类插件（performerCreate 钩子） | 直接 `performerCreate` mutation，不用视频 | 骨架见 `README.md` E2E 节；用例见 `tests/javstashAutofill/test_e2e.py` |
-| 测 tagCreate 失败兜底（nfoSceneParser） | `tests/nfoSceneParser/test_tag_create_fallback.py` | `python tests/nfoSceneParser/test_tag_create_fallback.py offline <插件目录>` |
-| 测 tagCreate 兜底真库端到端 | `tests/nfoSceneParser/test_tag_create_fallback_live.py` | 自动挑候选源名，测完自清理 |
-| 跑插件 op 且参数复杂（多行规则/正则/嵌套） | `tests/SceneBackfill/sf_op.py` | `python tests/SceneBackfill/sf_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'`（或 `--file args.json`） |
-| 改插件状态做 UI 验证前存/还原 | `tests/SceneBackfill/state_snapshot.py` | `snap` → 测 → `restore`（先停守护，否则 90 s 内被整份覆盖） |
-| tagMerge 映射维护/校验 | `tests/tagMerge/tools/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/NOTES.md`） |
-| 探 javstash 某番号/演员 | `tests/javstashAutofill/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
-| 诊断某番号为何没进 binge 首页热门 | `tests/binge/probe_trending_filter.py` | `python probe_trending_filter.py [番号] [lookback天数]`（模拟前端过滤链，逐条打印 SKIP 原因） |
-| 测 Stash HLS 段生产节奏 | `tests/binge/hls_segment_probe.py` | `python hls_segment_probe.py --scene 244 --minutes 2 --lead 10 --reset-cache [--ffprobe]` |
-| 真实 Chrome 播放 HLS / A/B | `tests/binge/hls_chrome_probe.py` | `python hls_chrome_probe.py --scene 244 --seconds 150 [--seek 600] [--engine native\|hlsjs]` |
-| 探 tagCreate 幽灵 id 边界 | `tests/nfoSceneParser/probe_ghost_id.py` | 直发原始 mutation，确认钩子合并时不返回已删 tag 的 id |
+| 测演员解析类插件（performerCreate 钩子） | 直接 `performerCreate` mutation，不用视频 | 骨架见 `README.md` E2E 节；用例见 `tests/javstashAutofill/scripts/test_e2e.py` |
+| 测 tagCreate 失败兜底（nfoSceneParser） | `tests/nfoSceneParser/scripts/test_tag_create_fallback.py` | `python tests/nfoSceneParser/scripts/test_tag_create_fallback.py offline <插件目录>` |
+| 测 tagCreate 兜底真库端到端 | `tests/nfoSceneParser/scripts/test_tag_create_fallback_live.py` | 自动挑候选源名，测完自清理 |
+| **部署/更新插件并校验版本** | `deploy_plugin.py` | `python deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill`（先删后拷 → reloadPlugins → 轮询 version；同 id 旧副本会报警） |
+| 跑任意插件 op（参数复杂时必用） | `plugin_op.py` | `python plugin_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'`（或 `--file args.json`；`--raw` 看 errors） |
+| 改插件状态做 UI 验证前存/还原 | `state_snapshot.py` | `snap` → 测 → `restore`（先停守护，否则 90 s 内被整份覆盖） |
+| 多视口 UI 回归（对齐/列数/换行/横向溢出） | `ui_probe.py` | `python ui_probe.py --path /plugins/SceneBackfill --selector ".sf-check-name" --sizes 345,390,768,860,1024` |
+| tagMerge 映射维护/校验 | `tests/tagMerge/scripts/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/SCRIPTS.md`） |
+| 探 javstash 某番号/演员 | `tests/javstashAutofill/scripts/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |
+| 诊断某番号为何没进 binge 首页热门 | `tests/binge/scripts/probe_trending_filter.py` | `python probe_trending_filter.py [番号] [lookback天数]`（模拟前端过滤链，逐条打印 SKIP 原因） |
+| 测 Stash HLS 段生产节奏 | `tests/binge/scripts/hls_segment_probe.py` | `python hls_segment_probe.py --scene 244 --minutes 2 --lead 10 --reset-cache [--ffprobe]` |
+| 真实 Chrome 播放 HLS / A/B | `tests/binge/scripts/hls_chrome_probe.py` | `python hls_chrome_probe.py --scene 244 --seconds 150 [--seek 600] [--engine native\|hlsjs]` |
+| 探 tagCreate 幽灵 id 边界 | `tests/nfoSceneParser/scripts/probe_ghost_id.py` | 直发原始 mutation，确认钩子合并时不返回已删 tag 的 id |
 | 查 DB 孤儿（只读） | 直连 sqlite3 | 见 `README.md` 硬约束"DB 直写前停实例" |
 
 ## 硬约束（每条都踩过，别再踩）

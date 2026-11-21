@@ -14,16 +14,20 @@ stash-testkit/
 ├── stash_client.py         # 通用 GraphQL 客户端（场景生命周期 / 扫描 / 轮询）
 ├── gen_test_video.py       # ffmpeg 生成内容唯一测试视频（避 oshash 合并）
 ├── db_cleanup.py           # 测试后 DB 孤儿清理（停实例→SQL→重启，自动级联）
+├── plugin_op.py            # 任意插件跑 runPluginOperation（参数走 JSON，避开 shell 引号）
+├── state_snapshot.py       # 插件 plugin-data 的 state.json 快照/还原
+├── deploy_plugin.py        # 同步插件 → reloadPlugins → 校验 version（顺带查同 id 旧副本）
+├── ui_probe.py             # 多视口布局回归（对齐 / 列数 / 行数 / 横向溢出）
 ├── screenshots/            # Stash UI 截图链路（CDP + 登录 + 占位符匿名化，产出论坛帖配图）
 ├── tests/
-│   ├── sceneTranslateAuto/  # 插件特定验证脚本
-│   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测与 E2E
-│   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界
-│   ├── binge/               # 首页热门口径探测 + 流媒体播放实测（NOTES.md）
+│   ├── sceneTranslateAuto/  # 翻译/守卫/scan_all 单测 + worker/全链路（scripts/ + SCRIPTS.md，入口 NOTES.md）
+│   ├── javstashAutofill/    # 演员解析/封面竞态/BD 剥离单测 + E2E（scripts/ + SCRIPTS.md，入口 NOTES.md）
+│   ├── nfoSceneParser/      # tagCreate 兜底单测 + 幽灵 id 边界（scripts/ + SCRIPTS.md，入口 NOTES.md）
+│   ├── binge/               # 首页热门口径 + 流媒体播放实测（scripts/ + SCRIPTS.md，入口 NOTES.md）
 │   ├── stashDiscover/       # 发现页/弹窗/Jackett/TPDB 链路验证（文档分层 + scripts/ 放全部脚本，入口 NOTES.md）
 │   ├── ImageMetaSync/       # 图库图片元数据回填：E2E/兜底/锁队列/全库审计（入口 NOTES.md）
-│   ├── tagMerge/            # tagMerge 映射维护：业务语义 + 工具（NOTES.md）
-│   └── SceneBackfill/         # runPluginOperation 通用调用器 + 插件 state 快照（入口 NOTES.md）
+│   ├── tagMerge/            # tagMerge 映射维护：业务语义 + scripts/ 工具（入口 NOTES.md）
+│   └── SceneBackfill/         # 补档插件：状态机/规则语义/实测坑（入口 NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
 
@@ -41,7 +45,7 @@ stash-testkit/
 | 6 | 验证 | 重查 title/封面/字段；封面字节比对用 `fetch_scene_image()` |
 | 7 | 清理 | `destroy_scene(id)`（blob 锁拦重试）→ 删测试目录 → `db_cleanup.py --prefix TST-`（自动级联 files 关联 + 孤儿 image） |
 
-演员解析类插件（无需视频）：直接 `performerCreate` mutation 触发 `Performer.Create.Post` 钩子（异步化，mutation 立即返回，等 8-12s 再断言）。用例骨架见 `tests/javstashAutofill/test_e2e.py`。
+演员解析类插件（无需视频）：直接 `performerCreate` mutation 触发 `Performer.Create.Post` 钩子（异步化，mutation 立即返回，等 8-12s 再断言）。用例骨架见 `tests/javstashAutofill/scripts/test_e2e.py`。
 
 ## 硬约束清单
 
@@ -98,6 +102,12 @@ stash-testkit/
 - **注入到设置页的弹窗，点击会沿 React 树冒泡回注入点**：`Modal` / `createPortal` 只把 DOM 挂到 body，React 父节点仍是按钮所在的 `SettingGroup`，而卡片头是折叠开关 → 点弹窗任意位置都会把设置展开/收起。修法：在弹窗子树根（Header/Body/Footer）的 `onClick` + `onMouseDown` 上 `stopPropagation`；只换挂载点没用（实测卡片高度 132 → 1338，修后三次点击均 132）。
 - **拖拽出弹窗再松手，`click` 落在「按下点与松手点的最近公共祖先」**：它可能直接是卡片头，这条事件已跑出弹窗子树，子树上的 `stopPropagation` 收不到。要在 `document` **捕获阶段**判：`pointerdown` 记起点 → 位移 > 8px 记为拖拽 → `click` 里吞掉遮罩落点与拖拽落点。同一机制还会让「点遮罩关窗」顺带折叠卡片，一起兜住。
 - **白屏 + 零日志，先查函数形参与函数体是否一致**：`ensureData(keys, force)` 体内用了未声明的 `prio` → `ReferenceError`，被 React 错误边界吞掉，`window.onerror` / `console.error` / `unhandledrejection` 全抓不到，`node --check` 也照样通过（语法合法），页面只剩 body 末尾一句「出了些问题。」。判据：页面容器为 null 但 `window.<命名空间>` 导出键正常 → 直接 grep 新增变量名的形参声明。
+- **`configurePlugin` 是整份替换不是合并**：只回传改动的键会把其余设置全部清空（qB 密码这类不可恢复）。任何“存一个开关”的页面都要先读出整份配置、改一项、整份回传。
+- **注入到导航栏的元素在页面容器之外**：页面根容器上定义的 CSS 变量在那里取不到（角标会没颜色，只能用固定值或把令牌提到 `:root`）。导航与页面组件树也彼此分离，跨树更新要走自定义事件；数字没变时 `setState` 同值会被 React 跳过，开关类改动需要单独发一次“强制重绘”事件。
+
+### 插件后端
+
+- **op 参数里的布尔 `false` 不能写 `str(args.get(k,"") or "")`**：`False or ""` 得空串，开关变成只能开不能关；按 `is None` 判断参数是否传了。
 
 ### 工具链
 
@@ -119,14 +129,18 @@ stash-testkit/
 | `stash_client.py` | GraphQL 客户端：场景 CRUD / 扫描 / 轮询 / 封面字节 |
 | `gen_test_video.py` | 生成内容唯一测试视频 |
 | `db_cleanup.py` | 测试收尾 DB 孤儿清理（`--prefix` 白名单，`--dry-run` 预览） |
+| `plugin_op.py` | 任意插件跑 `runPluginOperation`，参数走 JSON 文件/串（多行规则与正则在 shell 里必被吃引号） |
+| `state_snapshot.py` | 插件 `plugin-data/<id>/state.json` 快照 / 还原 / 查看 |
+| `deploy_plugin.py` | 同步插件源码到实例 → `reloadPlugins` → 轮询校验 `version`；同 id 旧副本报警 |
+| `ui_probe.py` | 多视口布局回归：同一选择器在多个宽度下量对齐、列数、行数、行高与横向溢出（底层调 `stash_dev.py eval --vsize`） |
 | `screenshots/` | 论坛帖配图：起调试 Chrome → 自动登录 → 注入占位符 → 全页截图落 `docs/forum/img/`；场景脚本按 `<插件名>-<视图>.mjs` 命名，用法与占位符规则见 `screenshots/NOTES.md` |
-| `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E |
-| `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测 |
-| `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证 |
-| `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置（lookback/preview/gender）补查、番号未进首页热门诊断（trending 定位 + owned + 过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE 可行性），端点机制与用法见 `tests/binge/NOTES.md` |
+| `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
+| `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
+| `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
+| `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置补查、番号未进首页热门诊断（过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE）。脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，端点机制见 `NOTES.md` |
 | `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、布局回归（骨架占位 / 模块刷新 / 分页判到底）、请求分布诊断、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
-| `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `tools/`（归一化/校验/刮定义） |
-| `tests/SceneBackfill/` | `sf_op.py`（任意插件跑 `runPluginOperation`，参数走 JSON）、`state_snapshot.py`（plugin-data 的 state.json 快照/还原）；踩坑清单（`plugin-data` 目录名、`configurePlugin` 整体替换、布尔 false 丢参、双进程写 state、qB 状态延迟）见 `NOTES.md` |
+| `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `scripts/`（归一化/校验/刮定义，逐个用途见 `SCRIPTS.md`） |
+| `tests/SceneBackfill/` | 补档插件的状态机、规则口径、界面令牌与实测坑清单（`plugin-data` 目录名、`configurePlugin` 整体替换、布尔 false 丢参、双进程写 state、qB 状态延迟、守护停后再快照），见 `NOTES.md` |
 | `tests/ImageMetaSync/` | 图库图片元数据回填：全库口径审计、受控 E2E（建库钩子/竞态等待/编号/开关）、无图库兜底、锁与队列、schema 探针；**脚本逐个用途与副作用见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 
 ## 清理规范

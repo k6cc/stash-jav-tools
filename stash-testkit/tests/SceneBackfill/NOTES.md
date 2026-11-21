@@ -7,14 +7,17 @@
 
 | 文件 | 用途 |
 |---|---|
-| `sf_op.py` | 任意插件跑 `runPluginOperation`，参数走 JSON（多行规则/正则在 shell 里必被吃引号） |
-| `state_snapshot.py` | `plugin-data/<id>/state.json` 快照/还原；改状态做 UI 验证前先 snap |
+| `../../plugin_op.py` | 任意插件跑 `runPluginOperation`，参数走 JSON（多行规则/正则在 shell 里必被吃引号） |
+| `../../state_snapshot.py` | `plugin-data/<id>/state.json` 快照/还原；改状态做 UI 验证前先 snap |
 
 ```bash
-python tests/SceneBackfill/sf_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'
-python tests/SceneBackfill/sf_op.py SceneBackfill --file args.json      # 参数复杂时写文件
-python tests/SceneBackfill/state_snapshot.py snap SceneBackfill
-python tests/SceneBackfill/state_snapshot.py restore SceneBackfill
+python stash-testkit/plugin_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'
+python stash-testkit/plugin_op.py SceneBackfill --file args.json      # 参数复杂时写文件
+python stash-testkit/state_snapshot.py snap SceneBackfill
+python stash-testkit/state_snapshot.py restore SceneBackfill
+python stash-testkit/deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill
+python stash-testkit/ui_probe.py --path /plugins/SceneBackfill \
+  --selector ".sf-check-name" --sizes 345,390,768,860,1024
 ```
 
 ## 一次完整验证

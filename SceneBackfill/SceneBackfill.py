@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.7"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -606,13 +606,12 @@ class QB:
 
 
 # ─── Motrix / aria2 ──────────────────────────────────────────────────────
-# aria2 的 JSON-RPC 只有一套接口，桌面版（高级设置里的 RPC 密钥）和 NAS 版
-# （Web 端那个密钥，需实测是否等价）用同一个地址：http://host:16800/jsonrpc。
+# aria2 的 JSON-RPC 只有一套接口，桌面版（高级设置里的 RPC 密钥）用
+# http://host:16800/jsonrpc；Server 版是另一套协议，见下面「Motrix Server」一节。
 # 它没有 qB 那种「任务哈希」概念，gid 就是任务标识，所以下面的 key 一律是 gid。
 
 ARIA_KEYS = ["gid", "status", "totalLength", "completedLength", "downloadSpeed",
-             "uploadSpeed", "numSeeders", "connections", "dir", "errorCode",
-             "errorMessage", "files", "bittorrent", "infoHash"]
+             "numSeeders", "dir", "files", "bittorrent"]
 
 ARIA_STATE = {
     "active": "downloading",

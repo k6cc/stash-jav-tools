@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.4";
+  var PLUGIN_VERSION = "0.1.5";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -145,14 +145,113 @@
     CACHE.at = Date.now();
   }
 
-  // 导航角标：数字是「有结果」里的场景数。导航在任何页面都渲染，所以先画上
-  // 一次的答案，再由页面（数据到手时）或一次只读 state 的请求更新。
-  var NAV = { n: 0, evt: "sf:nav-count", asked: false };
-  function navCount(n) {
-    NAV.n = Math.max(0, Number(n) || 0);
+  // 导航角标：优先级 有结果 → 下载中 → 已完成(增量) → 待处理，颜色跟着选中
+  // 的那一组走。导航在任何页面都渲染，所以先画上一次的答案，再由页面（数据
+  // 到手时）或一次只读 state 的请求更新。
+  var NAV = {
+    c: { found: 0, active: 0, done: 0, pending: 0 },
+    evt: "sf:nav-count", badgeEvt: "sf:nav-badge", asked: false,
+  };
+  function navCount(c) {
+    if (typeof c === "number") c = { found: c };
+    NAV.c = {
+      found: Math.max(0, Number(c && c.found) || 0),
+      active: Math.max(0, Number(c && c.active) || 0),
+      done: Math.max(0, Number(c && c.done) || 0),
+      pending: Math.max(0, Number(c && c.pending) || 0),
+    };
     try {
-      window.dispatchEvent(new CustomEvent(NAV.evt, { detail: NAV.n }));
-    } catch (e) { /* 老浏览器没有 CustomEvent，下一次渲染照样能拿到 NAV.n */ }
+      window.dispatchEvent(new CustomEvent(NAV.evt, { detail: NAV.c }));
+    } catch (e) { /* 老浏览器没有 CustomEvent，下一次渲染照样能拿到 NAV.c */ }
+  }
+
+  // ── 浏览器侧偏好：导航角标、版本号、统计栏、已完成增量 ─────────────
+  // 全是展示偏好，存 localStorage 而不是插件配置；导航条在任何页面都渲染，
+  // 同步读取才能避免首屏闪一下再消失。
+  var UI_EVT = "sf:ui-pref";
+  var NAV_BADGE_KEY = "sf.navBadge";
+  var DONE_SEEN_KEY = "sf.doneSeen";
+  function prefOn(key, def) {
+    try {
+      var v = window.localStorage.getItem(key);
+      return v === null ? def : v !== "0";
+    } catch (e) { return def; }
+  }
+  function prefSet(key, on) {
+    try { window.localStorage.setItem(key, on ? "1" : "0"); } catch (e) { /* 隐私模式 */ }
+    try { window.dispatchEvent(new CustomEvent(UI_EVT)); } catch (e) { /* 同上 */ }
+  }
+  function navBadgeOn() { return prefOn(NAV_BADGE_KEY, true); }
+  function showVerOn() { return prefOn("sf.showVer", true); }
+  function showStatsOn() { return prefOn("sf.showStats", true); }
+  function setNavBadge(on) {
+    prefSet(NAV_BADGE_KEY, on);
+    // 导航项不在页面组件树里，单独发事件让它重渲染。不能复用 nav-count：
+    // 数字没变时 setState 同一个值会被 React 跳过。
+    try { window.dispatchEvent(new CustomEvent(NAV.badgeEvt)); } catch (e) { /* 同上 */ }
+  }
+
+  // 已完成增量：上次看过「已完成」之后又入库了几条。第一次读取时把当前数量
+  // 记为基线，升级上来的老用户不会一次看到一大串「+N」。
+  function doneSeen() {
+    try {
+      var v = window.localStorage.getItem(DONE_SEEN_KEY);
+      return v === null ? null : Math.max(0, Number(v) || 0);
+    } catch (e) { return null; }
+  }
+  function markDoneSeen(n) {
+    var v = Math.max(0, Number(n) || 0);
+    try { window.localStorage.setItem(DONE_SEEN_KEY, String(v)); } catch (e) { /* 隐私模式 */ }
+    try { window.dispatchEvent(new CustomEvent(NAV.badgeEvt)); } catch (e) { /* 同上 */ }
+  }
+  function doneInc(n) {
+    var seen = doneSeen();
+    if (seen === null) { markDoneSeen(n); return 0; }
+    return Math.max(0, (Number(n) || 0) - seen);
+  }
+
+  // 导航角标：先看有结果，再看下载中，再看已完成增量，最后是待处理。
+  // 数字对应的底色由调用方按 tone 上色（gr/cy/bl/ye）。
+  function pickBadge(c) {
+    if (!c) return null;
+    if (c.found > 0) return { n: c.found, tone: "gr" };
+    if (c.active > 0) return { n: c.active, tone: "cy" };
+    var inc = doneInc(c.done || 0);
+    if (inc > 0) return { n: inc, tone: "bl", plus: true };
+    if (c.pending > 0) return { n: c.pending, tone: "ye" };
+    return null;
+  }
+
+  // 设置页里的开关行。用组件自己的 state 兜住勾选状态，localStorage 只是持久层。
+  function NavBadgeToggle() {
+    var React = Api.React;
+    var on = React.useState(navBadgeOn());
+    return React.createElement("label", { className: "sf-toggle sf-toggle--switch" },
+      React.createElement("span", { className: "sf-toggle-text" },
+        React.createElement("b", null, tc("导航栏数字角标", "Navigation count badge")),
+        React.createElement("span", { className: "sf-meta" },
+          tc("关闭后不再显示导航栏数字", "Hides the number in the navigation when off"))),
+      React.createElement("span", { className: "sf-switch" },
+        React.createElement("input", {
+          type: "checkbox", checked: on[0],
+          onChange: function (e) { setNavBadge(e.target.checked); on[1](e.target.checked); },
+        }),
+        React.createElement("i", { "aria-hidden": "true" })));
+  }
+
+  function PrefSwitch(props) {
+    var React = Api.React;
+    var on = React.useState(props.get());
+    return React.createElement("label", { className: "sf-toggle sf-toggle--switch" },
+      React.createElement("span", { className: "sf-toggle-text" },
+        React.createElement("b", null, props.title),
+        React.createElement("span", { className: "sf-meta" }, props.hint)),
+      React.createElement("span", { className: "sf-switch" },
+        React.createElement("input", {
+          type: "checkbox", checked: on[0],
+          onChange: function (e) { props.set(e.target.checked); on[1](e.target.checked); },
+        }),
+        React.createElement("i", { "aria-hidden": "true" })));
   }
 
   // qB takes a few seconds to report a new run state, so a progress read that
@@ -882,10 +981,29 @@
     var live = (prog || []).filter(function (p) { return p.status !== "imported"; });
     var readyRows = live.filter(function (p) { return p.ready; });
 
-    // 页面在场时不用再问后端：self 数「有结果」，whisparr 数进行中的任务
+    // 页面在场时不用再问后端：把四组数一起交给导航
     useEffect(function () {
-      navCount(isWsp() ? live.length : found.length);
-    }, [found.length, live.length, self]);
+      navCount({
+        found: isWsp() ? 0 : found.length,
+        active: live.length,
+        done: done.length,
+        pending: pending.length,
+      });
+    }, [found.length, live.length, done.length, pending.length, self]);
+
+    // 停在「已完成」上时随时把基线推平：新入库的当场消化掉，不在离开页面后
+    // 又补出一个「+N」。
+    useEffect(function () {
+      if (tab === "done" && cap) markDoneSeen(done.length);
+    }, [tab, done.length, cap]);
+
+    // 设置页里的浏览器偏好改动后重画整页（版本号、统计栏都直接读 localStorage）
+    var uiTick = useState(0);
+    useEffect(function () {
+      function bump() { uiTick[1](function (v) { return v + 1; }); }
+      window.addEventListener(UI_EVT, bump);
+      return function () { window.removeEventListener(UI_EVT, bump); };
+    }, []);
 
     var tabs = [
       { id: "pending", label: tc("待处理", "Pending"), n: pending.length, hue: "ye", icon: "clock" },
@@ -895,6 +1013,8 @@
       { id: "ignored", label: tc("已忽略", "Ignored"), n: ignored.length, hideCount: true, hue: "tx3", icon: "ban" },
       { id: "settings", label: tc("设置", "Settings"), n: 0, hue: "tx3", icon: "info" },
     ].filter(Boolean);
+    // 「已完成」只显示上次看过之后的增量；点开一次就清零
+    var dinc = doneInc(done.length);
 
     // 搜索只按「用户记得住的东西」匹配：番号、标题、演员。
     var needle = String(q || "").trim().toLowerCase();
@@ -1977,24 +2097,23 @@
         o[key] = value;
         setCtrlDraft(o);
       }
-      return h("section", { className: "sf-panel" },
-        h("div", { className: "sf-panel-head" },
-          h("h3", null, tc("自动化", "Automation")),
-          h("span", { className: "sf-meta" },
+      return h("section", { className: "sf-panel sf-panel--auto" },
+        panelHead("clock", "自动化", "Automation",
+          h("span", { className: "sf-panel-tag" },
             alive ? tc("守护中 · " + agoText(d.ago) + "前", "worker alive · " + agoText(d.ago) + " ago")
               : d.stopping ? tc("正在停止", "stopping")
                 : tc("守护未运行", "worker stopped"))),
         h("div", { className: "sf-toggles" }, switches.map(function (sw) {
-          return h("label", { className: "sf-toggle", key: sw.key },
+          return h("label", { className: "sf-toggle sf-toggle--row", key: sw.key },
+            h("span", { className: "sf-toggle-text" },
+              h("b", null, sw.label),
+              h("span", { className: "sf-meta" }, sw.hint)),
             h("input", {
               type: "checkbox", checked: !!ctrlDraft[sw.key],
               onChange: function (e) { toggle(sw.key, e.target.checked); },
-            }),
-            h("span", { className: "sf-toggle-text" },
-              h("b", null, sw.label),
-              h("span", { className: "sf-meta" }, sw.hint)));
+            }));
         })),
-        h("div", { className: "sf-grid2" },
+        h("div", { className: "sf-grid2 sf-grid2--cards" },
           field(tc("总量上限 GB", "Total limit GB"),
             h("input", {
               className: "sf-input", type: "number", min: "0", step: "1",
@@ -2007,7 +2126,7 @@
               value: ctrlDraft.maxPerDay,
               onChange: function (e) { num("maxPerDay", e.target.value); },
             }), tc("24 小时内最多推几条，0 = 不限", "Pushes per 24 h, 0 = no limit"))),
-        h("div", { className: "sf-actions" },
+        h("div", { className: "sf-actions sf-actions--foot" },
           h("span", { className: "sf-meta" },
             gi.limit > 0
               ? tc("占用 " + humanSize(gi.used) + " / " + humanSize(gi.limit) + (gi.open ? "" : " · 已触顶"),
@@ -2062,9 +2181,8 @@
           onChange: function (e) { setF(key, e.target.value); },
         });
       };
-      return h("section", { className: "sf-panel" },
-        h("div", { className: "sf-panel-head" },
-          h("h3", null, tc("筛选规则", "Rules")),
+      return h("section", { className: "sf-panel sf-panel--rules sf-panel--wide" },
+        panelHead("check", "筛选规则", "Rules",
           h("span", { className: "sf-meta" },
             tc("全部满足才通过", "Every rule must pass"))),
         h("div", { className: "sf-form" },
@@ -2279,9 +2397,8 @@
 
     function evalPanel() {
       var total = (evalResult && evalResult.candidates) ? evalResult.candidates.length : 0;
-      return h("section", { className: "sf-panel" },
-        h("div", { className: "sf-panel-head" },
-          h("h3", null, tc("试运行", "Dry run")),
+      return h("section", { className: "sf-panel sf-panel--eval sf-panel--wide" },
+        panelHead("play", "试运行", "Dry run",
           h("div", { className: "sf-head-right" },
             h("select", {
               className: "sf-input sf-select", value: evalPick || (withCands[0] && withCands[0].id) || "",
@@ -2524,18 +2641,64 @@
           h("div", { className: "sf-dl-foot" }, actions)));
     }
 
+    // 面板统一标题：彩色图标块 + 标题 + 右侧状态胶囊，设置页各卡片因此长一样的头
+    function panelHead(iconName, zh, en, right) {
+      return h("div", { className: "sf-panel-head" },
+        h("div", { className: "sf-panel-title" },
+          h("span", { className: "sf-panel-ico" }, ico(iconName)),
+          h("h3", null, tc(zh, en))),
+        right || null);
+    }
+
+    // 默认视图：和工具条同一套分段按钮，改动立即生效并记住
+    function viewChoice() {
+      return h("div", { className: "sf-toggle sf-toggle--row" },
+        h("span", { className: "sf-toggle-text" },
+          h("b", null, tc("默认视图", "Default view")),
+          h("span", { className: "sf-meta" },
+            tc("打开页面时默认用网格还是列表", "Grid or list when the page opens"))),
+        h("div", { className: "sf-seg" },
+          [{ id: "grid", icon: "grid", zh: "网格", en: "Grid" },
+          { id: "list", icon: "list", zh: "列表", en: "List" }].map(function (v) {
+            return h("button", {
+              key: v.id, type: "button",
+              className: "sf-segb" + (view === v.id ? " is-on" : ""),
+              title: tc(v.zh, v.en),
+              onClick: function () { switchView(v.id); },
+            }, ico(v.icon));
+          })));
+    }
+
     function settingsPanel() {
       return h("div", { className: "sf-settings" },
         automationPanel(),
+        h("section", { className: "sf-panel sf-panel--ui" },
+          panelHead("grid", "界面", "Interface",
+            h("span", { className: "sf-panel-tag" },
+              tc("仅当前浏览器", "This browser"))),
+          h("div", { className: "sf-toggles" }, h(NavBadgeToggle),
+            h(PrefSwitch, {
+              get: showVerOn,
+              set: function (v) { prefSet("sf.showVer", v); },
+              title: tc("显示版本号", "Show version"),
+              hint: tc("标题旁显示插件版本号", "Shows the plugin version beside the title"),
+            }),
+            h(PrefSwitch, {
+              get: showStatsOn,
+              set: function (v) { prefSet("sf.showStats", v); },
+              title: tc("显示统计栏", "Show stats"),
+              hint: tc("顶部那排统计卡；同样的入口在 tab 栏也有",
+                "The stat cards on top; the tabs carry the same entries"),
+            }),
+            viewChoice())),
         isWsp() ? null : rulesPanel(),
         isWsp() ? null : evalPanel(),
-        h("section", { className: "sf-panel" },
-          h("div", { className: "sf-panel-head" },
-            h("h3", null, tc("自检", "Checks")),
+        h("section", { className: "sf-panel sf-panel--checks sf-panel--wide" },
+          panelHead("info", "自检", "Checks",
             h("span", { className: "sf-meta" },
               tc("连接与路径在插件设置页配置", "Connection and paths live in the plugin settings"))),
           self ? h("div", { className: "sf-checks" }, (self.checks || []).map(function (c) {
-            return h("div", { className: "sf-check", key: c.key },
+            return h("div", { className: "sf-check" + (c.ok ? " is-ok" : " is-bad"), key: c.key },
               pill(c.ok ? "gr" : "re", c.ok ? "OK" : "!"),
               h("span", { className: "sf-check-name" }, c.label || c.key),
               h("span", { className: "sf-meta" }, c.detail || ""),
@@ -2686,10 +2849,12 @@
             h("div", { className: "sf-name" }, tc("补档", "Scene Backfill")),
             h("div", {
               className: "sf-meta",
-              title: "v" + PLUGIN_VERSION + (self && self.qbVersion ? " · " + self.qbVersion : ""),
+              title: showVerOn()
+                ? "v" + PLUGIN_VERSION + (self && self.qbVersion ? " · " + self.qbVersion : "")
+                : (self && self.qbVersion ? self.qbVersion : ""),
             },
               tc("缺文件的场景自动补种", "Fills scenes that have no file") +
-              " · v" + PLUGIN_VERSION))),
+              (showVerOn() ? " · v" + PLUGIN_VERSION : "")))),
         h("div", { className: "sf-head-right" },
           // 自检状态：桌面端是「√ 自检通过」，窄屏只留一个 √（文字藏起来，宽度收成方块）
           self ? h("button", {
@@ -2720,10 +2885,15 @@
             className: "sf-tab is-h-" + t.hue + (tab === t.id ? " is-on" : ""),
             onClick: function () { switchTab(t.id); },
           }, ico(t.icon), t.label,
-            t.n && !t.hideCount ? h("span", { className: "sf-count" + (t.id === "pending" ? " is-hot" : "") }, t.n) : null);
+            t.id === "done"
+              ? (dinc > 0 ? h("span", { className: "sf-count is-new" },
+                "+" + (dinc > 99 ? "99" : dinc)) : null)
+              : t.n && !t.hideCount
+                ? h("span", { className: "sf-count" + (t.id === "pending" ? " is-hot" : "") }, t.n)
+                : null);
         }))),
 
-      statsRow(),
+      showStatsOn() ? statsRow() : null,
       toolsBar(),
       selBar(),
       h("main", { className: "sf-body" }, body),
@@ -2758,26 +2928,35 @@
         var intl = useIntl();
         var loc = String((intl && intl.locale) || _locale || "").toLowerCase();
         var zh = loc.indexOf("zh") === 0;
-        var cnt = React.useState(NAV.n);
+        var cnt = React.useState(NAV.c);
+        var tick = React.useState(0);
         React.useEffect(function () {
           var alive = true;
-          function apply(n) { if (alive) cnt[1](Math.max(0, Number(n) || 0)); }
+          function apply(c) { if (alive) cnt[1](c || NAV.c); }
           function on(e) { apply(e && e.detail); }
+          // 开关变了必须重渲染，哪怕数字没动。
+          function bump() { if (alive) tick[1](function (v) { return v + 1; }); }
           window.addEventListener(NAV.evt, on);
+          window.addEventListener(NAV.badgeEvt, bump);
           // 别的页面也有导航条，而页面组件不在场，只能问一次后端；
-          // 同一次加载里只问一次，之后的更新走事件。
-          if (!NAV.asked) {
+          // 同一次加载里只问一次，之后的更新走事件。关了角标就不问。
+          if (!NAV.asked && navBadgeOn()) {
             NAV.asked = true;
             op({ mode: "badge" }).then(function (r) {
-              if (r && typeof r.n === "number") { NAV.n = r.n; apply(r.n); }
+              if (!r || typeof r !== "object") return;
+              navCount({
+                found: r.found, active: r.active,
+                done: r.done, pending: r.pending,
+              });
             }).catch(function () { NAV.asked = false; });
           }
           return function () {
             alive = false;
             window.removeEventListener(NAV.evt, on);
+            window.removeEventListener(NAV.badgeEvt, bump);
           };
         }, []);
-        var n = cnt[0];
+        var b = navBadgeOn() ? pickBadge(cnt[0]) : null;
         return React.createElement(Nav.Link,
           { as: "div", eventKey: "/plugins/SceneBackfill", className: "col-4 col-sm-3 col-md-2 col-lg-auto" },
           React.createElement(NavLink, {
@@ -2793,8 +2972,9 @@
               fixedWidth: true,
             }),
             React.createElement("span", null, zh ? "补档" : "Backfill"),
-            n ? React.createElement("span", { className: "sf-nav-n", key: "n" },
-              n > 99 ? "99+" : String(n)) : null));
+            b ? React.createElement("span", { className: "sf-nav-n is-" + b.tone, key: "n" },
+              b.plus ? (b.n > 99 ? "+99" : "+" + b.n)
+                : (b.n > 99 ? "99+" : String(b.n))) : null));
       }
       // ─── 原生导航开关 ─────────────────────────────────────────────────
       // Stash 的导航只渲染 interface.menuItems 里列出的条目。要让插件入口和

@@ -137,6 +137,11 @@
 }
 .sf-tab.is-on .sf-count { background: rgba(0, 0, 0, .22); color: var(--sf-hi); }
 .sf-count.is-hot { color: var(--sf-ye); }
+/* 已完成只显示增量：用绿色小胶囊，和总数区分开 */
+.sf-count.is-new {
+  color: var(--sf-gr); background: rgba(var(--sf-gr-rgb), .15);
+}
+.sf-tab.is-on .sf-count.is-new { color: var(--sf-gr); background: rgba(0, 0, 0, .22); }
 
 /* ── 统计卡（同时是筛选器）─────────────────────────────── */
 .sf-stats {
@@ -310,6 +315,12 @@
   pointer-events: none;
   box-shadow: 0 0 5px rgba(0, 0, 0, .55);
 }
+/* 角标底色跟着当前显示的那一组：有结果绿、下载中青、已完成蓝、待处理黄。
+   导航条在插件页面之外，拿不到 .sf-page 里的令牌，这里用固定值。 */
+.sf-nav-n.is-gr { background: #a9ba5a; color: #16150f; }
+.sf-nav-n.is-cy { background: #5abdac; color: #16150f; }
+.sf-nav-n.is-bl { background: #66a0c8; color: #16150f; }
+.sf-nav-n.is-ye { background: #dfb431; color: #16150f; }
 
 /* ── 分组 ─────────────────────────────────────────────── */
 .sf-group { padding-bottom: 14px; }
@@ -665,21 +676,60 @@
 
 /* ── 设置：分区 / 表单 ───────────────────────────────── */
 /* 设置项都是短值，页面满宽时输入框会被拉到三分之一屏宽 */
+/* 自动化 / 界面并排，规则与自检通栏；窄屏退回单列 */
 .sf-settings {
-  display: flex; flex-direction: column; gap: 12px;
-  max-width: 880px; margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
+  gap: 12px; align-items: start;
+  max-width: 960px; margin: 0 auto;
+}
+.sf-panel--wide { grid-column: 1 / -1; }
+@media (max-width: 860px) {
+  .sf-settings { grid-template-columns: 1fr; }
+  .sf-panel--wide { grid-column: auto; }
 }
 .sf-panel {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 13px;
-  border: 1px solid var(--sf-line); border-radius: 11px;
-  background: var(--sf-raise);
+  /* 每块一个强调色：顶边一条渐变，图标块与状态胶囊跟着变色 */
+  --sf-accent: var(--sf-or); --sf-accent-rgb: var(--sf-or-rgb);
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--sf-line-soft); border-radius: 13px;
+  background:
+    linear-gradient(180deg, rgba(var(--sf-accent-rgb), .07), transparent 46%),
+    var(--sf-raise);
 }
+.sf-panel::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 2px;
+  background: linear-gradient(90deg, var(--sf-accent), transparent 78%);
+  opacity: .75;
+}
+.sf-panel--auto { --sf-accent: var(--sf-or); --sf-accent-rgb: var(--sf-or-rgb); }
+.sf-panel--ui { --sf-accent: var(--sf-cy); --sf-accent-rgb: var(--sf-cy-rgb); }
+.sf-panel--rules { --sf-accent: var(--sf-bl); --sf-accent-rgb: var(--sf-bl-rgb); }
+.sf-panel--eval { --sf-accent: var(--sf-pu); --sf-accent-rgb: var(--sf-pu-rgb); }
+.sf-panel--checks { --sf-accent: var(--sf-gr); --sf-accent-rgb: var(--sf-gr-rgb); }
 .sf-panel-head {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap;
 }
-.sf-panel-head h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--sf-hi); }
+.sf-panel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sf-panel-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px;
+  color: var(--sf-accent);
+  background: rgba(var(--sf-accent-rgb), .14);
+  border: 1px solid rgba(var(--sf-accent-rgb), .25);
+}
+.sf-panel-ico .sf-ico { width: 14px; height: 14px; }
+.sf-panel-head h3 { margin: 0; font-size: 13px; font-weight: 650; color: var(--sf-hi); }
+.sf-panel-tag {
+  font-size: 10.5px; line-height: 1.6; padding: 2px 8px;
+  border-radius: 999px; white-space: nowrap;
+  color: var(--sf-accent);
+  border: 1px solid rgba(var(--sf-accent-rgb), .35);
+  background: rgba(var(--sf-accent-rgb), .08);
+}
 
 .sf-textarea, .sf-input {
   box-sizing: border-box; width: 100%;
@@ -703,9 +753,14 @@ select.sf-input option {
 }
 .sf-select { width: auto; max-width: 240px; }
 .sf-grid2 { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.sf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.sf-field-label { font-size: 11.5px; color: var(--sf-tx2); }
-.sf-field-hint { font-size: 11px; color: var(--sf-tx3); }
+.sf-field {
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--sf-line-soft); border-radius: 9px;
+  background: var(--sf-sink);
+}
+.sf-field-label { font-size: 11.5px; font-weight: 600; color: var(--sf-tx); }
+.sf-field-hint { font-size: 11px; color: var(--sf-tx3); line-height: 1.45; }
 
 .sf-form { display: flex; flex-direction: column; gap: 10px; }
 .sf-form-row {
@@ -739,7 +794,12 @@ select.sf-input option {
 .sf-rank-row {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
   font-size: 11px; color: var(--sf-tx2);
+  padding: 3px 6px; border-radius: 5px;
+  transition: background .12s ease;
 }
+/* 高级规则行：一深一浅隔开，鼠标指到哪行哪行亮 */
+.sf-rank-row:nth-child(even) { background: rgba(255, 255, 255, .035); }
+.sf-rank-row:hover { background: rgba(var(--sf-or-rgb), .12); }
 .sf-rank-row code { font-size: 11px; color: var(--sf-or); flex-shrink: 0; }
 .sf-prefs { display: flex; gap: 8px 18px; flex-wrap: wrap; }
 .sf-check-inline {
@@ -750,9 +810,13 @@ select.sf-input option {
 .sf-checks { display: flex; flex-direction: column; gap: 8px; }
 .sf-check {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border: 1px solid var(--sf-line); border-radius: 9px;
+  padding: 8px 12px; border: 1px solid var(--sf-line-soft); border-radius: 9px;
+  border-left-width: 3px;
+  background: var(--sf-sink);
   flex-wrap: wrap;
 }
+.sf-check.is-ok { border-left-color: rgba(var(--sf-gr-rgb), .6); }
+.sf-check.is-bad { border-left-color: rgba(var(--sf-re-rgb), .7); }
 .sf-check-name { font-size: 12px; font-weight: 600; min-width: 128px; color: var(--sf-tx); }
 
 /* 列表工具条（下载中 / 已完成 / 已忽略）：一条窄底框，左边一句话，右边批量动作 */
@@ -773,17 +837,82 @@ select.sf-input option {
   gap: 8px; flex-wrap: wrap;
 }
 .sf-actions .sf-meta { margin-top: 0; max-width: 420px; }
-
-/* ── 自动化开关 ───────────────────────────────────────── */
-.sf-toggles { display: flex; flex-direction: column; }
-.sf-toggle {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 6px 2px; cursor: pointer;
+.sf-actions--foot {
+  border-top: 1px solid var(--sf-line-soft);
+  padding-top: 10px; margin-top: 2px;
 }
-.sf-toggle input { margin: 3px 0 0; flex-shrink: 0; accent-color: var(--sf-or); }
-.sf-toggle-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+/* ── 设置开关：一行一张小卡，右侧控件；即时生效的用滑块 ───────── */
+.sf-toggles { display: flex; flex-direction: column; gap: 6px; }
+.sf-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 9px 11px; cursor: pointer;
+  border: 1px solid var(--sf-line-soft); border-radius: 9px;
+  background: var(--sf-sink);
+  transition: border-color .15s ease, background .15s ease;
+}
+.sf-toggle:hover {
+  border-color: rgba(var(--sf-accent-rgb), .35);
+  background: var(--sf-hover);
+}
+.sf-toggle--row input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  position: relative; margin: 0; flex: 0 0 auto;
+  width: 17px; height: 17px; border-radius: 5px;
+  background: var(--sf-sink); border: 1px solid var(--sf-line);
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.sf-toggle--row input[type="checkbox"]:hover { border-color: rgba(var(--sf-accent-rgb), .55); }
+.sf-toggle--row input[type="checkbox"]:checked {
+  background: rgba(var(--sf-accent-rgb), .85);
+  border-color: rgba(var(--sf-accent-rgb), .85);
+}
+.sf-toggle--row input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 5px; top: 1.5px;
+  width: 4px; height: 8px;
+  border: solid var(--sf-on); border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.sf-toggle--row input[type="checkbox"]:focus-visible {
+  outline: 2px solid rgba(var(--sf-accent-rgb), .6); outline-offset: 2px;
+}
+.sf-toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sf-toggle-text b { font-size: 12.5px; font-weight: 600; color: var(--sf-tx); }
 .sf-toggle-text .sf-meta { margin-top: 0; }
+/* 面板里的小分段按钮跟面板强调色走，不抢工具条的橙色 */
+.sf-panel .sf-segb.is-on {
+  background: rgba(var(--sf-accent-rgb), .18);
+  border-color: rgba(var(--sf-accent-rgb), .5);
+}
+
+.sf-switch { position: relative; flex: 0 0 36px; width: 36px; height: 20px; }
+.sf-switch input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer; z-index: 1;
+}
+.sf-switch i {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--sf-sink); border: 1px solid var(--sf-line);
+  transition: background .18s ease, border-color .18s ease;
+}
+.sf-switch i::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--sf-tx2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  transition: transform .18s ease, background .18s ease;
+}
+.sf-switch input:checked + i {
+  background: rgba(var(--sf-accent-rgb), .85);
+  border-color: rgba(var(--sf-accent-rgb), .85);
+}
+.sf-switch input:checked + i::after {
+  transform: translateX(16px); background: var(--sf-on);
+}
+.sf-switch input:focus-visible + i {
+  outline: 2px solid rgba(var(--sf-accent-rgb), .6); outline-offset: 2px;
+}
 
 /* ── 试运行 ───────────────────────────────────────────── */
 .sf-errors { display: flex; flex-direction: column; gap: 4px; }

@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.4"
+PLUGIN_VERSION = "0.1.5"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -2973,18 +2973,25 @@ def _wait_files(qb, h, timeout=15):
 # ─── 进度 ────────────────────────────────────────────────────────────────
 
 def do_badge(ctx):
-    """Nav badge: how many scenes are sitting in the results tab.
+    """Counts behind the nav badge: results / downloading / done / pending.
 
     The nav renders on every Stash page, so this stays a state read -- no qB
-    call, no capture, nothing that could take a second.
+    call, no capture, nothing that could take a second. Priority and colour
+    are decided by the frontend.
     """
     st = load_state(ctx)
-    if pipeline_kind(ctx.config()) == "whisparr":
-        n = sum(1 for rec in st["scenes"].values()
-                if rec.get("status") in ("pushed", "downloaded"))
-    else:
-        n = sum(1 for rec in st["scenes"].values() if rec.get("status") == "matched")
-    return {"n": n}
+    pipe = pipeline_kind(ctx.config())
+    scenes = st["scenes"].values()
+
+    def count(*statuses):
+        return sum(1 for rec in scenes if rec.get("status") in statuses)
+
+    return {
+        "found": 0 if pipe == "whisparr" else count("matched"),
+        "active": count("pushed", "downloaded"),
+        "done": count("imported"),
+        "pending": count("captured", "no_result", "low_confidence"),
+    }
 
 
 def do_progress(ctx):

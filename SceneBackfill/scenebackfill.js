@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.3";
+  var PLUGIN_VERSION = "0.1.4";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -2796,9 +2796,73 @@
             n ? React.createElement("span", { className: "sf-nav-n", key: "n" },
               n > 99 ? "99+" : String(n)) : null));
       }
+      // ─── 原生导航开关 ─────────────────────────────────────────────────
+      // Stash 的导航只渲染 interface.menuItems 里列出的条目。要让插件入口和
+      // 内置项一样能在设置里勾选，需要两件事：把插件 id 塞进「菜单项目」的
+      // 多选框，以及渲染前读 menuItems 决定是否显示。直链
+      // /plugins/SceneBackfill 不受影响，路由始终注册。
+      var NAV_ID = PLUGIN_ID;
+      var forceNav = false;
+
+      try {
+        Api.patch.before("CheckboxGroup", function (props) {
+          // 这段在 Stash 自己的 render 里跑，抛异常会把整站换成错误页 →
+          // 出什么事都原样返回。
+          try {
+            if (!props || props.groupId !== "menu-items" || !Array.isArray(props.items)) return [props];
+            if (props.items.some(function (it) { return it && it.id === NAV_ID; })) return [props];
+            return [Object.assign({}, props, {
+              items: props.items.concat([{ id: NAV_ID, headingID: tc("补档", "Backfill") }]),
+            })];
+          } catch (e) {
+            console.warn("[SF] menu-items patch failed:", e);
+            return [props];
+          }
+        });
+      } catch (e) {
+        console.warn("[SF] CheckboxGroup patch unavailable:", e);
+      }
+
+      // 首次安装 seed 一次：新装的 Stash 不会自动把未知 id 放进 menuItems，
+      // 不 seed 的话入口一开始就是不显示的。用插件配置里的 navSeeded 记住
+      // 「已经 seed 过」——之后没勾上就是用户主动取消的，尊重它。
+      // configurePlugin 是整体替换而不是合并，必须把读回来的配置整体带上。
+      callGQL("query{configuration{interface{menuItems}plugins}}").then(function (data) {
+        var cfg = (data && data.configuration) || {};
+        var items = ((cfg.interface || {}).menuItems) || [];
+        if (items.indexOf(NAV_ID) !== -1) return null;
+        var mine = ((cfg.plugins || {})[NAV_ID]) || {};
+        if (mine.navSeeded) return null;
+        return callGQL(
+          "mutation($items:[String!]){configureInterface(input:{menuItems:$items}){menuItems}}",
+          { items: items.concat([NAV_ID]) }
+        ).then(function () {
+          return callGQL(
+            "mutation($id:ID!,$input:Map!){configurePlugin(plugin_id:$id,input:$input)}",
+            { id: NAV_ID, input: Object.assign({}, mine, { navSeeded: true }) }
+          );
+        }).then(function () { forceNav = true; });
+      }).catch(function (e) {
+        // 非致命：最坏情况入口不显示，用户还能在设置里手动勾上
+        console.warn("[SF] nav seed failed:", e);
+      });
+
+      // 读不到配置时一律当「显示」——绝不让入口因为一次读取失败而消失。
+      function navEnabled() {
+        var hook = Api.GQL && Api.GQL.useConfigurationQuery;
+        if (typeof hook !== "function") return true;
+        var data;
+        try { data = hook().data; } catch (e) { return true; }
+        var items = data && data.configuration && data.configuration.interface &&
+          data.configuration.interface.menuItems;
+        if (!items) return true;
+        return items.indexOf(NAV_ID) !== -1 || forceNav;
+      }
+
       Api.patch.before("MainNavBar.MenuItems", function (props) {
         try {
           if (!props) return [props];
+          if (!navEnabled()) return [props];
           var kids = React.Children.toArray(props.children);
           if (kids.some(function (c) { return c && c.type === NavItem; })) return [props];
           kids.push(React.createElement(NavItem, { key: "sf-nav" }));

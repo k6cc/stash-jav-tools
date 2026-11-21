@@ -10,7 +10,6 @@ stdout -- Stash degrades to a raw string the moment a second line appears.
 """
 
 import base64
-import hashlib
 import json
 import os
 import posixpath
@@ -33,7 +32,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.7"
+PLUGIN_VERSION = "0.1.8"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -517,7 +516,8 @@ class QB:
         return self.api(path, data=urllib.parse.urlencode(data).encode())
 
     # -- torrents --
-    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True):
+    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True,
+                    selected=None):
         boundary = "----SceneBackfill" + base64.b16encode(os.urandom(8)).decode()
         parts = []
         for k, v in (("savepath", savepath), ("category", category), ("tags", tags)):
@@ -543,7 +543,14 @@ class QB:
         ids = payload.get("added_torrent_ids") or []
         if not ids:
             raise QBError(f"add accepted nothing (failure={payload.get('failure_count')})")
-        return ids[0].lower()
+        h = ids[0].lower()
+        if selected is not None:
+            # qB only knows its file list after the metadata is parsed.
+            files = _wait_files(self, h)
+            if files:
+                keep = set(selected)
+                self.set_prio(h, [f["index"] for f in files if f["index"] not in keep], 0)
+        return h
 
     def files(self, h):
         return json.loads(self.api(f"/api/v2/torrents/files?hash={h}"))
@@ -688,10 +695,14 @@ class Aria2:
         return "aria2 " + self.version
 
     # -- 任务 --
-    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True):
+    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True,
+                    selected=None):
         opts = {"pause": "true" if stopped else "false"}
         if savepath:
             opts["dir"] = savepath
+        if selected:
+            # aria2 selects at add time and wants 1-based indexes.
+            opts["select-file"] = _aria_ranges([i + 1 for i in selected])
         gid = self._call("aria2.addTorrent",
                          [base64.b64encode(raw_bytes).decode(), [], opts])
         return str(gid)
@@ -757,18 +768,6 @@ class Aria2:
             })
         return out
 
-    def set_prio(self, h, indexes, priority):
-        """aria2 没有逐文件优先级，只有 select-file 白名单：把要丢的从白名单里剔掉。"""
-        if not indexes:
-            return
-        t = self._status(h)
-        all_idx = [int(f.get("index") or 0) for f in (t.get("files") or [])]
-        drop = {int(i) + 1 for i in indexes}          # 传进来是 0 基
-        keep = [i for i in all_idx if i not in drop]
-        if not keep:
-            return
-        self._call("aria2.changeOption", [h, {"select-file": _aria_ranges(keep)}])
-
     @staticmethod
     def _gids(h):
         if isinstance(h, str):
@@ -807,19 +806,40 @@ class Aria2:
 # ─── Motrix Server (NAS / Web build) ──────────────────────────────────────
 # 桌面版与 Server 版是两套协议，按探测结果分流，用户只填「地址 + 密钥」：
 #   桌面版  POST {base}/jsonrpc              params 里带 token:<rpc-secret>
-#   Server  POST {base}/rpc/<kind>/<name>    Authorization: Bearer <operator-token>
-# Server 版只收磁力（不收 torrent 字节、没有 select-file），任务句柄是
-# taskId(UUID) 而不是 aria2 的 gid。探测各问一次，不做重试：地址填错是配置问题。
+#   Server  POST {base}/rpc/<kind>/<name>    Authorization: Basic <operator-token>
+# Server 版按 2.4 的 Web API 走：种子直接以 base64 建任务（torrent-base64），
+# 选片在建任务时用 selectedFiles 一次提交，任务句柄是 taskId(UUID)。
+# 探测各问一次，不做重试：地址填错是配置问题。
 
 class MotrixWebError(Aria2Error):
     pass
 
 
+def motrix_auth(key):
+    """Server takes an empty-username Basic credential.
+
+    It is also the only workable form for tokens with spaces or non-ASCII
+    characters: HTTP headers are latin-1, so such a token cannot be a Bearer.
+    """
+    return "Basic " + base64.b64encode((":" + key).encode("utf-8")).decode()
+
+
 def motrix_probe(base, key):
-    """返回 ('aria2'|'web', version)。两个端点各问一次即可区分。"""
+    """返回 ('aria2'|'web', version)。先问 Web：Server 的原始 aria2 RPC 是
+    可选开启的（MOTRIX_ARIA2_RPC_LISTEN_ALL），先问 /jsonrpc 会把 Server
+    判成桌面版，之后 query:listTasks 根本看不到这个任务。"""
     if not base:
         return "", ""
     op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        req = urllib.request.Request(base + "/rpc/auth/status",
+                                     headers={"Authorization": motrix_auth(key)})
+        with op.open(req, timeout=10) as r:
+            obj = json.loads(r.read().decode("utf-8", "replace"))
+            if obj.get("authed"):
+                return "web", ""
+    except Exception:
+        pass
     payload = {"jsonrpc": "2.0", "id": "sf", "method": "aria2.getVersion",
                "params": (["token:" + key] if key else [])}
     try:
@@ -832,43 +852,20 @@ def motrix_probe(base, key):
                 return "aria2", str(v)
     except Exception:
         pass
-    try:
-        req = urllib.request.Request(base + "/rpc/auth/status",
-                                     headers={"Authorization": "Bearer " + key})
-        with op.open(req, timeout=10) as r:
-            obj = json.loads(r.read().decode("utf-8", "replace"))
-            if obj.get("authed"):
-                return "web", ""
-    except Exception:
-        pass
     return "", ""
-
-
-def torrent_magnet(raw_bytes, title=""):
-    """Server 版只收磁力，从下载到的 .torrent 里算出 infohash 拼一个。"""
-    data, i = raw_bytes, 0
-    if data[i:i + 1] != b"d":
-        raise MotrixWebError("invalid torrent")
-    i += 1
-    info = None
-    while data[i:i + 1] != b"e":
-        k, i = bdecode(data, i)
-        start = i
-        _, i = bdecode(data, i)
-        if k == b"info":
-            info = data[start:i]
-    if not info:
-        raise MotrixWebError("torrent has no info dict")
-    dn = ("&dn=" + urllib.parse.quote(title)) if title else ""
-    return "magnet:?xt=urn:btih:" + hashlib.sha1(info).hexdigest() + dn
 
 
 WEB_STATE = {
     "fetching_metadata": "metaDL",
+    "metadata_ready": "metaDL",
     "queued": "queuedDL",
     "downloading": "downloading",
     "active": "downloading",
     "paused": "pausedDL",
+    # Server 2.4 renames/re-seeds after the last byte arrives while progress is
+    # already 1. `moving` is in QB_BUSY_STATES, so import waits for the final
+    # name instead of scanning a half-renamed file.
+    "finalizing": "moving",
     "seeding": "uploading",
     "completed": "uploading",
     "complete": "uploading",
@@ -879,8 +876,6 @@ WEB_STATE = {
 
 class MotrixWeb:
     """Motrix 2 Server 版（NAS / Web UI）的下载器适配。"""
-
-    magnet_only = True
 
     def __init__(self, cfg):
         self.base = downloader_url(cfg).rstrip("/")
@@ -900,13 +895,19 @@ class MotrixWeb:
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(
             url, data=data, method=method,
-            headers={"Authorization": "Bearer " + self.key,
+            headers={"Authorization": motrix_auth(self.key),
                      "Content-Type": "application/json"})
         try:
             with self.opener.open(req, timeout=30) as r:
                 body = r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "replace")
+            if e.code == 413:
+                raise MotrixWebError("torrent exceeds the Server request body limit")
+            if e.code == 429:
+                raise MotrixWebError("Server is busy with large torrent requests; retry later")
+            if e.code == 401:
+                raise MotrixWebError("Motrix Web auth failed; check the login key")
             try:
                 err = (json.loads(body) or {}).get("error")
             except ValueError:
@@ -922,8 +923,24 @@ class MotrixWeb:
             raise MotrixWebError(str(obj["error"])[:200])
         return obj
 
+    def _health(self):
+        """Unauthenticated readiness probe: tells 'not running' from 'bad key'."""
+        try:
+            with self.opener.open(self.base + "/healthz", timeout=5) as r:
+                return json.loads(r.read().decode("utf-8", "replace")) or {}
+        except Exception:
+            return {}
+
     def login(self):
-        if not (self._call("auth:status") or {}).get("authed"):
+        try:
+            status = self._call("auth:status") or {}
+        except MotrixWebError:
+            health = self._health()
+            if health and not health.get("ok"):
+                raise MotrixWebError("Motrix Server is not ready (engine: %s)"
+                                     % ((health.get("engine") or {}).get("state") or "unknown"))
+            raise
+        if not status.get("authed"):
             raise MotrixWebError("Motrix Web auth failed; check the login key")
         cfg = self._call("query:getSettings") or {}
         self.save_dir = ((cfg.get("app") or {}).get("defaultSaveDir") or "").strip()
@@ -935,20 +952,63 @@ class MotrixWeb:
             return [x for x in h.split("|") if x]
         return [x for x in h if x]
 
+    @staticmethod
+    def _task_id(r):
+        """created / reused / rechecked all mean the task exists now.
+
+        Server 2.4 dedupes by info hash: the same magnet added again comes back
+        as `reused` (or `rechecked` after a terminal task) with the same
+        taskId, and a different file selection for the same hash comes back as
+        a successful `conflict` payload rather than an error.
+        """
+        outcome = str((r or {}).get("outcome") or "")
+        if outcome in ("created", "reused", "rechecked"):
+            tid = str((r or {}).get("taskId") or "")
+            if tid:
+                return tid
+            raise MotrixWebError("createTask: no taskId")
+        if outcome == "conflict":
+            c = (r or {}).get("conflict") or {}
+            name = str(c.get("existingTaskName") or "").strip()
+            raise MotrixWebError(
+                "Torrent already used by an existing task (%s)%s"
+                % (c.get("reason") or "conflict", (": " + name) if name else ""))
+        raise MotrixWebError("createTask: " + json.dumps(r)[:160])
+
     def add_magnet(self, magnet, savepath, tags, stopped=True):
         task = {"type": "bt", "payload": {"kind": "magnet", "uri": magnet},
                 "saveDir": savepath or self.save_dir or "/downloads"}
-        r = self._call("command:createTask", [task]) or {}
-        if r.get("outcome") == "created":
-            return str(r.get("taskId") or "")
-        raise MotrixWebError("createTask: " + json.dumps(r)[:160])
+        return self._task_id(self._call("command:createTask", [task]) or {})
 
-    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True):
-        return self.add_magnet(torrent_magnet(raw_bytes, name), savepath, tags)
+    def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True,
+                    selected=None):
+        """Server 2.4 takes the torrent itself; selection is made at creation.
+
+        `selectedFiles` is mandatory for a torrent payload, so an empty pick
+        means "all files".
+        """
+        info = torrent_stats(raw_bytes)
+        count = int(info.get("count") or 0)
+        if not count:
+            raise MotrixWebError("torrent has no file list")
+        pick = [i for i in (selected or []) if 0 <= i < count] or list(range(count))
+        task = {
+            "type": "bt",
+            "payload": {"kind": "torrent-base64",
+                        "base64": base64.b64encode(raw_bytes).decode()},
+            "selectedFiles": pick,
+            "saveDir": savepath or self.save_dir or "/downloads",
+        }
+        if info.get("name"):
+            task["displayName"] = info["name"]
+        return self._task_id(self._call("command:createTask", [task]) or {})
 
     def _tasks(self):
         r = self._call("query:listTasks", [{}])
-        return r if isinstance(r, list) else []
+        # A task removed from the Web UI keeps its row for a while; treating it
+        # as gone lets the scene fall back to `missing` and pick again.
+        return [t for t in (r if isinstance(r, list) else [])
+                if str(t.get("status") or "") != "removed"]
 
     def _task(self, tid):
         for t in self._tasks():
@@ -1004,10 +1064,6 @@ class MotrixWeb:
                 "priority": 1 if f.get("selected") else 0,
             })
         return out
-
-    def set_prio(self, h, indexes, priority):
-        """Server 版没有 select-file 通道，整包下载。"""
-        return
 
     def start(self, h):
         for tid in self._gids(h):
@@ -1999,6 +2055,7 @@ def do_selftest(ctx):
     # 1. 下载器
     qb_ver, qb_err = "", ""
     dname = downloader_name(cfg)
+    dlc = None
     try:
         dlc = make_downloader(cfg)
         qb_ver = f"{dname} {dlc.login()}"
@@ -2030,6 +2087,29 @@ def do_selftest(ctx):
             t_(ctx, "确认该目录已挂载进 Stash 容器", "Make sure the folder is mounted into Stash"))
     else:
         add("downloadPath", "下载目录（Stash 侧）", "Download folder (Stash side)", True, dl)
+
+    # 2b. Server 2.4 only writes under MOTRIX_ALLOWED_SAVE_DIRS; ask it now
+    #     instead of letting the first push fail with 'outside roots'.
+    if isinstance(dlc, MotrixWeb) and sp and not qb_err:
+        try:
+            r = dlc._call("query:listAllowedSaveDirs", [{}]) or {}
+            roots = [str(p.get("path") or "") for p in (r.get("paths") or [])]
+            roots = [x for x in roots if x]
+            inside = any(sp == x or sp.startswith(x.rstrip("/") + "/") for x in roots)
+            if roots and not inside:
+                add("saveDirAllowed", "下载目录（Server 允许根）",
+                    "Download folder (server allowed roots)", False, sp,
+                    t_(ctx, "Server 只接受这些根目录下的路径：" + ", ".join(roots),
+                       "The server only accepts paths under: " + ", ".join(roots)))
+            else:
+                add("saveDirAllowed", "下载目录（Server 允许根）",
+                    "Download folder (server allowed roots)", True,
+                    ", ".join(roots) or sp)
+        except MotrixWebError as e:
+            add("saveDirAllowed", "Motrix Server 版本", "Motrix Server version", False,
+                str(e)[:120],
+                t_(ctx, "需要 Motrix Server 2.4 或更新版本",
+                   "Motrix Server 2.4 or newer is required"))
 
     # 3. auto import scans the finished file where it lies, so the download
     #    folder has to be inside a library; only checked when that step will run.
@@ -2899,11 +2979,6 @@ def push_scene(ctx, st, sid, idx, file_index=""):
     torrent_bytes, magnet = None, None
     if cand.get("link"):
         torrent_bytes, magnet = fetch_torrent(cand["link"])
-    if getattr(qb, "magnet_only", False):
-        # Server 版只收磁力：把 .torrent 换成等价磁力，且整包下载（不能选文件）
-        if torrent_bytes and not magnet:
-            magnet = torrent_magnet(torrent_bytes, cand["title"])
-        torrent_bytes = None
     if not torrent_bytes and not magnet:
         magnet = cand.get("magnet") or ""
     if not torrent_bytes and not magnet:
@@ -2913,26 +2988,27 @@ def push_scene(ctx, st, sid, idx, file_index=""):
     tags = f"sf:{sid}"
     rules = get_rules(st)
     if torrent_bytes:
-        h = qb.add_torrent(torrent_bytes, cand["title"], savepath, "SceneBackfill", tags, stopped=True)
-        # The file list is empty until the metadata is parsed; setting priority
-        # before that is silently dropped.
-        files = _wait_files(qb, h)
+        # The .torrent carries its own file list, so the pick is decided before
+        # the task exists and handed to the downloader in one go.
+        info = torrent_stats(torrent_bytes)
+        entries = [(f["path"], int(f["size"])) for f in info["files"]]
+        if not entries:
+            raise RuntimeError(t_(ctx, "种子没有文件列表", "Torrent has no file list"))
         kept, note = [], ""
-        if files:
-            manual = next((f for f in files if str(f.get("index")) == file_index), None) if file_index.isdigit() else None
-            if manual:
-                kept, note = [(manual["name"], int(manual.get("size") or 0))], "manual"
-            else:
-                kept, meta = pick_files(
-                    [(f["name"], int(f.get("size") or 0)) for f in files], rules)
-                note = meta["note"]
-        picked, picked_size = "all", 0
-        if kept:
-            names = {n for n, _ in kept}
-            qb.set_prio(h, [f["index"] for f in files if f["name"] not in names], 0)
-            time.sleep(0.4)
-            picked = kept[0][0] if len(kept) == 1 else f"{len(kept)} files"
-            picked_size = sum(n for _, n in kept)
+        manual = (next((e for i, e in enumerate(entries) if str(i) == file_index), None)
+                  if file_index.isdigit() else None)
+        if manual:
+            kept, note = [manual], "manual"
+        else:
+            kept, meta = pick_files(entries, rules)
+            note = meta["note"]
+        names = {n for n, _ in kept}
+        selected = [i for i, (p, _) in enumerate(entries) if p in names]
+        h = qb.add_torrent(torrent_bytes, cand["title"], savepath, "SceneBackfill",
+                           tags, stopped=True, selected=selected)
+        picked = (kept[0][0] if len(kept) == 1 else
+                  ("all" if not kept else f"{len(kept)} files"))
+        picked_size = sum(n for _, n in kept)
         qb.start(h)
     else:
         h = qb.add_magnet(magnet, savepath, tags)

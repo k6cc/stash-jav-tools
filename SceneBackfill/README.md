@@ -1,8 +1,6 @@
 # SceneBackfill
 
-> v0.1.7：修正 Motrix 桌面版 / Server 版的协议注释；aria2 状态请求只取实际使用的字段。
-
-> v0.1.6：窄屏检查项改为值在名称下方（间距收紧），标签里的括号整体换行；值最多两行后省略；手机端自动化数字卡保持两列；统计卡圆点恢复；iPad mini 竖屏一行三张卡。
+> v0.1.8：Motrix Server 2.4 支持种子直传与建任务时选片，不再整包下载；`createTask` 去重结果正常处理；鉴权改空用户名 Basic；进度识别 `finalizing`；自检新增 Server 允许根目录。
 
 Stash 插件：把只有元数据、没有文件的场景补齐——搜资源、交给下载器或 Whisparr，完成后把文件关联回原场景。全程不搬动文件。
 
@@ -12,7 +10,7 @@ Stash 插件：把只有元数据、没有文件的场景补齐——搜资源�
 |---|---|
 | Stash | v0.31+ |
 | Jackett 或 Prowlarr | `self` 模式：已配置至少一个索引器 |
-| 下载器 | `self` 模式：qBittorrent 4.1+ 或 Motrix（桌面版 / Server/NAS 版） |
+| 下载器 | `self` 模式：qBittorrent 4.1+、Motrix 桌面版，或 Motrix Server/NAS 2.4+ |
 | Whisparr v3 (Eros) | `whisparr` 模式：需自带索引器与下载客户端 |
 | Python | 3.8+（Stash 自带解释器即可） |
 
@@ -131,7 +129,7 @@ Stash 侧路径必须能被 Stash 读到且位于库路径内；qB 的临时目�
 - 欧美（stashdb）场景通常没有番号，只能按标题或演员搜，命中率取决于索引器
 - 插件不搬文件：文件留在下载目录，删掉它场景就会缺文件；要归档请自己复制后再让 Stash 扫描
 - Motrix 桌面版没有独立临时目录，半成品直接写在下载目录里，可能被提前扫到
-- Motrix Server/NAS 版只支持磁力，不能挑文件或设优先级，只能整个种子下载；规则与试运行照常判定，执行时会连杂项一起下
+- Motrix Server/NAS 版需 2.4 或更新版本；种子直接交给 Server，规则挑中的文件就是下载范围，不再整包下载
 - 守护进程不自启；Stash 重启后，下次打开 Stash 页面时它会回来（手动停掉的不回来）
 - `whisparr` 模式只支持 Whisparr v3 (Eros) 和 StashDB 场景 ID；索引器与下载客户端由 Whisparr 自己配置
 - `whisparr` 模式不搬文件、不提供暂停与恢复；「总量上限 GB」不适用，「每日条数」仍生效

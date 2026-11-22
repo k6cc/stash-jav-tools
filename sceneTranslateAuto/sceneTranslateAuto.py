@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.3.1: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.3.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；

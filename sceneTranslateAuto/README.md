@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.3.1：番号保护正则扩展，合并 FC2 / FC2-PPV / 素人系（6位数字-数字）/ 单字母番号形态（参考 javstashAutofill+），翻译时番号不再被引擎改写或丢弃
+> v1.3.2：日志编码修好（多进程并发写不再撕裂日文），后台每处理完一个场景向 Stash 日志报一行；失败行标注 `(see dead_letter.jsonl)`
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 

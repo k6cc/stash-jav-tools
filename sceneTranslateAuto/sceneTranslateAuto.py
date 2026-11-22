@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Scene Translate Auto v1.3.2: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
+Scene Translate Auto v1.3.3: 自动翻译场景标题/简介为目标语言（sceneTranslate 的无 UI 版本）。
 
 - 钩子 Scene.Create.Post / Scene.Update.Post：预检（语言启发式 + 番号/长度过滤）通过后，
   写入 pending 队列并 spawn 单例后台 worker 处理（hook 保持零网络、毫秒级返回）；
@@ -313,7 +313,7 @@ def make_gql(conn):
 
 
 Q_PLUGINS = "query { configuration { plugins } }"
-Q_SCENE = ("query($id: ID!){ findScene(id:$id){ id title details "
+Q_SCENE = ("query($id: ID!){ findScene(id:$id){ id title details custom_fields "
            "galleries { id title details } } }")
 Q_GALLERY = "query($id: ID!){ findGallery(id:$id){ id title details } }"
 Q_SCENES_PAGE = ("query($filter: FindFilterType!, $scene_filter: SceneFilterType){ "
@@ -323,6 +323,29 @@ M_SCENE_UPDATE = "mutation($i: SceneUpdateInput!){ sceneUpdate(input:$i){ id tit
 M_GALLERY_UPDATE = "mutation($i: GalleryUpdateInput!){ galleryUpdate(input:$i){ id title details } }"
 M_PLUGIN_OP = "mutation($id: ID!, $a: Map!){ runPluginOperation(plugin_id: $id, args: $a) }"
 PLUGIN_ID = "sceneTranslateAuto"
+# 跨插件约定（写入方 SceneBackfill）：合并失败的临时场景带 sb_merge_to 标记，
+# 表示它正等着被合并进原场景，写在它上面的翻译会随场景一起消失。
+SB_MERGE_TO = "sb_merge_to"
+SB_MERGE_AT = "sb_merge_at"
+SB_MERGE_TTL = 86400
+
+
+def pending_merge(scene):
+    """Target scene id from SceneBackfill's marker, or None when absent or stale.
+
+    Expires after a day: the marker covers a merge retry window, and a removed
+    SceneBackfill must not freeze the scene forever."""
+    cf = (scene or {}).get("custom_fields") or {}
+    to = cf.get(SB_MERGE_TO)
+    if not to:
+        return None
+    try:
+        stamp = time.mktime(time.strptime(cf.get(SB_MERGE_AT) or "", "%Y-%m-%dT%H:%M:%S"))
+        if time.time() - stamp > SB_MERGE_TTL:
+            return None
+    except Exception:
+        pass
+    return to
 
 
 class Reporter:
@@ -969,8 +992,14 @@ def process_task(conn, sid, settings, limiter):
     gql = make_gql(conn)
     scene = find_scene(gql, sid)
     if not scene:
-        log("scene %s not found, dropped" % sid)
-        return "scene %s skipped: not found" % sid
+        # 场景在延迟期间被删了：扫描入库的临时场景被 SceneBackfill 合并进原场景，
+        # 是这条链路的正常结局，不该占日志页一行。
+        log("scene %s gone before translation, dropped" % sid)
+        return ""
+    merge_to = pending_merge(scene)
+    if merge_to:
+        log("scene %s pending merge into scene %s, skipped" % (sid, merge_to))
+        return "scene %s skipped: waiting for merge into scene %s" % (sid, merge_to)
     cache = load_cache()
     updates = translate_entity(gql, "scene", sid, scene.get("title"), scene.get("details"),
                                settings, cache, limiter)

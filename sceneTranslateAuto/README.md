@@ -1,6 +1,6 @@
 # sceneTranslateAuto
 
-> v1.3.2：日志编码修好（多进程并发写不再撕裂日文），后台每处理完一个场景向 Stash 日志报一行；失败行标注 `(see dead_letter.jsonl)`
+> v1.3.3：等合并的场景跳过并报一行；延迟期间被合并删掉的场景不再占日志页一行。
 
 Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）：场景创建/更新时自动把标题（title）与简介（details）翻译为目标语言并写回，**其关联图库（gallery）同步翻译**；任务页可对存量场景全量执行同一管线。
 
@@ -55,7 +55,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 
 | 位置 | 内容 |
 |---|---|
-| Stash 日志页（前缀 `[Plugin / Scene Translate Auto]`） | 钩子入队（含延迟秒数）、每个场景的处理结果（翻译了什么 / 无需翻译 / 失败原因，失败行标注 `see dead_letter.jsonl`） |
+| Stash 日志页（前缀 `[Plugin / Scene Translate Auto]`） | 钩子入队（含延迟秒数）、每个场景的处理结果（翻译了什么 / 无需翻译 / 失败原因，失败行标注 `see dead_letter.jsonl`）。等合并的场景单独报一行；延迟期间被合并删掉的场景不报，那是正常收尾 |
 | 插件日志文件 `scene_translate_auto.log` | 排查信息：写回被丢弃或重译、图库报错、全量任务进度与 dry-run 目标清单 |
 | 失败台账 `auto_state/dead_letter.jsonl` | 翻译失败的场景/图库逐条留档（时间、id、原因）；插件不会自动重试——改回非目标语言触发钩子，或跑一次「Full Scan & Translate」即可重跑 |
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Javstash Autofill+ v1.3.4
+Javstash Autofill+ v1.3.5
 Stash plugin: Performer.Create.Post hook + Scene.Create.Post hook.
 Unified performer resolution (scene fill, backfill task and manual creation share it):
   - stash-id first: reverse-lookup the local performer carrying (endpoint, stash_id);
@@ -40,6 +40,45 @@ def log_info(msg):
 def log_progress(p):
     _proto("p", f"{max(0.0,min(1.0,float(p))):.3f}")
 
+PLUGIN_ID = "javstashAutofillPlus"
+M_PLUGIN_OP = "mutation($id: ID!, $a: Map!){ runPluginOperation(plugin_id:$id, args:$a) }"
+# 跨插件约定（写入方 SceneBackfill）：临时场景合并失败时，在它的自定义字段里写下
+# 目标场景 id。读到这个标记的延迟 worker 直接跳过——它要写的场景几秒后就会被删。
+SB_MERGE_TO = "sb_merge_to"
+SB_MERGE_AT = "sb_merge_at"
+SB_MERGE_TTL = 86400
+
+
+def pending_merge(scene):
+    """Target scene id from SceneBackfill's marker, or None when absent or stale.
+
+    Expires after a day: the marker covers a merge retry window, and a removed
+    SceneBackfill must not freeze the scene forever."""
+    cf = (scene or {}).get("custom_fields") or {}
+    to = cf.get(SB_MERGE_TO)
+    if not to:
+        return None
+    try:
+        stamp = time.mktime(time.strptime(cf.get(SB_MERGE_AT) or "", "%Y-%m-%dT%H:%M:%S"))
+        if time.time() - stamp > SB_MERGE_TTL:
+            return None
+    except Exception:
+        pass
+    return to
+
+
+def report_to_stash(conn, text):
+    """Write one line from the delayed worker into the Stash log page.
+
+    The worker is detached and its stderr goes to DEVNULL; Stash only collects
+    stderr of the processes it started itself. So the worker calls back through
+    runPluginOperation(mode=report) and the report branch of main() prints the
+    text to stderr. A failed report only lands in the plugin log."""
+    try:
+        make_gql(conn)(M_PLUGIN_OP, {"id": PLUGIN_ID, "a": {"mode": "report", "text": text}}, timeout=20)
+    except Exception as e:
+        log(f"report to stash log failed: {e}")
+
 # ---------- Stash GraphQL ----------
 def make_gql(conn):
     scheme = conn.get("Scheme", "http")
@@ -48,11 +87,13 @@ def make_gql(conn):
     port = conn.get("Port", 9999)
     cookie = conn.get("SessionCookie") or {}
     ck = cookie.get("Value")
+    key = conn.get("ApiKey") or ""
     url = f"{scheme}://{host}:{port}/graphql"
     def gql(query, variables=None, timeout=30):
         data = json.dumps({"query": query, "variables": variables or {}}).encode()
         headers = {"Content-Type": "application/json"}
         if ck: headers["Cookie"] = f"{cookie.get('Name','session')}={ck}"
+        if key: headers["ApiKey"] = key
         req = urllib.request.Request(url, data=data, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             j = json.loads(r.read())
@@ -322,7 +363,7 @@ SCENE_FULL_FIELDS = ("title code details director date urls image remote_site_id
 def get_scene_full(gql, sid):
     q = ("query($id:ID!){ findScene(id:$id){ id title code details director date urls "
          "studio{ id name } performers{ id stash_ids{ endpoint stash_id } } tags{ id } groups{ group{ id } } paths{ screenshot } "
-         "stash_ids{ endpoint stash_id } created_at files{ path } } }")
+         "stash_ids{ endpoint stash_id } created_at custom_fields files{ path } } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
 _CODE_RE = re.compile(r"^((?:FC2[-_]?PPV[-_]?\d{5,7}|FC2[-_]?\d{5,7}|[A-Za-z]{2,6}[-_]?\d{2,5}|\d{6}[-_]\d{2,5}|[A-Za-z]\d{4}))")
@@ -974,16 +1015,25 @@ def fill_scene_later_mode(sid):
     time.sleep(_scene_fill_delay(settings))
     scene = get_scene_full(gql, sid)
     if not scene:
-        log(f"scene {sid}: delayed fill: scene not found, skip"); return
+        # 扫描入库的正常结局：文件已入库、临时场景被 SceneBackfill 合并掉。
+        log(f"scene {sid}: delayed fill: scene gone (merged into its original), skip"); return
+    merge_to = pending_merge(scene)
+    if merge_to:
+        log(f"scene {sid}: pending merge into scene {merge_to}, skip")
+        report_to_stash(conn, f"scene {sid} skipped: waiting for merge into scene {merge_to}")
+        return
     rows = scrape_scene_full(gql, sid, src, scene, settings.get("sceneCodeFallback") is not False)
     if not rows:
         log(f"scene {sid}: no fingerprint match at {src} -> skip"); return
     sc = rows[0]
     try:
         upd = apply_scene_fill(gql, sid, scene, sc, src, ow=build_scene_ow(settings))
-        log(f"scene {sid}: filled {sorted(k for k in upd if k != 'id')}")
+        keys = sorted(k for k in upd if k != "id")
+        log(f"scene {sid}: filled {keys}")
+        report_to_stash(conn, f"scene {sid}: filled {', '.join(keys) if keys else 'nothing'}")
     except Exception as e:
         log(f"scene {sid}: delayed fill error: {e}")
+        report_to_stash(conn, f"scene {sid} failed: {str(e)[:160]}")
 
 def handle_scene_create(payload, conn, gql):
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
@@ -1011,7 +1061,7 @@ def handle_scene_backfill(payload, conn, gql):
     todo = []
     page = 1
     while True:
-        q = ('{ findScenes(filter:{per_page:100,page:%d,sort:"id"}){ scenes{ id files{ id } stash_ids{ endpoint } } } }' % page)
+        q = ('{ findScenes(filter:{per_page:100,page:%d,sort:"id"}){ scenes{ id files{ id } stash_ids{ endpoint } custom_fields } } }' % page)
         try:
             rows = gql(q).get("findScenes", {}).get("scenes", [])
         except Exception as e:
@@ -1021,6 +1071,7 @@ def handle_scene_backfill(payload, conn, gql):
             eps = {s["endpoint"] for s in (sc.get("stash_ids") or [])}
             if src in eps: continue
             if not (sc.get("files") or []): continue
+            if pending_merge(sc): continue
             todo.append(sc["id"])
         page += 1
     total = len(todo)
@@ -1225,9 +1276,13 @@ def main():
     ctx = (payload.get("args", {}) or {}).get("hookContext", {}) or {}
     htype = ctx.get("type", "")
 
+    mode = (payload.get("args") or {}).get("mode") or ""
+    if mode == "report":
+        # 延迟 worker 的反调入口：进程由 Stash 拉起，stderr 会进日志页。
+        log_info(str((payload.get("args") or {}).get("text") or "")); return
+
     gql = make_gql(conn)
 
-    mode = (payload.get("args") or {}).get("mode") or ""
     if mode == "scene_backfill":
         handle_scene_backfill(payload, conn, gql); return
 

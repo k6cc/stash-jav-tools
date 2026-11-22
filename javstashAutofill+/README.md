@@ -1,6 +1,6 @@
 # Javstash Autofill+
 
-> v1.3.4：场景演员优先复用场景上已挂的同源演员，再走 stash_id 反查；库里同一 stash_id 有多个对象时不再挑错那一个。
+> v1.3.5：处理结果回写 Stash 日志页（入队 / 填了哪些字段 / 失败原因 / 等合并而跳过）；等合并的场景不再填充。
 
 新演员创建时自动从 JAVStash 补全元数据；新场景入库时按文件指纹（oshash）自动从 JAVStash 补空白字段与 stash_id。纯后台 Python，无 UI 注入。
 
@@ -31,6 +31,7 @@
 - **番号 fallback**：oshash 未命中（或被校验丢弃）时，用本地番号作 query 再搜一次，返回 code 须与本地番号一致。
 - **BD 后缀剥离重试**：oshash 与番号 fallback 全部失败后，若番号形如 `XXXBD-NNN`（前缀 ≥2 字母）剥离为 `XXX-NNN` 再精确搜一次（`CWPBD-98`→`CWP-98`）；本地 code 非空不覆盖，为空则写入剥离后番号。
 - **延迟填充**：Scene.Create.Post 触发后不立即写入，spawn detached 进程等待 sceneFillDelay 再重查场景，给 NFO 解析插件留足写入时间。标量空才填；无 NFO 的用户开「覆盖标题」开关。
+- **等合并的场景不碰**：场景带 `sb_merge_to` 标记时跳过——扫描入库的临时场景正等着被 SceneBackfill 合并进原场景，写上去的字段会随临时场景一起消失（标记说明见 SceneBackfill README）。
 - **标量空才填**：title / code / details / director / date。
 - **studio**：仅当场景无 studio 时按名找/建。
 - **performers / tags / urls**：与本地已有值合并去重（场景演员先认场景上已挂的同源演员，再按 stash_id 反查，最后按名 find-or-create，新建演员触发演员 hook 补全）。
@@ -58,7 +59,13 @@
 | Overwrite: *field* | 演员各字段是否覆盖已有值。默认关 = 只填空。 |
 | Overwrite scene title | 开 = 标题已有值也写；关（默认）= 标题交给 NFO/文件名。 |
 
+## 日志
+
+| 位置 | 内容 |
+|---|---|
+| Stash 日志页（前缀 `[Plugin / Javstash Autofill+]`） | 入队、填充成功（写了哪些字段）、失败原因、等合并而跳过 |
+| 插件目录 `javstash_autofill_plus.log` | 全部过程，含没上报的跳过（无指纹匹配、场景已被合并删除） |
+
 ## 备注
 
 - 刮削走 Stash 自己的 `scrapeSinglePerformer` / `scrapeSingleScene`；带 stash_id 的直抓补全使用 Stash 配置的 stash-box ApiKey。
-- 日志写到插件目录 `javstash_autofill_plus.log`。

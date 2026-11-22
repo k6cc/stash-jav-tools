@@ -61,6 +61,7 @@ sceneGallerySync 是一个 Stash 插件，在影片扫描入库时自动创建�
 - **不阻塞扫描**：钩子模式使用一次性后台进程，钩子立即退出，不影响 Stash 扫描任务队列
 - **前台早期过滤**：`Scene.Update.Post` 阶段先检查 extrafanart 文件夹，无图库前置条件的 scene（如 `/social/x/` 抓取内容）直接跳过，不启动后台进程，不进行无谓的元数据轮询
 - **无文件场景不报错不刷日志**：只写元数据的场景（binge / stashDiscover 收录的条目）没有文件路径可查，钩子直接退出；这类场景每次被其它插件更新都会触发一次钩子，所以不写日志
+- **等合并的场景不建图库**：场景带 `sb_merge_to` 标记时跳过并留一行说明——扫描入库的临时场景正等着被 SceneBackfill 合并进原场景，建好的图库会跟着临时场景一起删掉（标记说明见 SceneBackfill README）
 - **stdio 隔离**：后台子进程重定向 stdin/stdout 到 DEVNULL、stderr 到 `.sgs_pending/{scene_id}.log`，避免继承前台的 stash 管道句柄导致 hook 阻塞
 - **nfoSceneParser 依赖**：自动模式仅在 nfoSceneParser 启用时触发，避免无 NFO 数据时创建空图库
 - **进程隔离**：后台进程使用 `start_new_session=True`（Linux/Docker）或 `DETACHED_PROCESS`（Windows），成为独立进程
@@ -364,6 +365,9 @@ A: 先在 Stash 中删除已有图库，然后在影片编辑页面点击"创建
 A: 钩子模式下的临时任务目录，用于后台进程读取连接信息。任务文件（`.json`）在后台进程启动后立即删除；后台日志文件（`.log`，1.6.0 新增）记录后台进程运行日志。超过 1 小时的残留文件会自动清理。可以安全删除整个目录。
 
 ## 变更历史
+
+### 1.9.10
+- **等合并的临时场景不建图库**：场景带 `sb_merge_to` 标记时跳过并留一行说明，不给一个马上要被 SceneBackfill 合并掉的临时场景建库
 
 ### 1.9.9
 - **无文件场景不再刷警告**：库里只有元数据的场景（binge / stashDiscover 入库、`files` 为空）每次更新都会打一条 `not found or no files` 警告。现在只有场景真不存在才报警告，无文件的降到调试级（不出现在日志页）

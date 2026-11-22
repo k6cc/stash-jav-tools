@@ -104,7 +104,7 @@ class StashInterface:
         sys.exit(1)
 
     def gql_findScene(self, scene_id):
-        q = """query($id:ID!){findScene(id:$id){id title code details urls date rating100 files{path}studio{id}tags{id}performers{id}}}"""
+        q = """query($id:ID!){findScene(id:$id){id title code details urls date rating100 custom_fields files{path}studio{id}tags{id}performers{id}}}"""
         return self.__gql(q, {"id": scene_id}).get("findScene")
 
     def gql_findGalleries(self, title, modifier="EQUALS"):

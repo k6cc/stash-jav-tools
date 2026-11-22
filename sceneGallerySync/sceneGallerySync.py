@@ -21,6 +21,29 @@ import log
 from stashInterface import StashInterface
 
 
+SB_MERGE_TO = "sb_merge_to"
+SB_MERGE_AT = "sb_merge_at"
+SB_MERGE_TTL = 86400
+
+
+def pending_merge(scene):
+    """Target scene id from SceneBackfill's marker, or None when absent or stale.
+
+    Expires after a day: the marker covers a merge retry window, and a removed
+    SceneBackfill must not freeze the scene forever."""
+    cf = (scene or {}).get("custom_fields") or {}
+    to = cf.get(SB_MERGE_TO)
+    if not to:
+        return None
+    try:
+        stamp = time.mktime(time.strptime(cf.get(SB_MERGE_AT) or "", "%Y-%m-%dT%H:%M:%S"))
+        if time.time() - stamp > SB_MERGE_TTL:
+            return None
+    except Exception:
+        pass
+    return to
+
+
 class SceneGallerySync:
 
     MULTIPART_RE = re.compile(r'[-_](?:(?:cd|disc|part|pt)\d+|[a-z])$', re.IGNORECASE)
@@ -64,6 +87,13 @@ class SceneGallerySync:
                 # 无文件场景（binge / stashDiscover 等只写元数据的条目）每次被更新都会进来一次，
                 # 这里只是无事可做，不是异常，留在 Debug 避免同一场景重复刷 WARN
                 log.LogDebug(f"Scene {scene_id} has no file, skipped")
+                return
+            merge_to = pending_merge(scene)
+            if merge_to:
+                # SceneBackfill 没把这个扫描临时场景合并进原场景，它还在等重试；
+                # 给它建的图库会跟场景一起被合并删掉。
+                log.LogInfo(f"Scene {scene_id} is waiting for a merge into "
+                            f"scene {merge_to}, skipped")
                 return
             scene_dir = os.path.dirname(scene["files"][0]["path"])
             if not self.__find_extrafanart_folder(scene_dir):

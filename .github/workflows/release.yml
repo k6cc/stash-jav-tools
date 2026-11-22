@@ -57,7 +57,8 @@ jobs:
       - name: Pack zip
         run: |
           cd ${{ steps.ver.outputs.plugin_id }}
-          zip "../${{ steps.ver.outputs.plugin_id }}-v${{ steps.ver.outputs.version }}.zip" *
+          zip "../${{ steps.ver.outputs.plugin_id }}-v${{ steps.ver.outputs.version }}.zip" * \
+            -x "auto_state/*" "__pycache__/*" "*.log" "*.pyc" "*.bomtmp" "*.tmp" "*.bak"
 
       - name: Compute metadata
         id: meta

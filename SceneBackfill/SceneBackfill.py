@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -3437,6 +3437,7 @@ def mark_import_fail(rec):
     rec["importFails"] = fails
     delay = import_delay(fails)
     rec["nextImportAt"] = int(time.time()) + delay if delay else 0
+    return delay is None
 
 
 def do_tick(ctx):
@@ -3504,10 +3505,12 @@ def run_tick(ctx, st, ctrl, src):
                 if res.get("ok"):
                     actions.append("import:" + sid)
                 else:
-                    mark_import_fail(rec)
+                    if mark_import_fail(rec):
+                        _clear_merge_mark(ctx, rec)
                     actions.append("import!:" + sid)
             except Exception as e:
-                mark_import_fail(rec)
+                if mark_import_fail(rec):
+                    _clear_merge_mark(ctx, rec)
                 rec["error"] = t_(ctx, "入库失败：", "import failed: ") + _safe_text(str(e))[:180]
                 actions.append("import!:" + sid)
             save_state(ctx, st)
@@ -3923,6 +3926,48 @@ def import_scene_whisparr(ctx, st, sid):
     return _link_scanned_files(ctx, st, sid, [target])
 
 
+# ─── 合并标记（跨插件约定，见 README「合并标记」）────────────────────────
+# 临时场景没合并成功时，把目标场景 id 写进它的自定义字段。其他插件（nfoSceneParser /
+# sceneGallerySync / javstashAutofill+ / sceneTranslateAuto）处理场景前读到这个标记
+# 就跳过：它等的是一个马上要被合并掉的残留，写上去的元数据留不住。
+# 只在失败时写 —— 成功路径零额外请求，也就不用凭空多触发一轮 Scene.Update.Post。
+# 合并成功后标记随临时场景一起删除，不需要清理。
+MERGE_TO = "sb_merge_to"
+MERGE_AT = "sb_merge_at"
+MERGED_FROM = "sb_merged_from"
+MERGED_AT = "sb_merged_at"
+
+
+def _now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def _mark_merge_failed(ctx, sources, dest):
+    """Best effort: a failed mark must never hide the merge error itself."""
+    stamp = {"partial": {MERGE_TO: str(dest), MERGE_AT: _now_iso()}}
+    for s in sources:
+        try:
+            ctx.gql("""
+            mutation($id: ID!, $v: CustomFieldsInput) {
+              sceneUpdate(input: {id: $id, custom_fields: $v}) { id }
+            }""", {"id": str(s), "v": stamp})
+        except Exception:
+            pass
+
+
+def _clear_merge_mark(ctx, rec):
+    """Import gave up: drop the markers so the leftover scenes are handled as
+    normal scenes instead of being skipped by every other plugin forever."""
+    for s in rec.pop("mergeSources", None) or []:
+        try:
+            ctx.gql("""
+            mutation($id: ID!, $v: CustomFieldsInput) {
+              sceneUpdate(input: {id: $id, custom_fields: $v}) { id }
+            }""", {"id": str(s), "v": {"remove": [MERGE_TO, MERGE_AT]}})
+        except Exception:
+            pass
+
+
 def _link_scanned_files(ctx, st, sid, targets):
     """Scan the finished files, then merge the scenes Stash made onto the
     original empty scene. Shared by the downloader and Whisparr pipelines."""
@@ -3952,11 +3997,24 @@ def _link_scanned_files(ctx, st, sid, targets):
     merged = False
     assigned = False
     if new_scenes:
-        ctx.gql("""
-        mutation($src: [ID!]!, $dst: ID!) {
-          sceneMerge(input: {source: $src, destination: $dst}) { id }
-        }""", {"src": new_scenes, "dst": sid})
+        try:
+            ctx.gql("""
+            mutation($src: [ID!]!, $dst: ID!, $v: SceneUpdateInput!) {
+              sceneMerge(input: {source: $src, destination: $dst, values: $v}) { id }
+            }""", {"src": new_scenes, "dst": sid, "v": {
+                "id": str(sid),
+                "custom_fields": {"partial": {
+                    MERGED_FROM: ",".join(new_scenes), MERGED_AT: _now_iso()}},
+            }})
+        except Exception:
+            # 合并失败时临时场景会留在库里。给它写上标记，别的插件的延迟 worker
+            # 才不会把一个「等合并的残留」当正常新场景补满元数据（补了也会被下一次
+            # 重试合并丢掉，还会留下孤儿演员）。标记本身失败不掩盖真正的异常。
+            _mark_merge_failed(ctx, new_scenes, sid)
+            st["scenes"].setdefault(sid, {})["mergeSources"] = list(new_scenes)
+            raise
         merged = True
+        rec.pop("mergeSources", None)
     elif not attached and ids:
         ctx.gql("""
         mutation($sid: ID!, $fid: ID!) {
@@ -4020,10 +4078,12 @@ def run_tick_whisparr(ctx, st, ctrl, src):
                 if res.get("ok"):
                     actions.append("import:" + sid)
                 else:
-                    mark_import_fail(rec)
+                    if mark_import_fail(rec):
+                        _clear_merge_mark(ctx, rec)
                     actions.append("import!:" + sid)
             except Exception as e:
-                mark_import_fail(rec)
+                if mark_import_fail(rec):
+                    _clear_merge_mark(ctx, rec)
                 rec["error"] = t_(ctx, "入库失败：", "import failed: ") + _safe_text(str(e))[:180]
                 actions.append("import!:" + sid)
             save_state(ctx, st)

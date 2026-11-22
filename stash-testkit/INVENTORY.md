@@ -25,7 +25,7 @@
 | 测演员解析类插件（performerCreate 钩子） | 直接 `performerCreate` mutation，不用视频 | 骨架见 `README.md` E2E 节；用例见 `tests/javstashAutofill/scripts/test_e2e.py` |
 | 测 tagCreate 失败兜底（nfoSceneParser） | `tests/nfoSceneParser/scripts/test_tag_create_fallback.py` | `python tests/nfoSceneParser/scripts/test_tag_create_fallback.py offline <插件目录>` |
 | 测 tagCreate 兜底真库端到端 | `tests/nfoSceneParser/scripts/test_tag_create_fallback_live.py` | 自动挑候选源名，测完自清理 |
-| **部署/更新插件并校验版本** | `deploy_plugin.py` | `python deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill`（先删后拷 → reloadPlugins → 轮询 version；同 id 旧副本会报警） |
+| **部署/更新插件并校验版本** | `deploy_plugin.py` | `python deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill --in-place`（覆盖文件 → reloadPlugins → 轮询 version；同 id 旧副本会报警）。从插件源安装的插件必须加 `--in-place`，删目录会被 Stash 当成卸载，检查更新失效 |
 | 跑任意插件 op（参数复杂时必用） | `plugin_op.py` | `python plugin_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'`（或 `--file args.json`；`--raw` 看 errors） |
 | 改插件状态做 UI 验证前存/还原 | `state_snapshot.py` | `snap` → 测 → `restore`（先停守护，否则 90 s 内被整份覆盖） |
 | 多视口 UI 回归（对齐/列数/换行/横向溢出） | `ui_probe.py` | `python ui_probe.py --path /plugins/SceneBackfill --selector ".sf-check-name" --sizes 345,390,768,860,1024` |

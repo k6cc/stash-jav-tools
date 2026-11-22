@@ -9,11 +9,14 @@
   python deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill
   python deploy_plugin.py <src> --dest E:/stashAPP/plugins/k6cc
   python deploy_plugin.py <src> --no-reload        # 只同步不重载
+  python deploy_plugin.py <src> --in-place         # 覆盖文件，不删目录
 
 约定：
   - 插件 id 默认取源码目录名；yml 必须是 `<id>.yml`
   - 目标目录默认读 config.json 的 `plugin_dir`
-  - 同步是「先删后拷」，源码里删掉的文件不会残留在部署目录
+  - 默认同步是「先删后拷」，源码里删掉的文件不会残留在部署目录
+  - `--in-place` 保留目标目录本身、只覆盖文件：删目录会被 Stash 当成卸载，
+    从插件源安装的插件会退化成「本地安装」，之后检查更新就找不到线上版本了
   - 退出码：0 版本校验通过；2 同步/重载/版本不符
 """
 import json
@@ -55,6 +58,7 @@ def main(argv):
     src = Path(argv.pop(0)).resolve()
     dest_root = None
     reload_ = True
+    in_place = False
     timeout = 20.0
     if "--dest" in argv:
         i = argv.index("--dest")
@@ -62,6 +66,9 @@ def main(argv):
         del argv[i:i + 2]
     if "--no-reload" in argv:
         reload_ = False
+    if "--in-place" in argv:
+        argv.remove("--in-place")
+        in_place = True
     if "--timeout" in argv:
         i = argv.index("--timeout")
         timeout = float(argv[i + 1])
@@ -81,10 +88,26 @@ def main(argv):
     dest = dest_root / plugin_id
     dest_root.mkdir(parents=True, exist_ok=True)
 
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(
-        "__pycache__", "*.pyc", ".git", "*.snap"))
+    if dest.exists() and in_place:
+        # Keep the folder: deleting it makes Stash treat a source-installed
+        # plugin as a local copy, so "check for updates" stops matching it.
+        for p in src.rglob("*"):
+            rel = p.relative_to(src)
+            if any(x in ("__pycache__", ".git") for x in rel.parts):
+                continue
+            if p.suffix in (".pyc", ".snap"):
+                continue
+            target = dest / rel
+            if p.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, target)
+    else:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns(
+            "__pycache__", "*.pyc", ".git", "*.snap"))
     print(f"[1/3] 已同步 {src} -> {dest}")
 
     dups = duplicate_ymls(dest_root.parent, plugin_id, dest)

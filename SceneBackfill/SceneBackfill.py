@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.1.10"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -2112,25 +2112,25 @@ def do_selftest(ctx):
     # 2. 双目录：下载器侧用于定位与换算，Stash 侧用于扫描
     sp = s["savePath"]
     if not sp:
-        add("savePath", "下载目录（下载器侧）", "Download folder (downloader side)", False,
+        add("savePath", "下载器写入路径", "Write path (downloader side)", False,
             t_(ctx, "未填写", "empty"),
             t_(ctx, "填写下载器视角的完成目录（qB / Motrix 里看到的路径）",
                "Set the finished-download folder as the downloader sees it"))
     else:
-        add("savePath", "下载目录（下载器侧）", "Download folder (downloader side)", True, sp)
+        add("savePath", "下载器写入路径", "Write path (downloader side)", True, sp)
 
     dl = s["stashPath"]
     dl_ok = bool(dl) and os.path.isdir(local_path(dl))
     if not dl:
-        add("downloadPath", "下载目录（Stash 侧）", "Download folder (Stash side)", False,
+        add("downloadPath", "Stash 读取路径", "Read path (Stash side)", False,
             t_(ctx, "未填写", "empty"),
             t_(ctx, "填写同一目录在 Stash 里的路径", "Set the same folder as Stash sees it"))
     elif not dl_ok:
-        add("downloadPath", "下载目录（Stash 侧）", "Download folder (Stash side)", False,
+        add("downloadPath", "Stash 读取路径", "Read path (Stash side)", False,
             t_(ctx, "目录不存在", "not found"),
             t_(ctx, "确认该目录已挂载进 Stash 容器", "Make sure the folder is mounted into Stash"))
     else:
-        add("downloadPath", "下载目录（Stash 侧）", "Download folder (Stash side)", True, dl)
+        add("downloadPath", "Stash 读取路径", "Read path (Stash side)", True, dl)
 
     # 2b. Server 2.4 only writes under MOTRIX_ALLOWED_SAVE_DIRS; ask it now
     #     instead of letting the first push fail with 'outside roots'.
@@ -2141,13 +2141,13 @@ def do_selftest(ctx):
             roots = [x for x in roots if x]
             inside = any(sp == x or sp.startswith(x.rstrip("/") + "/") for x in roots)
             if roots and not inside:
-                add("saveDirAllowed", "下载目录（Server 允许根）",
-                    "Download folder (server allowed roots)", False, sp,
+                add("saveDirAllowed", "Server 可写范围",
+                    "Writable roots (server)", False, sp,
                     t_(ctx, "Server 只接受这些根目录下的路径：" + ", ".join(roots),
                        "The server only accepts paths under: " + ", ".join(roots)))
             else:
-                add("saveDirAllowed", "下载目录（Server 允许根）",
-                    "Download folder (server allowed roots)", True,
+                add("saveDirAllowed", "Server 可写范围",
+                    "Writable roots (server)", True,
                     ", ".join(roots) or sp)
         except MotrixWebError as e:
             add("saveDirAllowed", "Motrix Server 版本", "Motrix Server version", False,
@@ -2377,7 +2377,7 @@ def _probe_indexer(cfg):
     if not root.tag.endswith("caps"):
         return False, f"unexpected reply: {root.tag.split('}')[-1]}"
     n = len(root.findall(".//category"))
-    return True, f"Indexers OK · {n} categories"
+    return True, f"Jackett · {n} categories"
 
 
 def _check_temp_outside_lib(ctx, cfg, roots):

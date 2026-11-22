@@ -1,6 +1,6 @@
 name: Scene Backfill
 description: Fills metadata-only scenes via Jackett/Prowlarr and qBittorrent/Motrix, or via Whisparr v3; finished files are scanned in place and linked back.
-version: 0.1.9
+version: 0.1.10
 url: https://discourse.stashapp.cc/t/scene-backfill/21655
 errLog: info
 
@@ -54,12 +54,12 @@ settings:
     description: "Whisparr's root folder named the way Stash sees it. Must be inside a Stash library path. Leave empty when both use the same path."
     type: STRING
   savePath:
-    displayName: "Download Folder (downloader side)"
-    description: "Finished-download folder as the downloader sees it, e.g. /downloads/input or E:/Downloads. Same field for qBittorrent and Motrix."
+    displayName: "Write Path (downloader side)"
+    description: "Finished-download path as the downloader sees it, e.g. /downloads/input. Same field for qBittorrent and Motrix."
     type: STRING
   stashPath:
-    displayName: "Download Folder (Stash side)"
-    description: "The same folder as Stash sees it, e.g. /qb/input or \\\\nas\\media\\downloads\\input. Auto import scans it in place, so it must be inside a Stash library path."
+    displayName: "Read Path (Stash side)"
+    description: "The same path as Stash sees it, e.g. /qb/input or \\\\nas\\media\\downloads\\input. Must be inside a library path."
     type: STRING
 
 exec:

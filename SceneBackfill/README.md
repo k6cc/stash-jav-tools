@@ -1,6 +1,6 @@
 # SceneBackfill
 
-> v0.1.9：qBittorrent 5.x 重复种子（HTTP 409）复用已有任务，不再报错；种子下载链接不再强制绕过环境代理，与索引器搜索保持一致。
+> v0.1.10：自检目录项改为「下载器写入路径 / Stash 读取路径 / Server 可写范围」；试运行下拉只列最近 20 个未忽略场景；freeleech 徽章改为「免比率」且全部候选免费时不再显示。
 
 Stash 插件：把只有元数据、没有文件的场景补齐——搜资源、交给下载器或 Whisparr，完成后把文件关联回原场景。全程不搬动文件。
 
@@ -33,8 +33,8 @@ Stash 插件：把只有元数据、没有文件的场景补齐——搜资源�
 | Downloader Password / RPC Secret | qBittorrent 密码、Motrix 桌面版 `--rpc-secret` 或 Server 版 Web 登录密钥 |
 | Whisparr URL / API Key | Whisparr v3 地址与 API Key；`whisparr` 模式使用 |
 | Whisparr Root Folder | Whisparr 根目录在 Stash 里的路径；必须在库路径内，两边同名可留空 |
-| Download Folder (downloader side) | 下载器视角的完成目录 |
-| Download Folder (Stash side) | 同一目录在 Stash 里的路径；必须在库路径内 |
+| Write Path (downloader side) | 下载器写入路径：下载器视角的完成目录 |
+| Read Path (Stash side) | Stash 读取路径：同一目录在 Stash 里的路径；必须在库路径内 |
 
 ## 补档方式
 
@@ -49,12 +49,12 @@ Whisparr 只认 StashDB 的场景 ID；只有 javstash ID 的场景不会交给�
 
 ## 路径怎么填
 
-| 部署 | Download Folder (downloader side) | Download Folder (Stash side) |
+| 部署 | Write Path (downloader side) | Read Path (Stash side) |
 |---|---|---|
 | 下载器与 Stash 同机（Docker 各自挂载） | `/downloads/input` | `/qb/input` |
 | 下载器在 NAS、Stash 在 Windows | `/downloads/input` | `\\nas\media\downloads\input` |
 
-Stash 侧路径必须能被 Stash 读到且位于库路径内；qB 的临时目录要放在库外。
+Stash 读取路径必须能被 Stash 读到且位于库路径内；qB 的临时目录要放在库外。
 
 ## 筛选规则
 

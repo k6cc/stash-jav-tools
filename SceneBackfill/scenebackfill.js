@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.9";
+  var PLUGIN_VERSION = "0.1.10";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -976,7 +976,18 @@
     var found = scenes.filter(function (s) { return s.status === "matched"; });
     var ignored = scenes.filter(function (s) { return s.status === "ignored"; });
     var done = (prog || []).filter(function (p) { return p.status === "imported"; });
-    var withCands = scenes.filter(function (s) { return (s.candidates || []).length > 0; });
+    // 试运行下拉只列最近搜索过的 20 个（忽略的不列）；当前选中项始终保留。
+    var withCands = scenes.filter(function (s) {
+      return s.status !== "ignored" && (s.candidates || []).length > 0;
+    }).sort(function (a, b) {
+      return (b.searchedAt || 0) - (a.searchedAt || 0);
+    }).slice(0, 20);
+    if (evalPick) {
+      var kept = scenes.filter(function (s) {
+        return s.id === evalPick && s.status !== "ignored" && (s.candidates || []).length > 0;
+      })[0];
+      if (kept && withCands.indexOf(kept) < 0) withCands = [kept].concat(withCands);
+    }
 
     var live = (prog || []).filter(function (p) { return p.status !== "imported"; });
     var readyRows = live.filter(function (p) { return p.ready; });
@@ -1446,9 +1457,15 @@
         }, "+" + rest) : null);
     }
 
-    // 候选的物理属性：分辨率 / 体积 / 做种 / 来源站 / 免费 / 补档后缀
+    // 全部候选都免费时，「免费」是常态而不是信息；只有混合时才值得提示。
+    function allFree(s) {
+      var cs = s.candidates || [];
+      return cs.length > 0 && cs.every(function (c) { return !!c.freeleech; });
+    }
+
+    // 候选的物理属性：分辨率 / 体积 / 做种 / 来源站 / 免比率 / 补档后缀
     // compact = 卡片与列表行：来源站名太长，会把一行徽章挤到裁切，省略它。
-    function releaseBadges(c, compact) {
+    function releaseBadges(c, compact, hideFree) {
       var out = [];
       if (c.resolution) out.push(badge("tx3", c.resolution));
       if (c.size) out.push(badge("", humanSize(c.size)));
@@ -1456,7 +1473,7 @@
       if (c.indexer && !compact) {
         out.push(badgeIco("", "folder", c.indexer, tc("来源站", "indexer")));
       }
-      if (c.freeleech) out.push(badge("gr", tc("免费", "Free"),
+      if (c.freeleech && !hideFree) out.push(badge("gr", tc("免比率", "Freeleech"),
         tc("站点把这条标为免费：下载量不计入分享率",
           "The tracker marks this freeleech: the download does not count against your ratio")));
       if (c.tag) out.push(badge("or", c.tag, tc("补档后缀", "Re-upload suffix")));
@@ -1513,12 +1530,12 @@
     function badgeOf(s) {
       var best = topCandidate(s);
       if (!best) return null;
-      if (best.freeleech) {
+      if (best.freeleech && !allFree(s)) {
         return h("span", {
           className: "sf-pill is-h-gr",
           title: tc("站点把这条标为免费：下载量不计入分享率",
             "The tracker marks this freeleech: the download does not count against your ratio"),
-        }, tc("免费", "Free"));
+        }, tc("免比率", "Freeleech"));
       }
       if (best.tag) return h("span", { className: "sf-pill is-h-or" }, best.tag);
       return null;
@@ -1536,7 +1553,7 @@
         h("div", { className: "sf-cand-main" },
           h("div", { className: "sf-cand-title sf-lib", title: c.title }, c.title),
           h("div", { className: "sf-row-badges", style: { marginTop: "5px" } },
-            releaseBadges(c)),
+            releaseBadges(c, false, allFree(s))),
           c.failed && c.failed.length
             ? h("div", { className: "sf-rcs" },
               h("span", { className: "sf-rc is-no" }, tc("卡在 ", "failed ") + c.failed.join(" / ")))
@@ -1691,7 +1708,7 @@
         body.push(h("div", { className: "sf-best" },
           h("div", { className: "sf-cand-title sf-lib", title: best.title }, best.title),
           h("div", { className: "sf-row-badges", style: { marginTop: "4px" } },
-            releaseBadges(best, true))));
+            releaseBadges(best, true, allFree(s)))));
       }
       return tile(s.id, coverOf(s, badgeOf(s)), body, [
         best ? h("button", {
@@ -1721,7 +1738,7 @@
           pill("gr", tc(pass.length + " 通过", pass.length + " passed")),
           unk.length ? h("div", { className: "sf-meta" },
             tc(unk.length + " 待确认", unk.length + " to check")) : null),
-        badges: (best ? releaseBadges(best, true) : []).concat([durBadge(s.duration)]),
+        badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat([durBadge(s.duration)]),
         actions: [
           best ? iconBtn("download", tc("推送最佳", "Push best"),
             function () { doPush(s.id, bestIdx); }, "is-acc" + (pushing ? " is-busy" : "")) : null,
@@ -2487,7 +2504,7 @@
           h("span", { className: "sf-pick-tag" }, tc("最佳选择", "BEST PICK")),
           pill("gr", tc("通过全部规则", "passed every rule"))),
         h("div", { className: "sf-pick-name sf-lib", title: best.title }, best.title || ""),
-        h("div", { className: "sf-row-badges", style: { marginTop: "6px" } }, releaseBadges(best)),
+        h("div", { className: "sf-row-badges", style: { marginTop: "6px" } }, releaseBadges(best, false, allFree(s))),
         reasonRow(s, best),
         h("div", { className: "sf-pick-foot" },
           h("button", {

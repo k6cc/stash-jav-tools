@@ -823,7 +823,7 @@ select.sf-input option {
 .sf-check.is-ok { border-left-color: rgba(var(--sf-gr-rgb), .6); }
 .sf-check.is-bad { border-left-color: rgba(var(--sf-re-rgb), .7); }
 .sf-check-name { font-size: 12px; font-weight: 600; min-width: 128px; color: var(--sf-tx); }
-/* 宽屏与平板固定标签列：英文最长那条 "Download folder (downloader side)"
+/* 宽屏与平板固定标签列：英文最长那条 "Write path (downloader side)"
    约 193px，留一点余量后各行的值正好从同一条竖线开始 */
 @media (min-width: 641px) {
   .sf-check-name { flex: 0 0 196px; }

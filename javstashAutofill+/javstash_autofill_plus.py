@@ -321,7 +321,7 @@ SCENE_FULL_FIELDS = ("title code details director date urls image remote_site_id
 
 def get_scene_full(gql, sid):
     q = ("query($id:ID!){ findScene(id:$id){ id title code details director date urls "
-         "studio{ id name } performers{ id } tags{ id } groups{ group{ id } } paths{ screenshot } "
+         "studio{ id name } performers{ id stash_ids{ endpoint stash_id } } tags{ id } groups{ group{ id } } paths{ screenshot } "
          "stash_ids{ endpoint stash_id } created_at files{ path } } }")
     return gql(q, {"id": str(sid)}).get("findScene")
 
@@ -519,12 +519,18 @@ def find_by_stash_id(gql, endpoint, stash_id, exclude_id=None):
     except Exception as e:
         log(f"stash-id reverse lookup {stash_id}: {e}")
         return None
+    hits = []
     for p in rows:
         if str(p["id"]) == str(exclude_id): continue
         for s in (p.get("stash_ids") or []):
             if s.get("endpoint") == endpoint and s.get("stash_id") == stash_id:
-                return str(p["id"])
-    return None
+                hits.append(str(p["id"]))
+                break
+    if len(hits) > 1:
+        # 同一个源演员在本地被建成了多个对象（历史重复），只取首条会与另一个插件
+        # 的选取结果不一致，同一个人就被挂到同一个场景上两次
+        log(f"stash-id {stash_id}: {len(hits)} local performers carry it {hits}, using {hits[0]}")
+    return hits[0] if hits else None
 
 def get_stashbox_api_key(gql, endpoint):
     """ApiKey of the configured stash-box endpoint. Newer Stash exposes
@@ -644,16 +650,31 @@ def create_performer(gql, name, stash_ids=None, cand=None, ow=None):
         log(f"performer create '{name}' failed: {e}")
         return None
 
-def resolve_performer(gql, name, rid, src):
+def scene_performer_rids(scene, src):
+    """源编号 → 场景上已有的本地演员 id。同一源演员在库里被拆成多个对象时，
+    stash_id 反查只返回首条，可能不是场景上已有的那一个；先认场景已有的，
+    否则「同一个人」的另一个对象也会被挂到同一个场景上。"""
+    ep = (src or JAV).strip().lower()
+    out = {}
+    for p in (scene or {}).get("performers") or []:
+        for s in (p.get("stash_ids") or []):
+            if (s.get("endpoint") or "").strip().lower() == ep and s.get("stash_id"):
+                out[str(s["stash_id"]).strip().lower()] = str(p.get("id"))
+    return out
+
+def resolve_performer(gql, name, rid, src, scene_rids=None):
     """Unified performer resolution for scene fill (hook and backfill share this):
-    stash-id reverse lookup first -> reuse; else create with the stash_id attached
-    (details are filled afterwards by the async performer hook); no stash-id ->
-    name/alias reuse (dedup) or create blank. Returns a performer id or None."""
+    scene's own performer first (same source id) -> stash-id reverse lookup -> reuse;
+    else create with the stash_id attached (details are filled afterwards by the
+    async performer hook); no stash-id -> name/alias reuse (dedup) or create blank.
+    Returns a performer id or None."""
     name = (name or "").strip()
     if not name: return None
     rid = (rid or "").strip()
     ep = (src or JAV).strip()
     if rid and ep.startswith("http"):
+        pid = (scene_rids or {}).get(rid.lower())
+        if pid: return str(pid)
         pid = find_by_stash_id(gql, ep, rid)
         if pid: return str(pid)
         return create_performer(gql, name, stash_ids=[(ep, rid)])
@@ -842,21 +863,23 @@ def apply_scene_fill(gql, sid, scene, sc, src, ow=None):
         st = sc.get("studio") or {}
         sid_studio = st.get("stored_id") or find_or_create_studio(gql, st.get("name"))
         if sid_studio: upd["studio_id"] = sid_studio
-    # performers: unified resolution (stash-id reverse lookup first -> reuse; else
-    # create carrying the stash_id; no stash-id -> name/alias reuse or create blank).
+    # performers: unified resolution (scene's own performer with the same source id ->
+    # reuse; else stash-id reverse lookup -> reuse; else create carrying the stash_id;
+    # no stash-id -> name/alias reuse or create blank).
     # Merge-dedup by default; ow["other"] replaces the scene's set with the scraper's.
     existing_pids = {str(p["id"]) for p in (scene.get("performers") or [])}
+    scene_rids = scene_performer_rids(scene, src)
     if ow.get("other"):
         want_pids = set()
         for p in (sc.get("performers") or []):
-            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
+            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src, scene_rids)
             if pid: want_pids.add(str(pid))
         if want_pids and want_pids != existing_pids:
             upd["performer_ids"] = sorted(want_pids, key=int)
     else:
         want_pids = set(existing_pids)
         for p in (sc.get("performers") or []):
-            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src)
+            pid = resolve_performer(gql, p.get("name"), p.get("remote_site_id"), src, scene_rids)
             if pid: want_pids.add(str(pid))
         if want_pids != existing_pids:
             upd["performer_ids"] = sorted(want_pids, key=int)

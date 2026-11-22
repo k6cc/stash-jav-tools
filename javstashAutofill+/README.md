@@ -33,7 +33,7 @@
 - **延迟填充**：Scene.Create.Post 触发后不立即写入，spawn detached 进程等待 sceneFillDelay 再重查场景，给 NFO 解析插件留足写入时间。标量空才填；无 NFO 的用户开「覆盖标题」开关。
 - **标量空才填**：title / code / details / director / date。
 - **studio**：仅当场景无 studio 时按名找/建。
-- **performers / tags / urls**：与本地已有值合并去重（场景演员按 stash_id 反查或按名 find-or-create，新建演员触发演员 hook 补全）。
+- **performers / tags / urls**：与本地已有值合并去重（场景演员先认场景上已挂的同源演员，再按 stash_id 反查，最后按名 find-or-create，新建演员触发演员 hook 补全）。
 - **系列/合集**：scraper 返回的 groups 按名 find-or-create，追加到场景。
 - **封面**：单独提交（主 sceneUpdate 不携带 cover_image，Windows blob 文件锁失败只影响封面）；写封面前重读场景，仅当截图时间戳仍等于 created_at 才写入；瞬时 blob 锁错误按 1s/2s/4s 退避重试。
 - **stash_id**：追加到 `stash_ids`，不覆盖其他端点。

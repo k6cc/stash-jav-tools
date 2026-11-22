@@ -27,7 +27,7 @@ stash-testkit/
 │   ├── stashDiscover/       # 发现页/弹窗/Jackett/TPDB 链路验证（文档分层 + scripts/ 放全部脚本，入口 NOTES.md）
 │   ├── ImageMetaSync/       # 图库图片元数据回填：E2E/兜底/锁队列/全库审计（入口 NOTES.md）
 │   ├── tagMerge/            # tagMerge 映射维护：业务语义 + scripts/ 工具（入口 NOTES.md）
-│   └── SceneBackfill/         # 补档：状态机/规则语义/实测坑 + scripts/ 一键验收（入口 NOTES.md）
+│   └── SceneBackfill/         # 补档：状态机/规则语义/入库路径语义/实测坑 + scripts/ 一键验收（入口 NOTES.md）
 └── _archive/               # 历史排查结论/一次性验证报告（深查时再翻）
 ```
 
@@ -64,6 +64,8 @@ stash-testkit/
 
 - **测试视频内容必须唯一**：复制已有文件会被 oshash 合并进旧场景，扫描表现为"空跑"。`gen_test_video.py` 用不同信号源/尺寸/帧率保证。
 - **别造无文件裸场景测新场景插件**：`create_scene()` 建无文件场景会让 nfoSceneParser 等 `Scene.Create.Post` 插件 `IndexError: files[0]`。依赖文件的测试必须走"真实视频 + 增量扫描"。
+- **`sceneMerge` 不触发任何插件 hook**：只迁文件 + `values.custom_fields`，源场景销毁、目的场景标量字段不动。所以"靠合并拿到文件"的场景不会惊动 `Scene.Update.Post` 类插件（sceneGallerySync 就不会自动建库），而 `Scene.Create.Post` 类插件看到的只是扫描时那个 2–6 s 的临时场景。
+- **扫描入库的合并只由 SceneBackfill 自己的 import 发起**：手工 `trigger_scan`、手工把文件搬到库里别处，都不会合并、不自愈，结果是两个同 `stash_id` 的场景 + 原场景永远 `file_count=0`（路径与各插件反应见 `tests/SceneBackfill/SEMANTICS.md`）。
 - **封面"是否仍为自动帧"判别**：`screenshot?t=` 是场景 `updated_at` 的 epoch；`?t= == created_at` ⇔ 场景创建后无人写过任何元数据。
 - **封面内容验证**：`fetch_scene_image()` 抓 screenshot 端点字节，与本地封面文件比对即可判定"封面被谁写了"。
 - **Stash `logs` 查询返回新→旧**：Python 任务写 marker → 前端轮询日志的协议，正序扫描第一个匹配 marker 即最新一条（倒序恰好取到最旧）。

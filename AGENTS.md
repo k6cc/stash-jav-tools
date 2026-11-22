@@ -98,6 +98,19 @@ return max(LO, min(HI, v))
 - 前端读 yml 数值用 `toNum(v, dflt)`（`parseInt` + `isNaN` 兜底），不要直接 `Number(v)`。
 - 改了设置项类型要提醒用户「重载插件 + Ctrl+F5」，旧页面会按旧控件渲染。
 
+## 跨插件约定（场景合并标记）
+
+多个插件都在 `Scene.Create.Post` / `Scene.Update.Post` 之后延迟几十秒再干活（等扫描、等 nfo 写完）。而扫描入库的临时场景几秒内就会被 SceneBackfill 合并进原场景，延迟期间做的工作全部作废。所以约定一组自定义字段做信号，别再靠猜时间：
+
+| 字段 | 写在哪 | 谁写 | 谁读 |
+|---|---|---|---|
+| `sb_merge_to` / `sb_merge_at` | 合并失败的临时场景 | SceneBackfill | nfoSceneParser、sceneGallerySync、javstashAutofill+、sceneTranslateAuto |
+| `sb_merged_from` / `sb_merged_at` | 接收文件的原场景 | SceneBackfill（merge 的 `values`） | 诊断用 |
+
+- **只在合并失败时写**：成功路径不该为标记多一次 mutation（`sceneUpdate` 会额外触发一轮 `Scene.Update.Post`）。
+- 读取方拿到 `sb_merge_to` 就跳过并报一行，别补元数据；标记随临时场景删除，不需要清理逻辑。
+- 新增延迟型插件时复用这套字段，不要另起前缀；tag 维度的插件（tagMergeAuto）不适用。
+
 ## 专题规范（按需 Read，不每次必读）
 
 - **改带 UI 的插件 `.js` 前**：读 `docs/reference/ui-guidelines.md`（按钮语义/状态切换/搜索框/幂等守卫/窄屏/i18n）。纯后台 Python 插件不适用。

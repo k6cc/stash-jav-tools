@@ -7,6 +7,7 @@
 
 | 文件 | 用途 |
 |---|---|
+| [SEMANTICS.md](SEMANTICS.md) | 入库路径语义：谁负责合并、手工扫描/搬文件的后果、临时场景上各插件的反应、`sb_merge_to` 标记 |
 | `scripts/sf_verify.py` | 一键验收：selftest + 规则回读 + 下载器连接 + 守护心跳 + state 状态机巡检（只读） |
 | `../../plugin_op.py` | 任意插件跑 `runPluginOperation`，参数走 JSON（多行规则/正则在 shell 里必被吃引号） |
 | `../../state_snapshot.py` | `plugin-data/<id>/state.json` 快照/还原；改状态做 UI 验证前先 snap |
@@ -35,6 +36,7 @@ python stash-testkit/ui_probe.py --path /plugins/SceneBackfill \
 
 ## 硬约束（都踩过）
 
+- **入库只认自己那次扫描**：手工扫描、手工把文件搬到库里别处，都不会合并也不会自愈，结果是库里两个同 `stash_id` 场景、原场景永远 `file_count=0`（各路径的完整后果见 [SEMANTICS.md](SEMANTICS.md)）。
 - **数据目录是 `plugin-data`（连字符）**：写成 `plugin_data` 会凭空多出第二个目录，两边的 state 各写各的。
 - **`configurePlugin` 是整体替换**：只传一个键会把其余设置全清空（qB 密码这类不可恢复）→ 读出整份、改一项、整份回传。
 - **布尔 `false` 参数会被当成"没传"**：后端写 `str(args.get(k,"") or "")` 时 `False or ""` 得空串，开关只能开不能关。

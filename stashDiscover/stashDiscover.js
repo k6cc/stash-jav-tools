@@ -2090,14 +2090,19 @@
     return callGQL(
       "query{findPerformers(filter:{per_page:-1}){performers{id name image_path alias_list stash_ids{endpoint stash_id}}}}"
     ).then(function (data) {
-      var idx = { byStashId: {}, byName: {}, byAlias: {}, at: Date.now() };
+      var idx = { byStashId: {}, byStashIdAll: {}, byName: {}, byAlias: {}, at: Date.now() };
       (((data || {}).findPerformers || {}).performers || []).forEach(function (p) {
         if (!p || !p.id) return;
         var rec = { id: p.id, name: p.name, image_path: p.image_path,
                     stash_ids: p.stash_ids || [], aliases: p.alias_list || [] };
         (p.stash_ids || []).forEach(function (sid) {
           if (sid && sid.stash_id && String(sid.endpoint || "").toLowerCase() === ep) {
-            idx.byStashId[String(sid.stash_id).toLowerCase()] = rec;
+            var k = String(sid.stash_id).toLowerCase();
+            idx.byStashId[k] = rec;
+            // 同一个源编号挂在两个本地演员上（库里的历史重复对象）时不能只留最后一条：
+            // 入库要按源里的名字挑对那一个，见 pickDupByStashId
+            (idx.byStashIdAll[k] = idx.byStashIdAll[k] || []);
+            pushUniq(idx.byStashIdAll[k], rec);
           }
         });
         var nk = normName(p.name);
@@ -2118,9 +2123,33 @@
 
   function indexRemember(idx, rec, endpoint, stashId) {
     if (!idx || !rec) return;
-    idx.byStashId[String(stashId).toLowerCase()] = rec;
+    var k = String(stashId).toLowerCase();
+    idx.byStashId[k] = rec;
+    if (idx.byStashIdAll) { (idx.byStashIdAll[k] = idx.byStashIdAll[k] || []); pushUniq(idx.byStashIdAll[k], rec); }
     var nk = normName(rec.name);
     if (nk) { (idx.byName[nk] = idx.byName[nk] || []); pushUniq(idx.byName[nk], rec); }
+  }
+
+  // 同一源编号命中多个本地演员（库里同一人被建成了两个对象）：优先挑名字/别名与源
+  // 演员一致的那个，都不一致才退回索引里的最后一条（旧行为），并留一条控制台记录。
+  // 不这样挑，两个插件会各取一条，同一个人就被挂到同一个场景上两次。
+  function pickDupByStashId(idx, boxPerf, stashId, fallback) {
+    var recs = (idx.byStashIdAll && idx.byStashIdAll[String(stashId).toLowerCase()]) || [];
+    if (recs.length < 2) return fallback;
+    var want = {};
+    nameVariants(boxPerf.name).forEach(function (n) { want[normName(n)] = 1; });
+    (boxPerf.aliases || []).forEach(function (n) { want[normName(n)] = 1; });
+    // 主名优先：两边互为别名时（本文这例就是），只按别名判会挑错人
+    var byName = recs.filter(function (r) { return want[normName(r.name)]; });
+    var byAlias = recs.filter(function (r) {
+      return (r.aliases || []).some(function (a) { return want[normName(a)]; });
+    });
+    var pick = byName.length === 1 ? byName[0]
+             : byAlias.length === 1 ? byAlias[0] : fallback;
+    console.warn("[SSD] stash-id " + stashId + " 命中 " + recs.length + " 个本地演员（" +
+      recs.map(function (r) { return r.id + " " + r.name; }).join(" / ") +
+      "），本次关联 " + pick.id + " " + pick.name);
+    return pick;
   }
 
   // 同源 id 打架才算「不同人」：stash_ids 本来就是多源数组，身上同时挂 stashdb
@@ -2138,7 +2167,7 @@
     var ep = String(endpoint || "").toLowerCase();
     var sid = String(boxPerf.id || "");
     var hit = idx.byStashId[sid.toLowerCase()];
-    if (hit) return { boxId: sid, name: boxPerf.name, how: "id", rec: hit };
+    if (hit) return { boxId: sid, name: boxPerf.name, how: "id", rec: pickDupByStashId(idx, boxPerf, sid, hit) };
 
     var byName = [];
     nameVariants(boxPerf.name).forEach(function (n) {

@@ -51,6 +51,14 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 | 任务「Full Scan & Translate」 | 任务列表页手动点击 | 全库分页扫描存量场景 → 按 `batchSize` 分组并发 + 限速 → 批量写回（不经过入队延迟；关联图库按开关同步；缓存跳过已翻译，可中断重跑） |
 | 任务「Full Scan (Preview)」 | 任务列表页手动点击 | dry-run 审计：仅分页扫描统计需翻译的场景/图库数量，**不调用翻译 API、不写回任何字段**；摘要输出到 Stash 任务日志，全量目标清单（scene id + 标题预览 + 关联图库）写入插件日志文件 `scene_translate_auto.log`，供跑全量前评估规模 |
 
+## 日志
+
+| 位置 | 内容 |
+|---|---|
+| Stash 日志页（前缀 `[Plugin / Scene Translate Auto]`） | 钩子入队（含延迟秒数）、每个场景的处理结果（翻译了什么 / 无需翻译 / 失败原因，失败行标注 `see dead_letter.jsonl`） |
+| 插件日志文件 `scene_translate_auto.log` | 排查信息：写回被丢弃或重译、图库报错、全量任务进度与 dry-run 目标清单 |
+| 失败台账 `auto_state/dead_letter.jsonl` | 翻译失败的场景/图库逐条留档（时间、id、原因）；插件不会自动重试——改回非目标语言触发钩子，或跑一次「Full Scan & Translate」即可重跑 |
+
 ## 核心机制
 
 **语言判断**（预检，启发式无网络；目标语言 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`ru`/`ar`/`fr`/`de`/`es`/`pt`/`it`）：
@@ -81,7 +89,7 @@ Stash 纯后台插件（`interface: raw`，不注入任何页面脚本/样式）
 - 防循环：写回后再次触发 `Scene.Update.Post` → 语言复检（`is_target_language`）拦截，闭环终止
 - 后台 worker 单例（pid 锁），同时只跑一个消费进程，低功耗设备友好
 
-**限速与断点**：令牌桶按引擎 QPS 限速（baidu 免费版 QPS=1，勿调高）；翻译缓存按原文快照比对（内容一致跳过，用户改回非目标语言会重新翻译）；失败场景记入 `auto_state/dead_letter.jsonl`（含原因，可查可重跑）。
+**限速与断点**：令牌桶按引擎 QPS 限速（baidu 免费版 QPS=1，勿调高）；翻译缓存按原文快照比对（内容一致跳过，用户改回非目标语言会重新翻译）；失败场景记入 `auto_state/dead_letter.jsonl`（含原因），Stash 日志页的失败行末尾标注该文件——插件不自动重试，重跑见「日志」表。
 
 ## 文件说明
 

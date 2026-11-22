@@ -12,6 +12,12 @@ Scene Translate Auto v1.3.1: 自动翻译场景标题/简介为目标语言（sc
   + 限速 + 断点续扫（缓存跳过），不经过入队延迟。
 - 任务 "Full Scan (Preview)"（手动触发，dry-run）：仅扫描审计需翻译的场景/图库数量，
   不调用翻译 API、不写回；摘要输出到 Stash 任务日志，全量目标清单写入插件日志文件。
+- 进度可见：hook 入队、worker 每个任务的处理结果（成功/失败/跳过）各写一行到 Stash 日志页
+  （`[Plugin / Scene Translate Auto]`）。worker 是 detach 子进程，自己的 stderr 只进
+  worker.log，进不了 Stash 日志，因此靠 runPluginOperation(mode=report) 让 Stash 再拉起
+  一次本插件把报告打到 stderr。
+- 失败台账：失败场景/图库写入 auto_state/dead_letter.jsonl（时间/id/原因），失败报告行末尾
+  标注该文件；插件不自动重试，重跑靠重新触发钩子或全量任务。
 - 语言判断：番号全文匹配跳过；含假名文本按汉字/假名占比判定——假名占优/纯日文判日文，
   汉字占优（汉字数 > 假名数 且 汉字 ≥ 2）判已译（中文）；含 CJK 无假名判已译（中文）；
   含谚文判韩语；
@@ -162,13 +168,74 @@ def merged_settings(stash_cfg):
 
 # ─── 日志 ─────────────────────────────────────────────────────────────────────
 
-def log(msg):
-    line = "%s [sta-backend] %s" % (datetime.datetime.now().isoformat(), msg)
+_bom_checked = False
+
+
+def _ensure_bom():
+    """旧日志文件（无 BOM）补一次 BOM：Windows 记事本 / PowerShell 5.1 的默认编码是
+    ANSI(GBK)，没有 BOM 会把整份 UTF-8 日志按 GBK 解码，日文变乱码。只在进程首次写日志
+    时做一次；文件被别处占用（os.replace 失败）时跳过，下次再试。"""
+    global _bom_checked
+    if _bom_checked:
+        return
+    _bom_checked = True
     try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        if not os.path.exists(LOG) or os.path.getsize(LOG) == 0:
+            return
+        with open(LOG, "rb") as f:
+            if f.read(3) == b"\xef\xbb\xbf":
+                return
+        with open(LOG, "rb") as f:
+            data = f.read()
+        tmp = "%s.%d.bomtmp" % (LOG, os.getpid())
+        with open(tmp, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + data)
+        os.replace(tmp, LOG)
+    except Exception:
+        try:
+            os.unlink("%s.%d.bomtmp" % (LOG, os.getpid()))
+        except OSError:
+            pass
+
+
+def _append_raw(path, data):
+    """把一段字节一次性追加到文件末尾（O_APPEND + 单次 os.write）。
+
+    hook 进程、detach worker、全量扫描线程会同时写同一批文件：分块写会让两边的字节
+    交错，UTF-8 多字节字符被撕开就成了乱码。一次写完整段即可避免。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0))
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
     except Exception:
         pass
+
+
+def _append_line(line):
+    """日志文件写整行：先按需补 BOM，再单次追加。
+
+    首次创建文件时带 UTF-8 BOM，Windows 编辑器 / PowerShell 才不会按 GBK 解码整份日志。"""
+    data = (line + "\n").encode("utf-8", "replace")
+    _ensure_bom()
+    try:
+        new_file = not os.path.exists(LOG) or os.path.getsize(LOG) == 0
+    except OSError:
+        new_file = False
+    _append_raw(LOG, (b"\xef\xbb\xbf" if new_file else b"") + data)
+
+
+def short(text, limit=80):
+    """日志里的标题/简介预览：压掉换行并截断，避免一行上千字被撕开成乱码。"""
+    t = (text or "").replace("\r", " ").replace("\n", " ")
+    return t if len(t) <= limit else t[:limit] + "…"
+
+
+def log(msg):
+    line = "%s [sta-backend] %s" % (datetime.datetime.now().isoformat(), msg)
+    _append_line(line)
     try:
         sys.stderr.write(line + "\n")
         sys.stderr.flush()
@@ -187,12 +254,7 @@ def log_progress(p):
 
 def log_audit(msg):
     """dry-run 审计明细：仅写插件日志文件，不输出到 stderr（避免 Stash 任务日志刷屏）。"""
-    line = "%s [sta-audit] %s" % (datetime.datetime.now().isoformat(), msg)
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    _append_line("%s [sta-audit] %s" % (datetime.datetime.now().isoformat(), msg))
 
 
 # ─── GraphQL ──────────────────────────────────────────────────────────────────
@@ -259,6 +321,36 @@ Q_SCENES_PAGE = ("query($filter: FindFilterType!, $scene_filter: SceneFilterType
                  "id title details galleries { id title details } } } }")
 M_SCENE_UPDATE = "mutation($i: SceneUpdateInput!){ sceneUpdate(input:$i){ id title details } }"
 M_GALLERY_UPDATE = "mutation($i: GalleryUpdateInput!){ galleryUpdate(input:$i){ id title details } }"
+M_PLUGIN_OP = "mutation($id: ID!, $a: Map!){ runPluginOperation(plugin_id: $id, args: $a) }"
+PLUGIN_ID = "sceneTranslateAuto"
+
+
+class Reporter:
+    """把 worker 的处理结果写进 Stash 服务器日志。
+
+    worker 是 detach 子进程，它的 stderr 只落到 worker.log，Stash 日志页看不到，
+    于是 hook 之后做什么全靠用户翻文件。Stash 只把「自己拉起的插件进程」的 stderr
+    收进日志（`[Plugin / Scene Translate Auto]`），所以这里反向调一次
+    runPluginOperation（mode=report）：Stash 临时拉起本插件，插件把文本打到 stderr，
+    报告就出现在日志页里。上报失败只记插件日志，不影响翻译本身。"""
+
+    def __init__(self):
+        self._gql = None
+        self._failed = 0
+
+    def send(self, conn, text):
+        try:
+            if self._gql is None:
+                self._gql = make_gql(conn)
+            self._gql(M_PLUGIN_OP, {"id": PLUGIN_ID, "a": {"mode": "report", "text": text}},
+                      timeout=20)
+            self._failed = 0
+            return True
+        except Exception as e:
+            self._failed += 1
+            if self._failed <= 3:
+                log("report to stash log failed: %s" % e)
+            return False
 
 
 def read_stash_plugin_config(gql):
@@ -649,14 +741,11 @@ def cache_hit(cache, sid, title, details, cache_hours):
 
 
 def log_dead(sid, reason):
-    try:
-        os.makedirs(os.path.dirname(DEAD_FILE), exist_ok=True)
-        with open(DEAD_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"at": datetime.datetime.now().isoformat(),
-                                "scene_id": str(sid), "reason": str(reason)},
-                               ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    """失败台账：一行一条 JSON（时间 / 场景或图库 id / 原因），只追加不清理。
+    不带 BOM（机器读），人看就是纯文本。"""
+    _append_raw(DEAD_FILE, (json.dumps({"at": datetime.datetime.now().isoformat(),
+                                        "scene_id": str(sid), "reason": str(reason)},
+                                       ensure_ascii=False) + "\n").encode("utf-8", "replace"))
 
 
 # ─── 单实体翻译 + 写回 ───────────────────────────────────────────────────────
@@ -732,11 +821,11 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
         if cur_v != orig_v:
             if is_target_language(cur_v, target, code_pat):
                 log("%s %s %s changed since read (%r -> %r), field write dropped"
-                    % (kind, eid, f, orig_v, cur_v))
+                    % (kind, eid, f, short(orig_v), short(cur_v)))
                 del updates[f]
             else:
                 log("%s %s %s changed since read (%r -> %r), re-translating current value"
-                    % (kind, eid, f, orig_v, cur_v))
+                    % (kind, eid, f, short(orig_v), short(cur_v)))
                 del updates[f]
                 retranslate[f] = cur_v
     # 重译一轮（限 1 次：用当前值重新翻译，不再重读；结果校验后写回，失败则放弃该字段）
@@ -764,7 +853,8 @@ def translate_entity(gql, kind, eid, title, details, settings, cache, limiter):
             if new2 and new2 != orig2 and is_target_language(new2, target, code_pat):
                 updates[f] = new2
             else:
-                log("%s %s %s re-translate rejected (%r -> %r)" % (kind, eid, f, orig2, new2))
+                log("%s %s %s re-translate rejected (%r -> %r)"
+                    % (kind, eid, f, short(orig2), short(new2)))
     if not updates:
         return None
     if kind == "gallery":
@@ -875,17 +965,19 @@ def spawn_worker():
 
 
 def process_task(conn, sid, settings, limiter):
+    """处理一个待翻译场景（含关联图库），返回一行给人看的报告文本。"""
     gql = make_gql(conn)
     scene = find_scene(gql, sid)
     if not scene:
         log("scene %s not found, dropped" % sid)
-        return
+        return "scene %s skipped: not found" % sid
     cache = load_cache()
     updates = translate_entity(gql, "scene", sid, scene.get("title"), scene.get("details"),
                                settings, cache, limiter)
     if updates:
         log("scene %s translated: %s" % (sid, ",".join(updates.keys())))
     g_ok = 0
+    g_failed = 0
     if settings.get("gallerySync"):
         for g in scene.get("galleries") or []:
             gid = g.get("id")
@@ -898,12 +990,28 @@ def process_task(conn, sid, settings, limiter):
                     g_ok += 1
                     log("gallery %s translated: %s" % (gid, ",".join(gu.keys())))
             except Exception as e:
+                g_failed += 1
                 log("gallery %s error: %s" % (gid, e))
                 log_dead("g:%s" % gid, e)
     if updates or g_ok:
         save_cache(cache)
     if not updates and not g_ok:
         log("scene %s nothing to translate" % sid)
+        text = "scene %s skipped: nothing to translate" % sid
+        if g_failed:
+            text += " (%d gallery failed, see dead_letter.jsonl)" % g_failed
+        return text
+    detail = []
+    if updates:
+        detail.append(",".join(sorted(updates)))
+    if g_ok:
+        detail.append("%d gallery" % g_ok)
+    text = "scene %s translated: %s" % (sid, ", ".join(detail))
+    if updates.get("title"):
+        text += " 「%s」" % short(updates["title"], 40)
+    if g_failed:
+        text += " (%d gallery failed, see dead_letter.jsonl)" % g_failed
+    return text
 
 
 def worker_main():
@@ -915,6 +1023,9 @@ def worker_main():
     settings = None
     limiter = None
     processed = 0
+    failed = 0
+    reporter = Reporter()
+    last_conn = None
     delay = float(DEFAULTS.get("hookDelaySeconds") or 25)
     while True:
         try:
@@ -972,12 +1083,19 @@ def worker_main():
             tf = os.path.join(PENDING_DIR, fn)
             sid = task.get("scene_id")
             conn = task.get("server_connection") or {}
+            last_conn = conn
+            text = None
             try:
-                process_task(conn, sid, settings, limiter)
+                text = process_task(conn, sid, settings, limiter)
                 processed += 1
             except Exception as e:
+                failed += 1
                 log("scene %s error: %s" % (sid, e))
                 log_dead(sid, e)
+                text = "scene %s failed: %s (see dead_letter.jsonl)" % (sid, short(str(e), 160))
+            # 每个任务（成功/失败/跳过）都往 Stash 日志页报一行，避免后台静默
+            if text:
+                reporter.send(conn, text)
             try:
                 os.unlink(tf)
             except OSError:
@@ -990,6 +1108,9 @@ def worker_main():
     except OSError:
         pass
     log("worker finished, processed %d task(s)" % processed)
+    # 单任务已逐条报告过；批量处理时再补一行汇总
+    if processed > 1 and last_conn:
+        reporter.send(last_conn, "worker finished: %d task(s), %d failed" % (processed, failed))
 
 
 # ─── Hook 路径 ───────────────────────────────────────────────────────────────
@@ -1042,6 +1163,11 @@ def handle_hook(payload):
     enqueue_task(conn, sid, title, details)
     if not spawn_worker():
         log("worker already running, task queued")
+    try:
+        delay = int(float(settings.get("hookDelaySeconds") or 25))
+    except Exception:
+        delay = 25
+    log("scene %s queued, translating in %ds" % (sid, delay))
     print(json.dumps({"output": "enqueued scene %s for translation" % sid}))
 
 
@@ -1173,7 +1299,7 @@ def scan_all(payload):
                 except Exception as e:
                     b_scenes_failed += 1
                     log_dead(sid, e)
-                    log("scan_all scene %s error: %s" % (sid, e))
+                    log("scan_all scene %s error: %s (see dead_letter.jsonl)" % (sid, e))
                 for g in galleries or []:
                     gid = g.get("id")
                     if not gid:
@@ -1229,6 +1355,18 @@ def main():
         return
     args = payload.get("args") or {}
     mode = args.get("mode") or payload.get("mode") or "hook"
+    if mode == "report":
+        # Stash 为写日志临时拉起本插件（见 Reporter）：只把文本打到 stderr，
+        # 不写插件日志、不碰网络，保证这个调用足够快
+        text = (args.get("text") or "").strip()
+        if text:
+            try:
+                sys.stderr.write(text + "\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+        print(json.dumps({"output": "ok"}))
+        return
     if mode == "scan_all":
         try:
             r = scan_all(payload)

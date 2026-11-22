@@ -43,7 +43,8 @@ sceneGallerySync 是一个 Stash 插件，在影片扫描入库时自动创建�
 影片扫描 → nfoSceneParser 导入 NFO → Scene.Update.Post 触发
   → 检测 nfoSceneParser 是否启用
   → 查询 scene 路径，前台检查 extrafanart 文件夹
-    → 不存在：钩子立即退出，不启动后台
+    → 场景无文件（binge / stashDiscover 等只写元数据的条目）：跳过
+    → 文件夹不存在：钩子立即退出，不启动后台
     → 存在：写入任务文件到 .sgs_pending/，启动独立后台进程
   → 钩子立即退出（不阻塞扫描）
 
@@ -59,6 +60,7 @@ sceneGallerySync 是一个 Stash 插件，在影片扫描入库时自动创建�
 
 - **不阻塞扫描**：钩子模式使用一次性后台进程，钩子立即退出，不影响 Stash 扫描任务队列
 - **前台早期过滤**：`Scene.Update.Post` 阶段先检查 extrafanart 文件夹，无图库前置条件的 scene（如 `/social/x/` 抓取内容）直接跳过，不启动后台进程，不进行无谓的元数据轮询
+- **无文件场景不报错不刷日志**：只写元数据的场景（binge / stashDiscover 收录的条目）没有文件路径可查，钩子直接退出；这类场景每次被其它插件更新都会触发一次钩子，所以不写日志
 - **stdio 隔离**：后台子进程重定向 stdin/stdout 到 DEVNULL、stderr 到 `.sgs_pending/{scene_id}.log`，避免继承前台的 stash 管道句柄导致 hook 阻塞
 - **nfoSceneParser 依赖**：自动模式仅在 nfoSceneParser 启用时触发，避免无 NFO 数据时创建空图库
 - **进程隔离**：后台进程使用 `start_new_session=True`（Linux/Docker）或 `DETACHED_PROCESS`（Windows），成为独立进程

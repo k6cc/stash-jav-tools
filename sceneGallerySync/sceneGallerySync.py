@@ -57,8 +57,13 @@ class SceneGallerySync:
             # extrafanart 是文件系统状态，不依赖 nfoSceneParser 的元数据写入
             # 无 extrafanart 的 scene（如 /social/x/ 抓取内容）直接跳过，避免启动无谓的后台轮询
             scene = self._stash.gql_findScene(scene_id)
-            if not scene or not scene.get("files"):
-                log.LogWarning(f"Scene {scene_id} not found or no files")
+            if not scene:
+                log.LogWarning(f"Scene {scene_id} not found")
+                return
+            if not scene.get("files"):
+                # 无文件场景（binge / stashDiscover 等只写元数据的条目）每次被更新都会进来一次，
+                # 这里只是无事可做，不是异常，留在 Debug 避免同一场景重复刷 WARN
+                log.LogDebug(f"Scene {scene_id} has no file, skipped")
                 return
             scene_dir = os.path.dirname(scene["files"][0]["path"])
             if not self.__find_extrafanart_folder(scene_dir):

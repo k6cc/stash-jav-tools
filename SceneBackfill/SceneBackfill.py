@@ -3081,7 +3081,7 @@ def _wait_files(qb, h, timeout=15):
     while time.time() < deadline:
         try:
             fs = qb.files(h)
-        except (QBError, Aria2Error):
+        except QBError:
             fs = []
         if fs:
             return fs

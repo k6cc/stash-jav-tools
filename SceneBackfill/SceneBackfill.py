@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.11"
+PLUGIN_VERSION = "0.1.12"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -3926,16 +3926,13 @@ def import_scene_whisparr(ctx, st, sid):
     return _link_scanned_files(ctx, st, sid, [target])
 
 
-# ─── 合并标记（跨插件约定，见 README「合并标记」）────────────────────────
+# ─── 合并标记（跨插件约定，见 AGENTS.md「跨插件约定」）──────────────────
 # 临时场景没合并成功时，把目标场景 id 写进它的自定义字段。其他插件（nfoSceneParser /
 # sceneGallerySync / javstashAutofill+ / sceneTranslateAuto）处理场景前读到这个标记
 # 就跳过：它等的是一个马上要被合并掉的残留，写上去的元数据留不住。
-# 只在失败时写 —— 成功路径零额外请求，也就不用凭空多触发一轮 Scene.Update.Post。
-# 合并成功后标记随临时场景一起删除，不需要清理。
+# 只在失败时写：成功时标记随临时场景一起删除，留不住也没有读取方，所以不写。
 MERGE_TO = "sb_merge_to"
 MERGE_AT = "sb_merge_at"
-MERGED_FROM = "sb_merged_from"
-MERGED_AT = "sb_merged_at"
 
 
 def _now_iso():
@@ -3999,13 +3996,11 @@ def _link_scanned_files(ctx, st, sid, targets):
     if new_scenes:
         try:
             ctx.gql("""
-            mutation($src: [ID!]!, $dst: ID!, $v: SceneUpdateInput!) {
-              sceneMerge(input: {source: $src, destination: $dst, values: $v}) { id }
-            }""", {"src": new_scenes, "dst": sid, "v": {
-                "id": str(sid),
-                "custom_fields": {"partial": {
-                    MERGED_FROM: ",".join(new_scenes), MERGED_AT: _now_iso()}},
-            }})
+            mutation($src: [ID!]!, $dst: ID!) {
+              sceneMerge(input: {source: $src, destination: $dst, values: {id: $dst}}) {
+                id
+              }
+            }""", {"src": new_scenes, "dst": sid})
         except Exception:
             # 合并失败时临时场景会留在库里。给它写上标记，别的插件的延迟 worker
             # 才不会把一个「等合并的残留」当正常新场景补满元数据（补了也会被下一次

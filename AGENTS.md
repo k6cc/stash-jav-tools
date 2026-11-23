@@ -105,10 +105,9 @@ return max(LO, min(HI, v))
 | 字段 | 写在哪 | 谁写 | 谁读 |
 |---|---|---|---|
 | `sb_merge_to` / `sb_merge_at` | 合并失败的临时场景 | SceneBackfill | nfoSceneParser、sceneGallerySync、javstashAutofill+、sceneTranslateAuto |
-| `sb_merged_from` / `sb_merged_at` | 接收文件的原场景 | SceneBackfill（merge 的 `values`） | 诊断用 |
 
-- **只在合并失败时写**：成功路径不该为标记多一次 mutation（`sceneUpdate` 会额外触发一轮 `Scene.Update.Post`）。
-- 读取方拿到 `sb_merge_to` 就跳过并报一行，别补元数据；标记随临时场景删除，不需要清理逻辑。
+- **只在合并失败时写**：成功路径不留标记——临时场景被销毁，没有读取方，写 `values` 只是白搭一次字段迁移。
+- 读取方拿到 `sb_merge_to` 就跳过并报一行，别补元数据；标记随临时场景删除，放弃重试时由写方摘掉。
 - 新增延迟型插件时复用这套字段，不要另起前缀；tag 维度的插件（tagMergeAuto）不适用。
 
 ## 专题规范（按需 Read，不每次必读）

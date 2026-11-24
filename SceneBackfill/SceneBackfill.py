@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.16"
+PLUGIN_VERSION = "1.0.0"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -472,6 +472,8 @@ class QB:
         self.base = downloader_url(cfg).rstrip("/")
         self.user = _settings_str(cfg, "downloaderUsername")
         self.pw = downloader_key(cfg)
+        # 一个字段两种凭据：qB 5.2+ 的 API 密钥以 qbt_ 开头，直接走 Bearer
+        self.key = self.pw.strip() if _is_api_key(self.pw) else ""
         self.cookie = None
         self.version = ""
         self.opener = urllib.request.build_opener(
@@ -485,7 +487,9 @@ class QB:
         h = {"Referer": self.base}
         if headers:
             h.update(headers)
-        if self.cookie:
+        if self.key:
+            h["Authorization"] = "Bearer " + self.key
+        elif self.cookie:
             h["Cookie"] = self.cookie
         req = urllib.request.Request(url, data=data, headers=h,
                                      method="POST" if data is not None else "GET")
@@ -500,6 +504,13 @@ class QB:
     def login(self):
         if not self.base:
             raise QBError("qBittorrent URL is empty")
+        if self.key:
+            # 密钥方式没有登录往返，用一次版本查询代替（顺带验证密钥）
+            status, text, _ = self._req("/api/v2/app/version")
+            if status != 200:
+                raise QBError(f"API key rejected (HTTP {status}); keys need qB 5.2+")
+            self.version = text.strip()
+            return self.version
         body = urllib.parse.urlencode({"username": self.user, "password": self.pw}).encode()
         status, text, headers = self._req("/api/v2/auth/login", data=body, headers={
             "Content-Type": "application/x-www-form-urlencoded"})
@@ -524,6 +535,21 @@ class QB:
 
     def post(self, path, data):
         return self.api(path, data=urllib.parse.urlencode(data).encode())
+
+    def drop_tag(self, tag):
+        """Remove a tag definition, on the 5.x name and the 4.x one.
+
+        Old versions of this plugin tagged every task with `sb:<sceneId>`, so
+        qB accumulated one label per scene even after the torrent was gone.
+        """
+        if not tag:
+            return
+        for path in ("/api/v2/torrents/deleteTags", "/api/v2/torrents/removeTags"):
+            try:
+                self.post(path, {"tags": tag})
+                return
+            except QBError:
+                continue
 
     # -- torrents --
     def add_torrent(self, raw_bytes, name, savepath, category, tags, stopped=True,
@@ -1326,6 +1352,11 @@ def downloader_key(cfg):
     return _settings_str(cfg, "downloaderKey")
 
 
+def _is_api_key(v):
+    """qB 5.2+ API keys start with qbt_; the password field carries both."""
+    return str(v or "").strip().lower().startswith("qbt_")
+
+
 def _settings_str(cfg, key, default=""):
     v = cfg.get(key)
     if v is None:
@@ -1345,6 +1376,17 @@ def net_timeout(cfg, default=120):
     except ValueError:
         v = default
     return max(10, min(600, v))
+
+
+def _drop_tag(qb, sid):
+    """Best-effort: only the qB adapter has tags; aria2 has none."""
+    fn = getattr(qb, "drop_tag", None)
+    if not fn:
+        return
+    try:
+        fn(f"sb:{sid}")
+    except Exception:
+        pass
 
 
 def settings_view(cfg):
@@ -2106,13 +2148,23 @@ def do_selftest(ctx):
                        "ok": bool(ok), "detail": detail, "hint": hint})
 
     # 1. 下载器
-    qb_ver, qb_err = "", ""
+    qb_ver, qb_err, qb_hint = "", "", ""
     dname = downloader_name(cfg)
     dlc = None
     try:
         dlc = make_downloader(cfg)
         qb_ver = f"{dname} {dlc.login()}"
-        add("qb", "下载器", "Downloader", True, qb_ver)
+        if downloader_kind(cfg) == "qb":
+            qb_ver = f"{urllib.parse.urlparse(dlc.base).netloc} · {qb_ver}"
+            if _is_api_key(downloader_key(cfg)):
+                qb_ver += t_(ctx, "（API 密钥）", " (API key)")
+            try:
+                dl_sp = str((json.loads(dlc.api("/api/v2/app/preferences")) or {}).get("save_path") or "")
+                if dl_sp:
+                    qb_hint = t_(ctx, f"默认保存路径 {dl_sp}", f"Default save path {dl_sp}")
+            except Exception:
+                pass
+        add("qb", "下载器", "Downloader", True, qb_ver, qb_hint)
     except Exception as e:
         qb_err = str(e)
         add("qb", "下载器", "Downloader", False, qb_err,
@@ -2544,6 +2596,19 @@ def do_capture(ctx):
     return {"total": total, "scenes": scenes, "counts": counts}
 
 
+def _scene_exists(ctx, sid):
+    """False only when Stash answers that the scene is gone.
+
+    A query error keeps the record: dropping a scene from state because Stash
+    hiccuped would lose its search history and the pushed task.
+    """
+    try:
+        data = ctx.gql("query($id:ID!){findScene(id:$id){id}}", {"id": str(sid)})
+    except Exception:
+        return True
+    return bool(data.get("findScene"))
+
+
 def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
     """Refresh the empty-scene list and fold it into state. Returns (total, rows)."""
     data = ctx.gql(CAPTURE_QUERY, {"n": limit})
@@ -2601,6 +2666,26 @@ def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
     for sid, sec in fetch_durations(ctx, want, st, dur_budget).items():
         st["scenes"][sid]["duration"] = sec
 
+    # Forget records whose scene was deleted: they used to keep being searched
+    # and re-pushed long after the user removed the empty scene. Only do this
+    # when the whole empty-scene list fit in one query -- with a truncated list
+    # an absent id proves nothing. Tasks already pushed are left alone so their
+    # progress rows do not vanish on their own.
+    seen = {sid for sid, _s, _rec, _status in keep}
+    if (node.get("count") or 0) <= limit:
+        pruned = 0
+        for sid in list(st["scenes"]):
+            rec = st["scenes"][sid]
+            if sid in seen or pruned >= 50:
+                continue
+            if rec.get("status") not in ("captured", "no_result", "low_confidence",
+                                         "matched"):
+                continue
+            if _scene_exists(ctx, sid):
+                continue
+            st["scenes"].pop(sid, None)
+            pruned += 1
+
     scenes = []
     for sid, s, rec, status in keep:
         scenes.append({
@@ -2626,6 +2711,7 @@ def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
             "screen": rec.get("screen") or None,
             "candidates": rec.get("candidates") or [],
             "chosen": rec.get("chosen") or None,
+            "hold": bool(rec.get("holdAt")),
             "error": rec.get("error") or "",
         })
     return node.get("count") or 0, scenes
@@ -3107,7 +3193,10 @@ def push_scene(ctx, st, sid, idx, file_index=""):
         raise RuntimeError(t_(ctx, "该候选没有可用的种子或磁力链接", "No torrent or magnet for this candidate"))
 
     savepath = s["savePath"] or "/downloads"
-    tags = f"sb:{sid}"
+    # No per-scene tag: qB keeps tag definitions forever, so one per scene left
+    # a hundred unused labels behind after a hundred downloads. The category
+    # already groups these tasks.
+    tags = ""
     rules = get_rules(st)
     if torrent_bytes:
         # The .torrent carries its own file list, so the pick is decided before
@@ -3148,6 +3237,8 @@ def push_scene(ctx, st, sid, idx, file_index=""):
     }
     rec["status"] = "pushed"
     rec["pushedAt"] = int(time.time())
+    # A manual push resumes automation for this scene.
+    rec.pop("holdAt", None)
     rec.pop("error", None)
     return {"ok": True, "hash": h, "picked": picked, "sceneId": sid}
 
@@ -3327,11 +3418,14 @@ def do_torrent(ctx):
         qb.start(h)
     elif action == "remove":
         # Keep the torrent's own data: this only drops it from qB's list so the
-        # slot is free for another candidate.
+        # slot is free for another candidate. holdAt keeps auto-push from
+        # putting the same release straight back.
         qb.delete(h, delete_files=False)
+        _drop_tag(qb, sid)
         rec.pop("chosen", None)
         rec.pop("pushedAt", None)
         rec["status"] = "matched" if rec.get("candidates") else "captured"
+        rec["holdAt"] = int(time.time())
         save_state(ctx, st)
     else:
         raise RuntimeError(f"unknown action: {action}")
@@ -3364,9 +3458,11 @@ def _torrent_bulk(ctx, st, action, ids=None):
         # a release; the files on disk stay.
         qb.delete(hashes, delete_files=False)
         for _sid, _h, rec in rows:
+            _drop_tag(qb, _sid)
             rec.pop("chosen", None)
             rec.pop("pushedAt", None)
             rec["status"] = "matched" if rec.get("candidates") else "captured"
+            rec["holdAt"] = int(time.time())
         save_state(ctx, st)
         return {"ok": True, "action": action, "count": len(hashes)}
     if action == "remove_missing":
@@ -3378,9 +3474,11 @@ def _torrent_bulk(ctx, st, action, ids=None):
         for sid, h, rec in rows:
             if h in live:
                 continue
+            _drop_tag(qb, sid)
             rec.pop("chosen", None)
             rec.pop("pushedAt", None)
             rec["status"] = "matched" if rec.get("candidates") else "captured"
+            rec["holdAt"] = int(time.time())
             gone += 1
         if gone:
             save_state(ctx, st)
@@ -3552,6 +3650,7 @@ def _import_bulk(ctx, ids):
                 out = _link_scanned_files(ctx, st, sid, sources, found)
                 if out.get("ok"):
                     ok += 1
+                    _drop_tag(qb, sid)
                 else:
                     job["failed"].append({"sceneId": sid, "error": out.get("error") or "import failed"})
             except Exception as e:
@@ -3583,7 +3682,11 @@ def import_scene(ctx, st, sid):
     qb.login()
     info = {t["hash"].lower(): t for t in qb.info([h])}.get(h) if h else None
     sources = _import_sources(ctx, s, st, qb, sid, info)
-    return _link_scanned_files(ctx, st, sid, sources)
+    out = _link_scanned_files(ctx, st, sid, sources)
+    if out.get("ok"):
+        # Clean the label left by older versions; qB keeps tag definitions.
+        _drop_tag(qb, sid)
+    return out
 
 
 def scan_and_find_many(ctx, paths, timeout=90):
@@ -3752,6 +3855,12 @@ def run_tick(ctx, st, ctrl, src):
             if left() < 20:
                 break
             rec = st["scenes"][sid]
+            if rec.get("holdAt"):
+                # The user removed this torrent by hand; do not put it back.
+                continue
+            if not _scene_exists(ctx, sid):
+                st["scenes"].pop(sid, None)
+                continue
             idx = auto_push_pick(rec.get("candidates") or [], cache, parsed, rules["unknown"])
             if idx is None:
                 continue
@@ -3788,6 +3897,11 @@ def run_tick(ctx, st, ctrl, src):
             if not sid:
                 break
             rec = st["scenes"][sid]
+            if not _scene_exists(ctx, sid):
+                # Deleted between captures: stop searching a scene that is gone.
+                st["scenes"].pop(sid, None)
+                save_state(ctx, st)
+                continue
             try:
                 search_scene(ctx, st, sid, paced=True)
                 actions.append("search:%s:%s" % (sid, rec.get("status")))
@@ -4028,6 +4142,7 @@ def whisparr_push_scene(ctx, st, sid):
     }
     rec["status"] = "pushed"
     rec["pushedAt"] = int(time.time())
+    rec.pop("holdAt", None)
     rec.pop("error", None)
     return {"ok": True, "hash": xid, "picked": "whisparr", "sceneId": sid}
 
@@ -4316,6 +4431,11 @@ def run_tick_whisparr(ctx, st, ctrl, src):
             if left() < 20:
                 break
             rec = st["scenes"][sid]
+            if rec.get("holdAt"):
+                continue
+            if not _scene_exists(ctx, sid):
+                st["scenes"].pop(sid, None)
+                continue
             if not whisparr_stash_id(rec):
                 if not rec.get("error"):
                     rec["error"] = t_(ctx, "没有 StashDB ID，Whisparr 认不出",
@@ -4381,6 +4501,7 @@ def _torrent_whisparr(ctx, st):
             rec.pop("pushedAt", None)
             rec.pop("error", None)
             rec["status"] = "captured"
+            rec["holdAt"] = int(time.time())
         if targets:
             save_state(ctx, st)
         return {"ok": True, "action": action, "count": len(targets)}

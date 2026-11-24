@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.16";
+  var PLUGIN_VERSION = "1.0.0";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -1828,6 +1828,7 @@
         h("div", { className: "sb-score" },
           pill("gr", tc(pass.length + " 个通过", pass.length + " passed")),
           unk.length ? warnPill(tc("待确认 " + unk.length, unk.length + " to check")) : null,
+          s.hold ? warnPill(tc("不自动推送", "Auto push off")) : null,
           bad.length ? h("span", { className: "sb-meta sb-rej" }, tc("淘汰 " + bad.length, bad.length + " rejected")) : null),
       ];
       if (best) {
@@ -1865,7 +1866,9 @@
           pill("gr", tc(pass.length + " 通过", pass.length + " passed")),
           unk.length ? h("div", { className: "sb-meta" },
             tc(unk.length + " 待确认", unk.length + " to check")) : null),
-        badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat([durBadge(s.duration)]),
+        badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat(
+          s.hold ? [pill("ye", tc("不自动推送", "Auto push off"))] : [],
+          [durBadge(s.duration)]),
         actions: [
           best ? iconBtn("download", tc("推送最佳", "Push best"),
             function () { doPush(s.id, bestIdx); }, "is-acc" + (pushing ? " is-busy" : "")) : null,
@@ -3435,12 +3438,30 @@
       var open = openPair[0], setOpen = openPair[1];
       var stPair = React.useState({ loading: false, items: null, error: null });
       var st = stPair[0], setSt = stPair[1];
+      // 后端偶尔会卡在不通的地址上，弹窗不能永远停在「测试中」
+      var seqRef = React.useRef(0);
+      var timerRef = React.useRef(0);
+      React.useEffect(function () {
+        return function () { window.clearTimeout(timerRef.current); };
+      }, []);
 
       function run() {
+        var my = ++seqRef.current;
+        window.clearTimeout(timerRef.current);
         setSt({ loading: true, items: null, error: null });
+        timerRef.current = window.setTimeout(function () {
+          if (my !== seqRef.current) return;
+          setSt({ loading: false, items: null,
+            error: tc("测试超时：1 分钟没有结果，检查下载器/索引器地址与网络后重试",
+                      "Test timed out after 1 minute — check the downloader and indexer URLs, then retry") });
+        }, 60000);
         op({ mode: "selftest" }).then(function (r) {
+          if (my !== seqRef.current) return;
+          window.clearTimeout(timerRef.current);
           setSt({ loading: false, items: (r && r.checks) || [], error: null });
         }).catch(function (e) {
+          if (my !== seqRef.current) return;
+          window.clearTimeout(timerRef.current);
           setSt({ loading: false, items: null, error: String((e && e.message) || e) });
         });
       }

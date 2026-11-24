@@ -1,6 +1,6 @@
 # SceneBackfill
 
-> v0.1.16：待入库支持一键或多选批量入库——整批只扫描一次，按钮显示「入库中 3/8」，成功与失败分开计数；入库过程与守护任务互斥。
+> v1.0.0：修复「移除的种子又回到下载器」「已删除场景被反复搜索」与下载器标签无限累积；qBittorrent 5.2+ 可直接填 API 密钥；自检显示下载器版本与默认保存路径。
 
 Stash 插件：把只有元数据、没有文件的场景补齐——搜资源、交给下载器或 Whisparr，完成后把文件关联回原场景。全程不搬动文件。
 
@@ -27,10 +27,10 @@ Stash 插件：把只有元数据、没有文件的场景补齐——搜资源�
 | Indexer | `jackett` 或 `prowlarr`；`self` 模式使用 |
 | Indexer URL / API Key | 上面选中的索引器地址与密钥 |
 | Network Timeout | 索引器搜索与种子预取的单次超时（秒）；留空 = 120，上限 600。NAS 或慢索引器可调大 |
-| Downloader | `qb` 或 `motrix` |
-| Downloader URL | qBittorrent Web UI（8090）、Motrix 桌面版 RPC（16800）或 Server 版 Web UI（8066） |
-| Downloader Username | qBittorrent 登录名；Motrix 忽略 |
-| Downloader Password / RPC Secret | qBittorrent 密码、Motrix 桌面版 `--rpc-secret` 或 Server 版 Web 登录密钥 |
+| Downloader | `qb`（qBittorrent）或 `motrix`（桌面版，或 Server/NAS 2.4+）；留空 = `qb` |
+| Downloader URL | qBittorrent Web UI（`http://host:8080`）；Motrix 桌面版 RPC（`http://host:16800`）或 Server 2.4+ Web（`http://host:8066`）。Docker 里用宿主 IP，不要 localhost |
+| Downloader Username | qBittorrent 登录名；Motrix 留空；密码栏填 API 密钥时留空 |
+| Downloader Password / RPC Secret | qBittorrent 密码，或 qB 5.2+ API 密钥（`qbt_...`，此时不用用户名）；Motrix 桌面版 `--rpc-secret` / Server 2.4+ Web 登录密钥 |
 | Whisparr URL / API Key | Whisparr v3 地址与 API Key；`whisparr` 模式使用 |
 | Whisparr Root Folder | Whisparr 根目录在 Stash 里的路径；必须在库路径内，两边同名可留空 |
 | Write Path (downloader side) | 下载器写入路径：下载器视角的完成目录 |

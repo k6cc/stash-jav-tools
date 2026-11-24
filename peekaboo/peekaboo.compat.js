@@ -85,26 +85,26 @@ window.__peekabooCompat = [
     tail: [".ssd-dp-grpchip"]
   },
   // ══ SceneBackfill ═══════════════════════════════════════════════════════════
-  // 补档页（/plugins/SceneBackfill）：卡片、列表行与两个弹窗都是自绘的 sf-* 类名。
-  // 库内容优先认该插件的 sf-lib（一行库内容）/ sf-lib-desc（简介）标记，精度最高；
+  // 补档页（/plugins/SceneBackfill）：卡片、列表行与两个弹窗都是自绘的 sb-* 类名。
+  // 库内容优先认该插件的 sb-lib（一行库内容）/ sb-lib-desc（简介）标记，精度最高；
   // 标记之外还写了一份纯选择器版本，标记被删掉时依然能遮（列表行副标题是库内容与
   // 「大小 · 时间」拼在同一节点，纯选择器会一起遮，所以保留标记做精确化）。
   {
     id: "SceneBackfill",
     // 卡片、列表行、弹窗封面：悬停 / 长按整块露原图
-    host: [".sf-tile", ".sf-row", ".sf-modal-shot"],
+    host: [".sb-tile", ".sb-row", ".sb-modal-shot"],
     unit: [
       // 语义标记（有就用，精度最高）
-      ".sf-lib",
+      ".sb-lib",
       // 纯选择器兜底：这些类名本身只装库内容
-      ".sf-tile-title", ".sf-row-title", ".sf-modal-title", ".sf-modal-code",
-      ".sf-shot-code", ".sf-shot-ph", ".sf-cand-title", ".sf-pick-name",
-      ".sf-dl-name", ".sf-row-release", ".sf-tag:not(.sf-tag-more)",
+      ".sb-tile-title", ".sb-row-title", ".sb-modal-title", ".sb-modal-code",
+      ".sb-shot-code", ".sb-shot-ph", ".sb-cand-title", ".sb-pick-name",
+      ".sb-dl-name", ".sb-row-release", ".sb-tag:not(.sb-tag-more)",
       // 副标题行（演员 / 日期 / 片商）紧跟标题，统计行在它后面，用相邻兄弟避开
-      ".sf-tile-title + .sf-meta", ".sf-modal-info > .sf-meta"
+      ".sb-tile-title + .sb-meta", ".sb-modal-info > .sb-meta"
     ],
-    desc: [".sf-lib-desc", ".sf-modal-details"],
+    desc: [".sb-lib-desc", ".sb-modal-details"],
     // 「+3」的 title 里是没显示出来的标签名
-    attr: [".sf-tag-more"]
+    attr: [".sb-tag-more"]
   }
 ];

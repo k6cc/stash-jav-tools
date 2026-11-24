@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.8.8：同一 stash-box 演员对应本地多个对象时（历史重复），入库按名字挑对那一个，不再给场景多挂一个重复演员。
+> v2.8.9：qBittorrent 5.2+ 可在密码栏直接填 API 密钥；连接测试标注认证方式；下载器设置文案与 SceneBackfill 一致。
 
 Stash 插件（`interface: raw` + UI）：从已配置的 stash-box 实例中找出本地库未拥有的场景，浏览、加入库、找资源并推送到下载器。
 
@@ -44,10 +44,10 @@ USER stash
 | Jackett API URL | STRING | — | Jackett 根地址（自动补全 Torznab 端点）或完整 Torznab 端点 |
 | Jackett API Key | STRING | — | Jackett API Key |
 | Jackett Timeout (seconds) | STRING | 120 | 搜索超时秒数，留空 = 120，上限 600。慢 NAS 或索引器多时调大 |
-| Downloader Type | STRING | qbittorrent | `qbittorrent` 或 `motrix`，留空 = qbittorrent |
-| Downloader URL | STRING | — | qBittorrent 填 Web UI 地址；Motrix 桌面版填 RPC 地址 `http://127.0.0.1:16800`，Server 版填 Web 地址 |
-| Downloader Username | STRING | — | 仅 qBittorrent，Motrix 留空 |
-| Downloader Password | STRING | — | qBittorrent Web UI 密码；Motrix 填「高级 → RPC」的密钥（桌面版）或 operator-token（Server 版） |
+| Downloader (qb / motrix) | STRING | qb | `qb`（qBittorrent）或 `motrix`（桌面版，或 Server/NAS 2.4+）；留空 = `qb` |
+| Downloader URL | STRING | — | qBittorrent Web UI（`http://host:8080`）；Motrix 桌面版 RPC（`http://host:16800`）或 Server 2.4+ Web（`http://host:8066`）。Docker 里用宿主 IP，不要 localhost |
+| Downloader Username | STRING | — | qBittorrent 登录名；Motrix 留空；密码栏填 API 密钥时留空 |
+| Downloader Password / RPC Secret | STRING | — | qBittorrent 密码，或 qB 5.2+ API 密钥（`qbt_...`，此时不用用户名）；Motrix 桌面版 `--rpc-secret` / Server 2.4+ Web 登录密钥 |
 | Whisparr URL | STRING | — | Whisparr v3 地址，如 `http://127.0.0.1:6969`，留空 = 不使用 Whisparr |
 | Whisparr API Key | STRING | — | Whisparr → 设置 → 通用 → API Key |
 | Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空 = 查询全部已配置实例 |

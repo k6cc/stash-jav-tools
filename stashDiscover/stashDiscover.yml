@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, find download sources, and push to qBittorrent, Motrix, or Whisparr.
-version: 2.8.8
+version: 2.8.9
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -26,20 +26,20 @@ settings:
     description: "Jackett search timeout in seconds. Raise it for a slow NAS or many indexers. Leave empty for the default (120), max 600."
     type: STRING
   downloaderType:
-    displayName: "Downloader Type"
-    description: "qbittorrent (default) or motrix. Empty = qbittorrent."
+    displayName: "Downloader (qb / motrix)"
+    description: "qb = qBittorrent, motrix = Motrix (desktop, or Server/NAS 2.4+). Empty = qb."
     type: STRING
   downloaderUrl:
     displayName: "Downloader URL"
-    description: "qBittorrent: Web UI URL (http://host:8080). Motrix: RPC Port address (http://127.0.0.1:16800) on desktop, or the Web UI URL (http://host:8066) on Server 2.4+. In Docker use the host IP or host.docker.internal, not localhost."
+    description: "qBittorrent Web UI (http://host:8080). Motrix: desktop RPC (http://host:16800) or Server 2.4+ Web UI (http://host:8066). Use the host IP in Docker, not localhost."
     type: STRING
   downloaderUsername:
-    displayName: "qBittorrent Username"
-    description: "qBittorrent only. Leave empty for Motrix."
+    displayName: "Downloader Username"
+    description: "qBittorrent login name. Leave empty for Motrix and when the password field holds an API key."
     type: STRING
   downloaderPassword:
-    displayName: "qBittorrent Password / Motrix Secret"
-    description: "qBittorrent Web UI password. For Motrix: the RPC key from Advanced → RPC on desktop, or the operator token on Server 2.4+."
+    displayName: "Downloader Password / RPC Secret"
+    description: "qBittorrent password, or a qB 5.2+ API key (qbt_...) which ignores the username. Motrix: desktop --rpc-secret or Server 2.4+ Web login key."
     type: STRING
   whisparrUrl:
     displayName: "Whisparr URL"

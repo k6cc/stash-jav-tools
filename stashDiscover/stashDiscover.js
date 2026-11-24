@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.8";
+  var PLUGIN_VERSION = "2.8.9";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -10425,15 +10425,33 @@
     function TestButton() {
       var s1 = React.useState(false), open = s1[0], setOpen = s1[1];
       var s2 = React.useState({ loading: false, items: null, error: null }), state = s2[0], setState = s2[1];
+      // 后端偶尔会卡在不通的地址上，弹窗不能永远停在「测试中」
+      var seqRef = React.useRef(0);
+      var timerRef = React.useRef(0);
+      React.useEffect(function () {
+        return function () { window.clearTimeout(timerRef.current); };
+      }, []);
 
       function run() {
+        var my = ++seqRef.current;
+        window.clearTimeout(timerRef.current);
         setState({ loading: true, items: null, error: null });
+        timerRef.current = window.setTimeout(function () {
+          if (my !== seqRef.current) return;
+          setState({ loading: false, items: null,
+            error: tc("测试超时：1 分钟没有结果，检查下载器/索引器地址与网络后重试",
+                      "Test timed out after 1 minute — check the downloader and indexer URLs, then retry") });
+        }, 60000);
         runPluginOp({ mode: "test" }).then(function (r) {
+          if (my !== seqRef.current) return;
+          window.clearTimeout(timerRef.current);
           var out = r;
           if (typeof out === "string") { try { out = JSON.parse(out); } catch (_) {} }
           if (out && out.error) throw new Error(String(out.error));
           setState({ loading: false, items: (out && out.items) || [], error: null });
         }).catch(function (e) {
+          if (my !== seqRef.current) return;
+          window.clearTimeout(timerRef.current);
           setState({ loading: false, items: null, error: String((e && e.message) || e) });
         });
       }

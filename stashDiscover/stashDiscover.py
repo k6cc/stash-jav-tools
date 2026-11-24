@@ -355,6 +355,8 @@ def do_push_download(stash, magnet="", link="", savepath="", zh=True):
     dl_url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
     dl_user = (cfg.get("downloaderUsername") or "").strip()
     dl_pass = (cfg.get("downloaderPassword") or "").strip()
+    # 密码栏同时承载 qB 5.2+ 的 API 密钥（qbt_ 开头），此时不再用用户名密码
+    dl_key = dl_pass if dl_pass.lower().startswith("qbt_") else ""
 
     if not dl_url:
         emit_error(_t(zh, "下载器地址未填写。", "Downloader URL not configured."))
@@ -375,7 +377,7 @@ def do_push_download(stash, magnet="", link="", savepath="", zh=True):
         return
 
     if dl_type in ("qbittorrent", "qb", "qbit"):
-        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, raw, savepath, zh)
+        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, raw, savepath, zh, dl_key)
     elif dl_type in ("motrix", "motrix2", "aria2"):
         _push_motrix(dl_url, dl_pass, magnet, raw, zh)
     else:
@@ -475,38 +477,45 @@ def _session_cookie(headers):
     return "; ".join(pairs)
 
 
-def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=True):
-    login_url = f"{base_url}/api/v2/auth/login"
-    status, body, headers = http_request(
-        login_url, method="POST",
-        data={"username": username, "password": password},
-        timeout=15,
-    )
-    # qBittorrent ≤5.2：登录成功返回 200 + body "Ok."
-    # qBittorrent 5.3.0：改成 204 No Content（空 body），会话 cookie 仍在
-    # Set-Cookie 里 —— 老代码硬判 200 会把成功的登录当成失败（论坛反馈）
-    if status == 204 or (status == 200 and body.strip() == "Ok."):
-        pass
+def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=True,
+                      api_key=""):
+    # qB 5.2+ 的 API 密钥直接以 Bearer 认证，没有登录/登出往返；
+    # 填了密钥就不再发用户名密码，两种方式互斥（密钥优先）。
+    if api_key:
+        hdr = {"Authorization": f"Bearer {api_key}"}
     else:
-        emit_error(_t(zh,
-                      f"qBittorrent 登录失败（HTTP {status}）：{body[:100]}",
-                      f"qBittorrent login failed (HTTP {status}): {body[:100]}"))
-        return
+        login_url = f"{base_url}/api/v2/auth/login"
+        status, body, headers = http_request(
+            login_url, method="POST",
+            data={"username": username, "password": password},
+            timeout=15,
+        )
+        # qBittorrent ≤5.2：登录成功返回 200 + body "Ok."
+        # qBittorrent 5.3.0：改成 204 No Content（空 body），会话 cookie 仍在
+        # Set-Cookie 里 —— 老代码硬判 200 会把成功的登录当成失败（论坛反馈）
+        if status == 204 or (status == 200 and body.strip() == "Ok."):
+            pass
+        else:
+            emit_error(_t(zh,
+                          f"qBittorrent 登录失败（HTTP {status}）：{body[:100]}",
+                          f"qBittorrent login failed (HTTP {status}): {body[:100]}"))
+            return
 
-    cookie = _session_cookie(headers)
+        cookie = _session_cookie(headers)
 
-    if not cookie:
-        emit_error(_t(zh,
-                      "qBittorrent 登录成功但没有返回会话 cookie。",
-                      "qBittorrent login did not return a session cookie."))
-        return
+        if not cookie:
+            emit_error(_t(zh,
+                          "qBittorrent 登录成功但没有返回会话 cookie。",
+                          "qBittorrent login did not return a session cookie."))
+            return
+        hdr = {"Cookie": cookie}
 
     add_url = f"{base_url}/api/v2/torrents/add"
     if raw:
         body, ctype = _qb_multipart(raw, savepath)
         status, text, _ = http_request(
             add_url, method="POST", data=body,
-            headers={"Cookie": cookie, "Content-Type": ctype},
+            headers=dict(hdr, **{"Content-Type": ctype}),
             timeout=30,
         )
     else:
@@ -515,7 +524,7 @@ def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=Tr
             form_data["savepath"] = savepath
         status, text, _ = http_request(
             add_url, method="POST", data=form_data,
-            headers={"Cookie": cookie},
+            headers=hdr,
             timeout=15,
         )
     if status in (200, 201):
@@ -533,6 +542,13 @@ def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=Tr
         emit_result({"mode": "push_download", "ok": True, "duplicate": True,
                      "message": "Already in downloader"})
     else:
+        if api_key and status in (401, 403):
+            emit_error(_t(zh,
+                          f"qBittorrent 拒绝了 API 密钥（HTTP {status}）。"
+                          "密钥需在 qB 5.2+ 的 Web UI 设置里生成，以 qbt_ 开头。",
+                          f"qBittorrent refused the API key (HTTP {status}). "
+                          "Generate it in the Web UI settings of qB 5.2+; keys start with qbt_."))
+            return
         emit_error(_t(zh,
                       f"qBittorrent 添加任务失败（HTTP {status}）：{text[:200]}",
                       f"qBittorrent add failed (HTTP {status}): {text[:200]}"))
@@ -894,6 +910,8 @@ def _test_downloader(cfg, zh=True):
     url = (cfg.get("downloaderUrl") or "").strip().rstrip("/")
     user = (cfg.get("downloaderUsername") or "").strip()
     pwd = (cfg.get("downloaderPassword") or "").strip()
+    # 密码栏同时承载 qB 5.2+ 的 API 密钥（qbt_ 开头）
+    api_key = pwd if pwd.lower().startswith("qbt_") else ""
 
     if dl_type in ("motrix", "motrix2", "aria2"):
         return _test_motrix(url, pwd, zh)
@@ -906,42 +924,64 @@ def _test_downloader(cfg, zh=True):
         item["detail"] = _t(zh, "URL 未填写", "URL is missing")
         return item
     host = _host_of(url)
-    status, body, headers = http_request(
-        f"{url}/api/v2/auth/login", method="POST",
-        data={"username": user, "password": pwd}, timeout=15,
-    )
-    if status == 403:
-        item["detail"] = _t(zh, "登录被拒（HTTP 403）", "Login refused (HTTP 403)")
-        item["hint"] = _t(zh,
-                          "连续登录失败后 qB 会临时封 IP，先在 Web UI 里登录一次解除",
-                          "qB temporarily bans the IP after repeated failed logins — log in once in the Web UI to clear it")
-        return item
-    if status == 0:
-        item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
-        item["hint"] = body[:150]
-        return item
-    # ≤5.2 → 200 "Ok."；5.3.0 → 204 空 body（会话 cookie 仍在）
-    if not (status == 204 or (status == 200 and body.strip() == "Ok.")):
-        item["detail"] = _t(zh, f"登录失败（HTTP {status}）", f"Login failed (HTTP {status})")
-        item["hint"] = (body[:150] or _t(zh, "检查用户名与密码", "Check the username and password"))
-        return item
-    cookie = _session_cookie(headers)
-    if not cookie:
-        item["detail"] = _t(zh, "登录成功但没有拿到会话 cookie",
-                            "Logged in but no session cookie came back")
-        item["hint"] = _t(zh,
-                          "确认 Web UI 地址完整（含端口），且没有被反向代理吞掉 Set-Cookie",
-                          "Check that the Web UI URL is complete (including the port) and that no reverse proxy is dropping Set-Cookie")
-        return item
-    hdr = {"Cookie": cookie}
-    status, body, _ = http_request(f"{url}/api/v2/app/version", headers=hdr, timeout=10)
-    if status != 200:
-        item["detail"] = _t(zh, f"会话无效（HTTP {status}）", f"Session rejected (HTTP {status})")
-        item["hint"] = _t(zh,
-                          "登录成功了但后续请求被拒，通常是反代没转发 cookie",
-                          "Login worked but later requests were refused — usually a reverse proxy not passing cookies through")
-        return item
-    version = body.strip() or "?"
+    if api_key:
+        # 密钥方式没有登录往返，用版本查询同时验证密钥
+        hdr = {"Authorization": f"Bearer {api_key}"}
+        status, body, _ = http_request(f"{url}/api/v2/app/version", headers=hdr, timeout=10)
+        if status == 0:
+            item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
+            item["hint"] = body[:150]
+            return item
+        if status in (401, 403):
+            item["detail"] = _t(zh, f"API 密钥被拒（HTTP {status}）",
+                                f"API key refused (HTTP {status})")
+            item["hint"] = _t(zh,
+                              "API 密钥需要 qB 5.2+；在 Web UI 设置的 API Key 处生成，以 qbt_ 开头",
+                              "API keys need qB 5.2+; generate one in the Web UI settings, it starts with qbt_")
+            return item
+        if status != 200:
+            item["detail"] = _t(zh, f"API 密钥验证失败（HTTP {status}）",
+                                f"API key check failed (HTTP {status})")
+            item["hint"] = body[:150]
+            return item
+        version = body.strip() or "?"
+    else:
+        status, body, headers = http_request(
+            f"{url}/api/v2/auth/login", method="POST",
+            data={"username": user, "password": pwd}, timeout=15,
+        )
+        if status == 403:
+            item["detail"] = _t(zh, "登录被拒（HTTP 403）", "Login refused (HTTP 403)")
+            item["hint"] = _t(zh,
+                              "连续登录失败后 qB 会临时封 IP，先在 Web UI 里登录一次解除",
+                              "qB temporarily bans the IP after repeated failed logins — log in once in the Web UI to clear it")
+            return item
+        if status == 0:
+            item["detail"] = _t(zh, f"连不上 {host}", f"Can't reach {host}")
+            item["hint"] = body[:150]
+            return item
+        # ≤5.2 → 200 "Ok."；5.3.0 → 204 空 body（会话 cookie 仍在）
+        if not (status == 204 or (status == 200 and body.strip() == "Ok.")):
+            item["detail"] = _t(zh, f"登录失败（HTTP {status}）", f"Login failed (HTTP {status})")
+            item["hint"] = (body[:150] or _t(zh, "检查用户名与密码", "Check the username and password"))
+            return item
+        cookie = _session_cookie(headers)
+        if not cookie:
+            item["detail"] = _t(zh, "登录成功但没有拿到会话 cookie",
+                                "Logged in but no session cookie came back")
+            item["hint"] = _t(zh,
+                              "确认 Web UI 地址完整（含端口），且没有被反向代理吞掉 Set-Cookie",
+                              "Check that the Web UI URL is complete (including the port) and that no reverse proxy is dropping Set-Cookie")
+            return item
+        hdr = {"Cookie": cookie}
+        status, body, _ = http_request(f"{url}/api/v2/app/version", headers=hdr, timeout=10)
+        if status != 200:
+            item["detail"] = _t(zh, f"会话无效（HTTP {status}）", f"Session rejected (HTTP {status})")
+            item["hint"] = _t(zh,
+                              "登录成功了但后续请求被拒，通常是反代没转发 cookie",
+                              "Login worked but later requests were refused — usually a reverse proxy not passing cookies through")
+            return item
+        version = body.strip() or "?"
     save_path = ""
     status2, body2, _ = http_request(f"{url}/api/v2/app/preferences", headers=hdr, timeout=10)
     if status2 == 200:
@@ -951,6 +991,8 @@ def _test_downloader(cfg, zh=True):
             pass
     item["ok"] = True
     item["detail"] = f"{host} · qBittorrent {version}"
+    if api_key:
+        item["detail"] += _t(zh, "（API 密钥）", " (API key)")
     if save_path:
         item["hint"] = _t(zh, f"默认保存路径 {save_path}", f"Default save path {save_path}")
     return item

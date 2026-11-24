@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.14";
+  var PLUGIN_VERSION = "0.1.15";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -805,15 +805,24 @@
         : tc("清掉记录里 " + dlName() + " 已经没有的任务？这些场景会退回重新挑选资源。",
              "Forget torrents " + dlName() + " no longer has? Those scenes go back to picking a release."))) return;
       setBusy("bulk:" + action);
+      // pause/resume only make sense for tasks still transferring; ready tasks
+      // are done and must not be counted or touched by "all".
+      var ids = [];
+      if (action === "pause" || action === "resume") {
+        ids = (prog || []).filter(function (p) {
+          return p.status !== "imported" && !p.ready && p.state !== "missing";
+        }).map(function (p) { return String(p.sceneId); });
+        if (!ids.length) { setBusy(""); return; }
+      }
       if (action !== "remove_missing") {
         (prog || []).forEach(function (p) {
-          if (p.status !== "imported") paintState(p.sceneId, action);
+          if (ids.indexOf(String(p.sceneId)) >= 0) paintState(p.sceneId, action);
         });
       }
-      op({ mode: "torrent", bulk: "true", action: action }).then(function (r) {
+      op({ mode: "torrent", bulk: "true", action: action, ids: ids }).then(function (r) {
         var n = (r && r.count) || 0;
         toast((action === "pause" ? tc("已全部暂停", "All paused")
-          : action === "resume" ? tc("已全部下载", "All resumed")
+          : action === "resume" ? tc("已全部继续", "All resumed")
             : tc("已移除缺失任务", "Missing removed")) + " · " + n);
         return action === "remove_missing"
           ? Promise.all([loadProgress(), loadCapture()])
@@ -1401,13 +1410,42 @@
     function openDetail(sid) { setDetailId(String(sid)); setDlId(""); setRejFolded(true); }
     function openDl(sid) { setDlId(String(sid)); setDetailId(""); }
 
-    // 封面：左下番号（没有番号就不占位，欧美场景本来没有），
+    // 封面左下角只说明这个场景是按什么搜的，不重复正文里的标题：
+    // 番号命中显示番号，标题 / 演员 / 工作室命中显示对应短标签。
+    // 旧记录没存类型，退回显示搜索词原文。
+    function searchBadge(s) {
+      var q = String(s.query || "");
+      var kind = s.queryKind || "";
+      var code = String(s.code || "");
+      if (kind === "code" || (q && q === code)) return code || q;
+      if (kind === "title") return tc("标题", "Title");
+      if (kind === "performer") return tc("演员+日期", "Performer + date");
+      if (kind === "studio") return tc("工作室+日期", "Studio + date");
+      if (q) {
+        // 旧记录没存类型：按后端当时的拼法反推
+        var date = String(s.date || "");
+        var names = (s.performers || []).slice(0, 2).filter(Boolean);
+        var perf = (names.join(" ") + (date ? " " + date : "")).trim();
+        var title = String(s.title || "").split(/\s+/).filter(Boolean).slice(0, 8).join(" ");
+        if (title && q === title) return tc("标题", "Title");
+        if (perf && q === perf) return tc("演员+日期", "Performer + date");
+        if (s.studio && q === String(s.studio) + (date ? " " + date : "")) {
+          return tc("工作室+日期", "Studio + date");
+        }
+        return q;
+      }
+      if (code) return code;
+      return s.title ? tc("标题", "Title") : "";
+    }
+
+    // 封面：左下搜索方式（没有就不占位），
     // 右下时长（下载中是百分比，时长就退到卡片正文里）。
     function coverOf(s, badgeNode, prog, onOpen) {
       var shot = shotOf[s.id] || s.shot || "";
       var broken = shotBroken[s.id];
       var dur = fmtDur(s.duration);
       var picked = selOn && !!sel[String(s.id)];
+      var term = searchBadge(s);
       return h("div", {
         className: "sb-shot sb-shot--btn" + (prog != null ? " has-prog" : ""),
         onClick: selOn ? function () { toggleSel(s.id); } : (onOpen || function () { openDetail(s.id); }),
@@ -1425,7 +1463,7 @@
           ? h("span", { className: "sb-shot-check" + (picked ? " is-on" : "") },
             picked ? ico("check") : null)
           : null,
-        s.code ? h("span", { className: "sb-shot-code sb-lib" }, s.code) : null,
+        term ? h("span", { className: "sb-shot-code sb-lib", title: s.query || term }, term) : null,
         badgeNode || null,
         prog == null ? null : h("div", { className: "sb-shot-prog" },
           h("i", { style: { width: prog + "%" } })),
@@ -1772,9 +1810,10 @@
       var done = pct(p.progress);
       var sc = byId[p.sceneId] || {};
       var dur = fmtDur(sc.duration);
+      var head = sc.title || p.code || p.name || "";
       var body = [
-        h("div", { className: "sb-tile-title sb-lib", title: p.name },
-          p.code || p.name || "—"),
+        h("div", { className: "sb-tile-title sb-lib", title: head },
+          head || tc("（无标题）", "(no title)")),
         h("div", { className: "sb-meta sb-lib", title: p.name }, p.name || ""),
         h("div", { className: "sb-meta" },
           humanSize(p.downloaded) + " / " + humanSize(p.size) +
@@ -1792,10 +1831,12 @@
         paused ? tc("继续", "Resume") : tc("暂停", "Pause"),
         function () { doTorrent(p, paused ? "resume" : "pause"); },
         acting ? "is-busy" : ""));
-      if (!p.ready) foot.push(iconBtn("trash", tc("移除", "Remove"),
+      foot.push(iconBtn("trash", tc("移除", "Remove"),
         function () { doTorrent(p, "remove"); }, "is-danger"));
       return tile(p.sceneId, coverOf({
-        id: p.sceneId, code: p.code || "", duration: sc.duration || 0,
+        id: p.sceneId, code: p.code || "", query: sc.query || "",
+        queryKind: sc.queryKind || "", title: sc.title || "", duration: sc.duration || 0,
+        date: sc.date || "", studio: sc.studio || "", performers: sc.performers || [],
         shot: p.shot || sc.shot || "",
       }, paused
         ? Api.React.createElement("span", { className: "sb-pill is-h-ye" },
@@ -1814,7 +1855,8 @@
         p.eta ? "ETA " + etaText(p.eta) : "",
       ].filter(Boolean).join(" · ");
       return rowOf({
-        key: p.sceneId, code: p.code, title: p.code || p.name, lib: true,
+        key: p.sceneId, code: p.code,
+        title: (byId[p.sceneId] || {}).title || p.code || p.name, lib: true,
         shot: p.shot || (byId[p.sceneId] || {}).shot || "",
         sub: [humanSize(p.size), rate].filter(Boolean).join(" · "),
         release: p.name || "",
@@ -2682,7 +2724,7 @@
           onClick: function () { doTorrent(p, paused ? "resume" : "pause"); },
         }, ico(paused ? "play" : "pause"), paused ? tc("继续", "Resume") : tc("暂停", "Pause")));
       }
-      if (live2 && !p.ready) {
+      if (live2) {
         actions.push(h("button", {
           className: "sb-btn sb-btn-md sb-btn-ghost", disabled: acting,
           onClick: function () { doTorrent(p, "remove"); },
@@ -2881,17 +2923,20 @@
       var ready = liveList.filter(function (p) { return p.ready; });
       var lost = liveList.filter(function (p) { return !p.ready && p.state === "missing"; });
       var busy2 = liveList.filter(function (p) { return !p.ready && p.state !== "missing"; });
-      VIS = liveList.map(function (p) { return String(p.sceneId); });
-      var showReady = filter !== "ready";
+      VIS = (filter === "ready" ? ready : liveList).map(function (p) { return String(p.sceneId); });
+      var showBusy = filter !== "ready";
+      var hasBusy = live.some(function (p) { return !p.ready && p.state !== "missing"; });
       // 没有任务时按钮照常占位（置灰），否则这行只剩连接状态，高度会比有卡片时矮一截
       var noLive = !live.length;
       var bulk = [
         isWsp() ? null : h("button", {
-          className: "sb-btn sb-btn-sm", key: "b1", disabled: noLive || busy === "bulk:resume",
+          className: "sb-btn sb-btn-sm", key: "b1",
+          disabled: filter === "ready" || !hasBusy || busy === "bulk:resume",
           onClick: function () { doBulk("resume"); },
-        }, ico("play"), tc("全部下载", "Resume all")),
+        }, ico("play"), tc("全部继续", "Resume all")),
         isWsp() ? null : h("button", {
-          className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b2", disabled: noLive || busy === "bulk:pause",
+          className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b2",
+          disabled: filter === "ready" || !hasBusy || busy === "bulk:pause",
           onClick: function () { doBulk("pause"); },
         }, ico("pause"), tc("全部暂停", "Pause all")),
         h("button", {
@@ -2907,11 +2952,11 @@
       MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "bulk-mob" }, bulk));
       body = h("div", { className: "sb-stack" },
         listBar(connLine(), bulk, true),
-        section("ready", "bl", "download", tc("待入库", "Ready"), ready, progressCard, progressRow),
-        showReady ? section("busy", "cy", "download",
+        showBusy ? section("busy", "cy", "download",
           isWsp() ? tc("Whisparr 处理中", "In Whisparr") : tc("下载中", "Downloading"),
           busy2, progressCard, progressRow) : null,
-        section("lost", "re", "x", tc("任务丢失", "Lost"), lost, progressCard, progressRow),
+        section("ready", "bl", "download", tc("待入库", "Ready"), ready, progressCard, progressRow),
+        showBusy ? section("lost", "re", "x", tc("任务丢失", "Lost"), lost, progressCard, progressRow) : null,
         !live.length ? emptyBox(isWsp()
           ? tc("Whisparr 里没有进行中的场景", "Nothing in Whisparr")
           : tc("没有进行中的下载", "Nothing downloading")) : null,

@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.14"
+PLUGIN_VERSION = "0.1.15"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -2606,6 +2606,8 @@ def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
         scenes.append({
             "id": sid,
             "code": rec.get("code") or "",
+            "query": rec.get("query") or "",
+            "queryKind": rec.get("queryKind") or "",
             "title": rec.get("title") or "",
             "date": rec.get("date") or "",
             "duration": int(rec.get("duration") or 0),
@@ -2693,7 +2695,7 @@ def do_done(ctx):
 # ─── 搜索 ────────────────────────────────────────────────────────────────
 
 def search_terms(scene):
-    """Queries to try in order, narrowest first.
+    """Queries to try in order, narrowest first, as (kind, text).
 
     A code is a precise key and always wins. Western (stashdb) scenes carry no
     code, so the release name is the fallback; performer and studio are the
@@ -2712,20 +2714,20 @@ def search_terms(scene):
     perf = stack
     terms = []
 
-    def add(t):
+    def add(kind, t):
         t = " ".join(t.split())
-        if t and t.lower() not in [x.lower() for x in terms]:
-            terms.append(t)
+        if t and t.lower() not in [x.lower() for _, x in terms]:
+            terms.append((kind, t))
 
     if code:
-        add(code)
+        add("code", code)
     if title:
-        add(" ".join(title.split()[:8]))
+        add("title", " ".join(title.split()[:8]))
     if not code:
         if perf:
-            add(" ".join(perf) + (" " + date if date else ""))
+            add("performer", " ".join(perf) + (" " + date if date else ""))
         if studio:
-            add(studio + (" " + date if date else ""))
+            add("studio", studio + (" " + date if date else ""))
     return terms[:3]
 
 
@@ -2809,14 +2811,15 @@ def search_scene(ctx, st, sid, paced=False):
         raise RuntimeError(t_(ctx, "该场景没有番号也没有标题，无法搜索", "No code or title to search for"))
     code = scene.get("code") or ""
     date = scene.get("date") or ""
-    query, results = terms[0], []
+    qkind, query = terms[0]
+    results = []
     ctrl = get_control(st)
-    for term in terms:
+    for kind, term in terms:
         # 一个场景最多退三个搜索词，每个都是对索引器的一次真实查询：
         # 逐次等间隔、逐次计数，否则「每小时 N 次」只是场景数的一半不到。
         if paced:
             pace_search(st, ctrl)
-        query = term
+        qkind, query = kind, term
         try:
             results = indexer_search(cfg, term, net_timeout(cfg))
         finally:
@@ -2851,6 +2854,7 @@ def search_scene(ctx, st, sid, paced=False):
         "title": scene.get("title") or "",
         "date": date,
         "query": query,
+        "queryKind": qkind,
         "candidates": cands[:40],
         "searchedAt": int(time.time()),
         "attempts": int(prev.get("attempts") or 0) + 1,

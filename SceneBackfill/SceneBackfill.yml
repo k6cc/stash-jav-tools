@@ -1,6 +1,6 @@
 name: Scene Backfill
 description: Fills metadata-only scenes via Jackett/Prowlarr and qBittorrent/Motrix, or via Whisparr v3; finished files are scanned in place and linked back.
-version: 0.1.12
+version: 0.1.13
 url: https://discourse.stashapp.cc/t/scene-backfill/21655
 errLog: info
 

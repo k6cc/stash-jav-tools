@@ -364,9 +364,10 @@
 .sf-tile:hover { border-color: rgba(var(--sf-or-rgb), .45); }
 .sf-shot {
   position: relative;
-  /* 固定 16:9：flex 会拿走 aspect-ratio，百分比 padding 不用猜高度 */
+  /* 16:9 → flex 会拿走 aspect-ratio，百分比 padding 不用猜高度；
+     比例由 .sf-r-* 的 --sf-shot-pad 覆盖 */
   flex: 0 0 auto;
-  padding-top: 56.25%;
+  padding-top: var(--sf-shot-pad, 56.25%);
   background: var(--sf-sink);
   overflow: hidden;
 }
@@ -408,6 +409,12 @@
 /* 有进度条时角标要抬起来，不然被那条压在下面；百分比在右下，番号得让开 */
 .sf-shot.has-prog .sf-shot-code { bottom: 7px; max-width: calc(100% - 46px); }
 .sf-shot.has-prog .sf-shot-dur { bottom: 7px; }
+
+/* ── 封面比例（设置里的三档）：卡片、列表行、详情封面共用 ─────────
+   列表行是固定宽度 + 百分比 padding 撑高，所以每种比例要单独给像素值 */
+.sf-r-16x9 { --sf-shot-pad: 56.25%; --sf-row-shot: 54px; --sf-cover-ar: 16 / 9; }
+.sf-r-3x2 { --sf-shot-pad: 66.667%; --sf-row-shot: 64px; --sf-cover-ar: 3 / 2; }
+.sf-r-4x3 { --sf-shot-pad: 75%; --sf-row-shot: 72px; --sf-cover-ar: 4 / 3; }
 /* 封面右下角的时长：和左下角的番号对称 */
 .sf-shot-dur {
   position: absolute; right: 4px; bottom: 2px;
@@ -466,10 +473,14 @@
   box-shadow: inset 2px 0 0 var(--sf-gr);
 }
 
-/* 封面与标题是进详情的入口，卡片本身不响应点击，按钮不受影响 */
+/* 封面与标题是进详情的入口，卡片本身不响应点击，按钮不受影响。
+   hover 效果三档（禁用 / 变暗 / 框内放大），列表行的小封面跟着一起走 */
 .sf-shot--btn { cursor: pointer; }
-.sf-shot--btn img { transition: opacity .12s ease; }
-.sf-shot--btn:hover img { opacity: .84; }
+.sf-shot img, .sf-row-shot img { transition: opacity .12s ease, transform .18s ease; }
+.sf-fx-dim .sf-shot--btn:hover img,
+.sf-fx-dim .sf-row-shot:hover img { opacity: .84; }
+.sf-fx-zoom .sf-shot--btn:hover img,
+.sf-fx-zoom .sf-row-shot:hover img { opacity: 1; transform: scale(1.07); }
 .sf-title--btn { cursor: pointer; }
 .sf-title--btn:hover { color: var(--sf-or); }
 
@@ -491,7 +502,7 @@
 }
 .sf-row:hover { border-color: rgba(var(--sf-or-rgb), .4); }
 .sf-row-shot {
-  position: relative; width: 96px; padding-top: 54px;
+  position: relative; width: 96px; padding-top: var(--sf-row-shot, 54px);
   border-radius: 6px; overflow: hidden; background: var(--sf-sink); cursor: pointer;
 }
 .sf-row-shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -871,6 +882,8 @@ select.sf-input option {
   gap: 8px; flex-wrap: wrap;
 }
 .sf-actions .sf-meta { margin-top: 0; max-width: 420px; }
+/* 一组按钮整块换行，不拆到两行 */
+.sf-btn-row { display: flex; gap: 8px; flex: 0 0 auto; margin-left: auto; }
 .sf-actions--foot {
   border-top: 1px solid var(--sf-line-soft);
   padding-top: 10px; margin-top: 2px;
@@ -913,7 +926,8 @@ select.sf-input option {
 }
 .sf-toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .sf-toggle-text b { font-size: 12.5px; font-weight: 600; color: var(--sf-tx); }
-.sf-toggle-text .sf-meta { margin-top: 0; }
+/* 设置行的说明换行而不是省略号：右边挂了分段按钮时，一行放不下会只剩半句 */
+.sf-toggle-text .sf-meta { margin-top: 0; white-space: normal; line-height: 1.4; }
 /* 面板里的小分段按钮跟面板强调色走，不抢工具条的橙色 */
 .sf-panel .sf-segb.is-on {
   background: rgba(var(--sf-accent-rgb), .18);
@@ -1010,7 +1024,8 @@ select.sf-input option {
   border-bottom: 1px solid var(--sf-line-soft);
 }
 .sf-modal-shot {
-  position: relative; flex: 0 0 264px; height: auto; aspect-ratio: 16 / 9;
+  position: relative; flex: 0 0 264px; height: auto;
+  aspect-ratio: var(--sf-cover-ar, 16 / 9);
   border-radius: 9px; overflow: hidden; background: var(--sf-sink);
 }
 .sf-modal-shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -1230,7 +1245,10 @@ select.sf-input option {
   .sf-stat-l { font-size: 10.5px; gap: 4px; }
   .sf-stat--wide .sf-stat-n { font-size: 15px; }
   .sf-row { grid-template-columns: 74px minmax(0, 1fr) auto; }
-  .sf-row-shot { width: 74px; padding-top: 42px; }
+  .sf-row-shot { width: 74px; }
+  .sf-r-16x9 { --sf-row-shot: 42px; }
+  .sf-r-3x2 { --sf-row-shot: 49px; }
+  .sf-r-4x3 { --sf-row-shot: 56px; }
   .sf-row-state { display: none; }
   .sf-cand { flex-wrap: wrap; }
   .sf-tile-foot { gap: 6px; }

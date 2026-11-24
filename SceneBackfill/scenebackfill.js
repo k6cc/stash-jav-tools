@@ -16,7 +16,7 @@
   window.__sfLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.12";
+  var PLUGIN_VERSION = "0.1.13";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -177,13 +177,25 @@
       return v === null ? def : v !== "0";
     } catch (e) { return def; }
   }
-  function prefSet(key, on) {
-    try { window.localStorage.setItem(key, on ? "1" : "0"); } catch (e) { /* 隐私模式 */ }
+  function prefSet(key, on) { prefPut(key, on ? "1" : "0"); }
+  function prefPut(key, val) {
+    try { window.localStorage.setItem(key, val); } catch (e) { /* 隐私模式 */ }
     try { window.dispatchEvent(new CustomEvent(UI_EVT)); } catch (e) { /* 同上 */ }
+  }
+  // 多选一的偏好：存储里可能是老值或被手改坏的值，读出来先对一遍白名单
+  function prefPick(key, def, allowed) {
+    try {
+      var v = window.localStorage.getItem(key);
+      return allowed.indexOf(v) >= 0 ? v : def;
+    } catch (e) { return def; }
   }
   function navBadgeOn() { return prefOn(NAV_BADGE_KEY, true); }
   function showVerOn() { return prefOn("sf.showVer", true); }
   function showStatsOn() { return prefOn("sf.showStats", true); }
+  // 封面动画：dim = 变暗（老行为），none = 禁用，zoom = 画面在框内放大
+  function coverFx() { return prefPick("sf.coverFx", "dim", ["dim", "none", "zoom"]); }
+  // 封面比例：16:9 是插件原来的固定值，也是截图的比例
+  function coverRatio() { return prefPick("sf.coverRatio", "16x9", ["16x9", "3x2", "4x3"]); }
   function setNavBadge(on) {
     prefSet(NAV_BADGE_KEY, on);
     // 导航项不在页面组件树里，单独发事件让它重渲染。不能复用 nav-count：
@@ -1613,7 +1625,6 @@
           "attempt " + (s.attempts || 1) + ", nothing passed"));
         if (scr.fail) bits.push(tc("淘汰 " + scr.fail, scr.fail + " rejected"));
         if (s.nextSearchAt) bits.push(tc("下次 " + clockText(s.nextSearchAt), "next " + clockText(s.nextSearchAt)));
-        else if ((s.attempts || 0) >= 6) bits.push(tc("已停止自动重试", "no more retries"));
       } else if (s.status === "low_confidence") {
         bits.push(tc((scr.unknown || 0) + " 个候选无法判定", (scr.unknown || 0) + " need a call"));
         if (scr.fail) bits.push(tc("淘汰 " + scr.fail, scr.fail + " rejected"));
@@ -2088,11 +2099,49 @@
       setDraft(o);
     }
 
+    // 守护的 lastAction 是紧凑代码（search:166:captured、gate:4.3GB + … > 10GB），
+    // 状态行只有一行宽，这里翻成人话：{ 正常, 失败 } 两套说法。
+    var ACTION_TEXT = {
+      starting: ["未运行", "not running", "", ""],
+      capture: ["捕获到新场景", "captured", "捕获失败", "capture failed"],
+      import: ["入库", "import", "入库失败", "import failed"],
+      screen: ["快照", "screen", "快照失败", "screen failed"],
+      push: ["推送", "push", "推送失败", "push failed"],
+      search: ["搜索", "search", "搜索失败", "search failed"],
+      skip: ["跳过", "skip", "", ""],
+      gate: ["推送受限", "push gated", "", ""],
+      qb: ["", "", "下载器报错", "downloader error"],
+      whisparr: ["", "", "Whisparr 报错", "Whisparr error"],
+    };
+
+    function actionText(code) {
+      var s = String(code || "");
+      var i = s.indexOf(":");
+      var head = i < 0 ? s : s.slice(0, i);
+      var rest = i < 0 ? "" : s.slice(i + 1);
+      var bad = head.slice(-1) === "!";
+      if (bad) head = head.slice(0, -1);
+      var def = ACTION_TEXT[head];
+      if (!def) return s;
+      var label = bad ? tc(def[2], def[3]) : tc(def[0], def[1]);
+      if (!label) return s;
+      if (head === "gate") return rest ? label + "（" + rest + "）" : label;
+      if (head === "search" && rest === "cap") return tc("已达每小时上限", "hourly cap");
+      var arg = rest.split(":")[0];
+      return /^\d+$/.test(arg) ? label + " #" + arg : label;
+    }
+
     function automationPanel() {
       if (!ctrlDraft) return h("div", { className: "sf-empty" }, tc("加载中…", "Loading…"));
       var d = (ctrl && ctrl.daemon) || {};
       var alive = !!d.alive;
       var gi = (ctrl && ctrl.gate) || { used: 0, limit: 0, open: true };
+      var sh = (ctrl && ctrl.search) || { hour: 0 };
+      var hourN = sh.hour || 0;
+      var perH = Number(ctrlDraft.searchPerHour);
+      var searchLine = !isWsp() ? " · " + (perH > 0
+        ? tc("本小时搜索 " + hourN + "/" + perH, hourN + "/" + perH + " this hour")
+        : tc("本小时搜索 " + hourN, hourN + " this hour")) : "";
       var switches = [
         isWsp() ? null : { key: "autoSearch", label: tc("捕获 → 搜索", "Capture → search"),
           hint: tc("新空场景自动搜，搜不到逐级退避", "Searches new empty scenes; misses back off") },
@@ -2143,21 +2192,37 @@
               value: ctrlDraft.maxPerDay,
               onChange: function (e) { num("maxPerDay", e.target.value); },
             }), tc("24 小时内最多推几条，0 = 不限", "Pushes per 24 h, 0 = no limit"))),
+        isWsp() ? null : h("div", { className: "sf-grid2 sf-grid2--cards" },
+          field(tc("搜索间隔 秒", "Search gap s"),
+            h("input", {
+              className: "sf-input", type: "number", min: "0", step: "1",
+              value: ctrlDraft.searchGap,
+              onChange: function (e) { num("searchGap", e.target.value); },
+            }), tc("查完一次要等这么久才查下一次，0 = 不限", "Min seconds after one query before the next, 0 = off")),
+          field(tc("每小时搜索", "Searches / hour"),
+            h("input", {
+              className: "sf-input", type: "number", min: "0", step: "1",
+              value: ctrlDraft.searchPerHour,
+              onChange: function (e) { num("searchPerHour", e.target.value); },
+            }), tc("每小时最多查几次，0 = 不限", "Indexer queries per hour, 0 = no cap"))),
         h("div", { className: "sf-actions sf-actions--foot" },
           h("span", { className: "sf-meta" },
             gi.limit > 0
               ? tc("占用 " + humanSize(gi.used) + " / " + humanSize(gi.limit) + (gi.open ? "" : " · 已触顶"),
                 humanSize(gi.used) + " / " + humanSize(gi.limit) + (gi.open ? "" : " · at limit"))
               : tc("占用 " + humanSize(gi.used), humanSize(gi.used) + " in flight"),
-            d.lastAction ? " · " + tc("最近：", "last: ") + d.lastAction : ""),
-          h("button", {
-            className: "sf-btn sf-btn-md", disabled: busy === "control",
-            onClick: function () { saveControl(ctrlDraft); },
-          }, tc("保存", "Save")),
-          h("button", {
-            className: "sf-btn sf-btn-md sf-btn-ghost", disabled: busy === "daemon",
-            onClick: toggleDaemon,
-          }, alive ? tc("停止守护", "Stop worker") : tc("启动守护", "Start worker"))));
+            searchLine,
+            d.lastAction ? " · " + tc("最近：", "last: ") + actionText(d.lastAction) : ""),
+          // 两个按钮绑成一组：换行时一起下去，不要一个在上一行、一个在下一行
+          h("div", { className: "sf-btn-row" },
+            h("button", {
+              className: "sf-btn sf-btn-md", disabled: busy === "control",
+              onClick: function () { saveControl(ctrlDraft); },
+            }, tc("保存", "Save")),
+            h("button", {
+              className: "sf-btn sf-btn-md sf-btn-ghost", disabled: busy === "daemon",
+              onClick: toggleDaemon,
+            }, alive ? tc("停止守护", "Stop worker") : tc("启动守护", "Start worker")))));
     }
 
     function rulesPanel() {
@@ -2680,23 +2745,45 @@
         right || null);
     }
 
-    // 默认视图：和工具条同一套分段按钮，改动立即生效并记住
-    function viewChoice() {
+    // 设置页的「多选一」行：左边标题+说明，右边一排分段按钮，改动立即生效并记住
+    function segRow(title, hint, opts, cur, pick) {
       return h("div", { className: "sf-toggle sf-toggle--row" },
         h("span", { className: "sf-toggle-text" },
-          h("b", null, tc("默认视图", "Default view")),
-          h("span", { className: "sf-meta" },
-            tc("打开页面时默认用网格还是列表", "Grid or list when the page opens"))),
-        h("div", { className: "sf-seg" },
-          [{ id: "grid", icon: "grid", zh: "网格", en: "Grid" },
-          { id: "list", icon: "list", zh: "列表", en: "List" }].map(function (v) {
-            return h("button", {
-              key: v.id, type: "button",
-              className: "sf-segb" + (view === v.id ? " is-on" : ""),
-              title: tc(v.zh, v.en),
-              onClick: function () { switchView(v.id); },
-            }, ico(v.icon));
-          })));
+          h("b", null, title),
+          h("span", { className: "sf-meta" }, hint)),
+        h("div", { className: "sf-seg" }, opts.map(function (o) {
+          return h("button", {
+            key: o.id, type: "button", title: o.title || "",
+            className: "sf-segb" + (cur === o.id ? " is-on" : ""),
+            onClick: function () { pick(o.id); },
+          }, o.label);
+        })));
+    }
+
+    function viewChoice() {
+      return segRow(tc("默认视图", "Default view"),
+        tc("打开页面时默认用网格还是列表", "Grid or list when the page opens"),
+        [{ id: "grid", label: ico("grid"), title: tc("网格", "Grid") },
+        { id: "list", label: ico("list"), title: tc("列表", "List") }],
+        view, switchView);
+    }
+
+    function coverFxChoice() {
+      return segRow(tc("封面动画", "Cover hover"),
+        tc("鼠标指向封面时的效果", "What the cover does on hover"),
+        [{ id: "none", label: tc("禁用", "Off") },
+        { id: "dim", label: tc("变暗", "Dim") },
+        { id: "zoom", label: tc("放大", "Zoom") }],
+        coverFx(), function (v) { prefPut("sf.coverFx", v); });
+    }
+
+    function coverRatioChoice() {
+      return segRow(tc("封面比例", "Cover ratio"),
+        tc("卡片、列表与详情的封面", "Tiles, rows and the detail cover"),
+        [{ id: "16x9", label: "16:9", title: tc("16:9", "16:9") },
+        { id: "3x2", label: "3:2", title: tc("3:2", "3:2") },
+        { id: "4x3", label: "4:3", title: tc("4:3", "4:3") }],
+        coverRatio(), function (v) { prefPut("sf.coverRatio", v); });
     }
 
     function settingsPanel() {
@@ -2717,10 +2804,11 @@
               get: showStatsOn,
               set: function (v) { prefSet("sf.showStats", v); },
               title: tc("显示统计栏", "Show stats"),
-              hint: tc("顶部那排统计卡；同样的入口在 tab 栏也有",
-                "The stat cards on top; the tabs carry the same entries"),
+              hint: tc("顶部那排统计卡", "The stat cards on top"),
             }),
-            viewChoice())),
+            viewChoice(),
+            coverFxChoice(),
+            coverRatioChoice())),
         isWsp() ? null : rulesPanel(),
         isWsp() ? null : evalPanel(),
         h("section", { className: "sf-panel sf-panel--checks sf-panel--wide" },
@@ -2871,7 +2959,8 @@
     var healthy = self && self.ok;
     var fails = ((self && self.checks) || []).filter(function (c) { return !c.ok; });
     var daemonAlive = !!(ctrl && ctrl.daemon && ctrl.daemon.alive);
-    return h("div", { className: "sf-page " + (pageIsDark() ? "is-dark" : "is-light") },
+    return h("div", { className: "sf-page " + (pageIsDark() ? "is-dark" : "is-light") +
+        " sf-fx-" + coverFx() + " sf-r-" + coverRatio() },
       h("header", { className: "sf-head" },
         h("div", { className: "sf-brand" },
           h("span", { className: "sf-logo" }, faIcon("faMagnet", "sf-logo-ico") || "SF"),

@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -289,26 +289,32 @@ DAEMON_STALE = 300            # a heartbeat older than this means it is gone
 DAEMON_IDLE_EXIT = 30 * 60    # all switches off and nothing in flight
 TICK_BUDGET = 45.0
 BACKOFF = (900, 3600, 6 * 3600, 24 * 3600)
+# Indexer protection. A batch import (stashDiscover) or a library-wide daily
+# retry must not become a query storm: one gap between two queries, plus a cap
+# per hour. Both are 0 = off.
+SEARCH_GAP = 15
+SEARCH_PER_HOUR = 60
 
 
 def get_control(st):
     c = st.get("control") or {}
-    try:
-        total = float(c.get("maxTotalGB") or 0)
-    except Exception:
-        total = 0.0
-    try:
-        per_day = int(c.get("maxPerDay") or 0)
-    except Exception:
-        per_day = 0
+
+    def num(key, dflt, cast=int):
+        try:
+            return cast(float(c.get(key)))
+        except Exception:
+            return dflt
+
     # All three start off: a fresh install must not move files until the
     # user turns a switch on.
     return {
         "autoSearch": bool(c["autoSearch"]) if "autoSearch" in c else False,
         "autoPush": bool(c["autoPush"]) if "autoPush" in c else False,
         "autoImport": bool(c["autoImport"]) if "autoImport" in c else False,
-        "maxTotalGB": total,
-        "maxPerDay": per_day,
+        "maxTotalGB": num("maxTotalGB", 0.0, float),
+        "maxPerDay": num("maxPerDay", 0),
+        "searchGap": max(0, num("searchGap", SEARCH_GAP)),
+        "searchPerHour": max(0, num("searchPerHour", SEARCH_PER_HOUR)),
     }
 
 
@@ -353,7 +359,7 @@ def set_control(st, args):
             cur[k] = True
         elif v in ("0", "false", "no", "off"):
             cur[k] = False
-    for k in ("maxTotalGB", "maxPerDay"):
+    for k in ("maxTotalGB", "maxPerDay", "searchGap", "searchPerHour"):
         raw = raw_of(k)
         if raw:
             try:
@@ -440,6 +446,8 @@ def do_control(ctx):
             "autoImport": ctx.arg("autoImport", ""),
             "maxTotalGB": ctx.arg("maxTotalGB", ""),
             "maxPerDay": ctx.arg("maxPerDay", ""),
+            "searchGap": ctx.arg("searchGap", ""),
+            "searchPerHour": ctx.arg("searchPerHour", ""),
         })
         save_state(ctx, st, own=OWN_CONTROL)
     used = pending_bytes(st)
@@ -449,6 +457,7 @@ def do_control(ctx):
         "daemon": daemon_status(st),
         "gate": {"used": used, "limit": limit, "open": gate(st)[0],
                  "reason": gate(st)[1]},
+        "search": search_status(st),
     }
 
 
@@ -2780,8 +2789,11 @@ def screen_scene(st, sid):
     return status, counts
 
 
-def search_scene(ctx, st, sid):
-    """Search one scene and record the result. Returns (status, candidates, best)."""
+def search_scene(ctx, st, sid, paced=False):
+    """Search one scene and record the result. Returns (status, candidates, best).
+
+    `paced` is set only by the automated round: a query the user just clicked
+    should not sit behind the interval, but it still counts towards the cap."""
     cfg = ctx.config()
     data = ctx.gql("""
     query($id: ID!) {
@@ -2798,9 +2810,17 @@ def search_scene(ctx, st, sid):
     code = scene.get("code") or ""
     date = scene.get("date") or ""
     query, results = terms[0], []
+    ctrl = get_control(st)
     for term in terms:
+        # 一个场景最多退三个搜索词，每个都是对索引器的一次真实查询：
+        # 逐次等间隔、逐次计数，否则「每小时 N 次」只是场景数的一半不到。
+        if paced:
+            pace_search(st, ctrl)
         query = term
-        results = indexer_search(cfg, term, net_timeout(cfg))
+        try:
+            results = indexer_search(cfg, term, net_timeout(cfg))
+        finally:
+            mark_search(st)
         if results:
             break
     # A stranger is worse than nothing: the rules judge size, seeders and file
@@ -2845,7 +2865,61 @@ def next_search_at(rec):
     n = int(rec.get("attempts") or 0)
     if n <= 0:
         return 0
-    return int(rec.get("searchedAt") or 0) + BACKOFF[min(n - 1, len(BACKOFF) - 1)]
+    step = BACKOFF[min(n - 1, len(BACKOFF) - 1)]
+    return int(rec.get("searchedAt") or 0) + step + (scene_jitter(rec) if step == BACKOFF[-1] else 0)
+
+
+def scene_jitter(rec):
+    """Up to an hour, derived from the id so it stays put between ticks.
+
+    Without it every scene that missed on the same day comes due on the same
+    second, and the daily retry turns into one burst of queries."""
+    try:
+        return int(rec.get("id") or 0) % 3600
+    except Exception:
+        return 0
+
+
+def search_wait(st, ctrl, now=None):
+    """Seconds until the next indexer query is allowed; None = hourly cap hit."""
+    now = int(now or time.time())
+    s = st.setdefault("search", {})
+    gap = int(ctrl.get("searchGap") or 0)
+    if gap:
+        wait = int(s.get("last") or 0) + gap - now
+        if wait > 0:
+            return wait
+    per_hour = int(ctrl.get("searchPerHour") or 0)
+    if per_hour > 0:
+        hits = [t for t in (s.get("hits") or []) if now - int(t) < 3600]
+        s["hits"] = hits
+        if len(hits) >= per_hour:
+            return None
+    return 0
+
+
+def mark_search(st, now=None):
+    now = int(now or time.time())
+    s = st.setdefault("search", {})
+    s["last"] = now
+    s["hits"] = [t for t in (s.get("hits") or []) if now - int(t) < 3600] + [now]
+
+
+def pace_search(st, ctrl):
+    """Sleep until the gap since the previous query has passed.
+
+    The hourly cap is checked once per scene, not here: stopping halfway
+    through a scene's terms records a partial search and burns a retry slot."""
+    wait = search_wait(st, ctrl)
+    if wait:
+        time.sleep(wait)
+
+
+def search_status(st):
+    now = int(time.time())
+    s = st.get("search") or {}
+    return {"last": int(s.get("last") or 0),
+            "hour": len([t for t in (s.get("hits") or []) if now - int(t) < 3600])}
 
 
 # ─── 规则与清单预检 ──────────────────────────────────────────────────────
@@ -3413,7 +3487,6 @@ def scan_and_find_many(ctx, paths, timeout=90):
 
 # ─── 时钟 ────────────────────────────────────────────────────────────────
 
-MAX_ATTEMPTS = 6
 # Import is retried by every tick; a file Stash cannot see (wrong path, outside
 # the library) would otherwise be scanned every 90 seconds forever.
 IMPORT_RETRY = (60, 300, 900, 3600, 21600)
@@ -3559,19 +3632,28 @@ def run_tick(ctx, st, ctrl, src):
                 actions.append("push!:" + sid)
             save_state(ctx, st)
 
-    # 6. searches, as many as the budget allows. A round used to do one no
-    #    matter how fast the indexer answered, so a fresh library of 50 empty
-    #    scenes took 75 minutes to get its first look.
+    # 6. searches, as many as the budget and the pacing settings allow. A round
+    #    used to do one no matter how fast the indexer answered, so a fresh
+    #    library of 50 empty scenes took 75 minutes to get its first look.
     if ctrl["autoSearch"]:
         for _ in range(5):
             if left() < 20:
+                break
+            wait = search_wait(st, ctrl)
+            if wait is None:
+                actions.append("search:cap")
+                break
+            # The gap is the point: wait it out instead of firing the round
+            # back to back, but never eat the budget the next steps need.
+            # The waiting itself happens per query, in search_scene.
+            if wait > left() - 18:
                 break
             sid = next_search_target(st)
             if not sid:
                 break
             rec = st["scenes"][sid]
             try:
-                search_scene(ctx, st, sid)
+                search_scene(ctx, st, sid, paced=True)
                 actions.append("search:%s:%s" % (sid, rec.get("status")))
             except Exception as e:
                 rec["error"] = t_(ctx, "搜索失败：", "search failed: ") + _safe_text(str(e))[:180]
@@ -3630,18 +3712,21 @@ def next_search_target(st):
             # threw has its attempts bumped, so it waits like any other miss.
             if not attempts:
                 return sid
-            if now >= next_search_at(rec):
-                retry.append((attempts, sid))
-        elif status == "no_result" and attempts < MAX_ATTEMPTS:
             at = next_search_at(rec)
-            if now >= at:
-                retry.append((attempts, sid))
+        elif status == "no_result":
+            # Never gives up: the ladder tops out at one look a day, so a
+            # release that shows up a month later is still caught.
+            at = next_search_at(rec)
         elif status == "low_confidence":
             # Candidates exist but nothing could be judged (magnet-only, or no
             # file list). Re-check once a day: new releases do keep appearing.
-            at = int(rec.get("searchedAt") or 0) + BACKOFF[-1]
-            if now >= at:
-                retry.append((attempts + 1, sid))
+            at = int(rec.get("searchedAt") or 0) + BACKOFF[-1] + scene_jitter(rec)
+        else:
+            continue
+        if now >= at:
+            # Oldest due first: a scene searched a month ago outranks one whose
+            # retry came due a minute ago, so a big backlog keeps rotating.
+            retry.append((at, sid))
     if retry:
         retry.sort()
         return retry[0][1]

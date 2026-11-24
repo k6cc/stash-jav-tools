@@ -137,6 +137,8 @@
 }
 .sb-tab.is-on .sb-count { background: rgba(0, 0, 0, .22); color: var(--sb-hi); }
 .sb-count.is-hot { color: var(--sb-ye); }
+/* 未选中的数字跟着本组颜色走，选中时统一为高亮白 */
+.sb-tab .sb-count { color: var(--c, var(--sb-tx2)); }
 /* 已完成只显示增量：用绿色小胶囊，和总数区分开 */
 .sb-count.is-new {
   color: var(--sb-gr); background: rgba(var(--sb-gr-rgb), .15);

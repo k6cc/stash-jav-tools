@@ -12,11 +12,11 @@
 (function () {
   "use strict";
 
-  if (window.__sfLoaded) return;
-  window.__sfLoaded = true;
+  if (window.__sbLoaded) return;
+  window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.13";
+  var PLUGIN_VERSION = "0.1.14";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -150,7 +150,7 @@
   // 到手时）或一次只读 state 的请求更新。
   var NAV = {
     c: { found: 0, active: 0, done: 0, pending: 0 },
-    evt: "sf:nav-count", badgeEvt: "sf:nav-badge", asked: false,
+    evt: "sb:nav-count", badgeEvt: "sb:nav-badge", asked: false,
   };
   function navCount(c) {
     if (typeof c === "number") c = { found: c };
@@ -168,9 +168,9 @@
   // ── 浏览器侧偏好：导航角标、版本号、统计栏、已完成增量 ─────────────
   // 全是展示偏好，存 localStorage 而不是插件配置；导航条在任何页面都渲染，
   // 同步读取才能避免首屏闪一下再消失。
-  var UI_EVT = "sf:ui-pref";
-  var NAV_BADGE_KEY = "sf.navBadge";
-  var DONE_SEEN_KEY = "sf.doneSeen";
+  var UI_EVT = "sb:ui-pref";
+  var NAV_BADGE_KEY = "sb.navBadge";
+  var DONE_SEEN_KEY = "sb.doneSeen";
   function prefOn(key, def) {
     try {
       var v = window.localStorage.getItem(key);
@@ -190,12 +190,12 @@
     } catch (e) { return def; }
   }
   function navBadgeOn() { return prefOn(NAV_BADGE_KEY, true); }
-  function showVerOn() { return prefOn("sf.showVer", true); }
-  function showStatsOn() { return prefOn("sf.showStats", true); }
+  function showVerOn() { return prefOn("sb.showVer", true); }
+  function showStatsOn() { return prefOn("sb.showStats", true); }
   // 封面动画：dim = 变暗（老行为），none = 禁用，zoom = 画面在框内放大
-  function coverFx() { return prefPick("sf.coverFx", "dim", ["dim", "none", "zoom"]); }
+  function coverFx() { return prefPick("sb.coverFx", "dim", ["dim", "none", "zoom"]); }
   // 封面比例：16:9 是插件原来的固定值，也是截图的比例
-  function coverRatio() { return prefPick("sf.coverRatio", "16x9", ["16x9", "3x2", "4x3"]); }
+  function coverRatio() { return prefPick("sb.coverRatio", "16x9", ["16x9", "3x2", "4x3"]); }
   function setNavBadge(on) {
     prefSet(NAV_BADGE_KEY, on);
     // 导航项不在页面组件树里，单独发事件让它重渲染。不能复用 nav-count：
@@ -238,12 +238,12 @@
   function NavBadgeToggle() {
     var React = Api.React;
     var on = React.useState(navBadgeOn());
-    return React.createElement("label", { className: "sf-toggle sf-toggle--switch" },
-      React.createElement("span", { className: "sf-toggle-text" },
+    return React.createElement("label", { className: "sb-toggle sb-toggle--switch" },
+      React.createElement("span", { className: "sb-toggle-text" },
         React.createElement("b", null, tc("导航栏数字角标", "Navigation count badge")),
-        React.createElement("span", { className: "sf-meta" },
+        React.createElement("span", { className: "sb-meta" },
           tc("关闭后不再显示导航栏数字", "Hides the number in the navigation when off"))),
-      React.createElement("span", { className: "sf-switch" },
+      React.createElement("span", { className: "sb-switch" },
         React.createElement("input", {
           type: "checkbox", checked: on[0],
           onChange: function (e) { setNavBadge(e.target.checked); on[1](e.target.checked); },
@@ -254,11 +254,11 @@
   function PrefSwitch(props) {
     var React = Api.React;
     var on = React.useState(props.get());
-    return React.createElement("label", { className: "sf-toggle sf-toggle--switch" },
-      React.createElement("span", { className: "sf-toggle-text" },
+    return React.createElement("label", { className: "sb-toggle sb-toggle--switch" },
+      React.createElement("span", { className: "sb-toggle-text" },
         React.createElement("b", null, props.title),
-        React.createElement("span", { className: "sf-meta" }, props.hint)),
-      React.createElement("span", { className: "sf-switch" },
+        React.createElement("span", { className: "sb-meta" }, props.hint)),
+      React.createElement("span", { className: "sb-switch" },
         React.createElement("input", {
           type: "checkbox", checked: on[0],
           onChange: function (e) { props.set(e.target.checked); on[1](e.target.checked); },
@@ -349,7 +349,7 @@
   };
   function ico(name, cls) {
     return Api.React.createElement("svg", {
-      className: "sf-ico" + (cls ? " " + cls : ""),
+      className: "sb-ico" + (cls ? " " + cls : ""),
       viewBox: "0 0 16 16", fill: "none", stroke: "currentColor",
       strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round",
       "aria-hidden": "true",
@@ -364,7 +364,7 @@
     var React = Api.React;
     var down = React.useRef(null);
     return React.createElement("div", {
-      className: "sf-modal-back",
+      className: "sb-modal-back",
       onPointerDown: function (e) {
         down.current = {
           on: e.target === e.currentTarget,
@@ -402,7 +402,7 @@
   function statusLabel(s) { var m = metaOf(s); return isZh() ? m.zh : m.en; }
   function statusPill(st) {
     var m = metaOf(st);
-    return Api.React.createElement("span", { className: "sf-pill is-h-" + m.hue },
+    return Api.React.createElement("span", { className: "sb-pill is-h-" + m.hue },
       ico(m.icon), statusLabel(st));
   }
 
@@ -420,7 +420,7 @@
     useLocale();
 
     var tabState = useState(function () {
-      try { return window.localStorage.getItem("sf.tab") || "pending"; }
+      try { return window.localStorage.getItem("sb.tab") || "pending"; }
       catch (e) { return "pending"; }
     });
     var tab = tabState[0];
@@ -433,7 +433,7 @@
       idxState[1]("");
       resState[1]("");
       toolsOpenState[1](false);
-      try { window.localStorage.setItem("sf.tab", id); } catch (e) { /* private mode */ }
+      try { window.localStorage.setItem("sb.tab", id); } catch (e) { /* private mode */ }
     }
 
     var selfState = useState(CACHE.self);
@@ -474,13 +474,13 @@
       return function () { de.style.overflow = o1; b.style.overflow = o2; };
     }, [modalOpen]);
     var viewState = useState(function () {
-      try { return window.localStorage.getItem("sf.view") || "grid"; }
+      try { return window.localStorage.getItem("sb.view") || "grid"; }
       catch (e) { return "grid"; }
     });
     var view = viewState[0], setView = viewState[1];
     function switchView(v) {
       viewState[1](v);
-      try { window.localStorage.setItem("sf.view", v); } catch (e) { /* private mode */ }
+      try { window.localStorage.setItem("sb.view", v); } catch (e) { /* private mode */ }
     }
     var qState = useState("");
     var q = qState[0], setQ = qState[1];
@@ -978,7 +978,7 @@
     }
 
     if (!Api || !Api.React) {
-      return h("div", { className: "sf-page" }, "PluginApi unavailable");
+      return h("div", { className: "sb-page" }, "PluginApi unavailable");
     }
 
     var scenes = (cap && cap.scenes) || [];
@@ -1056,11 +1056,11 @@
     // 这排卡同时是筛选器：点一下就只看这一组，再点回到全部。
     function statCard(n, hue, label, on, onClick) {
       return h("button", {
-        className: "sf-stat is-h-" + hue + (n ? "" : " is-zero") + (on ? " is-on" : ""),
+        className: "sb-stat is-h-" + hue + (n ? "" : " is-zero") + (on ? " is-on" : ""),
         onClick: onClick,
       },
-        h("span", { className: "sf-stat-n" }, n),
-        h("span", { className: "sf-stat-l" }, label));
+        h("span", { className: "sb-stat-n" }, n),
+        h("span", { className: "sb-stat-l" }, label));
     }
 
     function statsRow() {
@@ -1079,7 +1079,7 @@
       var free = "";
       var sp = ((self && self.checks) || []).filter(function (c) { return c.key === "space"; })[0];
       if (sp && sp.detail && sp.detail !== "-") free = sp.detail;
-      return h("div", { className: "sf-stats" }, [
+      return h("div", { className: "sb-stats" }, [
         statCard(pending.length, "ye", tc("待处理", "Pending"),
           tab === "pending", function () { switchTab("pending"); }),
         isWsp() ? null : statCard(found.length, "gr", tc("有结果", "Results"),
@@ -1091,21 +1091,21 @@
           tab === "downloading" && filter === "ready",
           function () { switchTab("downloading"); setFilter("ready"); }),
         h("button", {
-          className: "sf-stat sf-stat--wide" + (over ? " is-h-re" : ""),
+          className: "sb-stat sb-stat--wide" + (over ? " is-h-re" : ""),
           onClick: function () { switchTab("settings"); },
           title: tc("推送上限，点开设置", "Push cap, opens settings"),
         },
-          h("div", { className: "sf-stat-n" }, humanSize(used),
-            total ? h("span", { className: "sf-stat-pct" }, Math.round(pct) + "%") : null),
-          h("div", { className: "sf-stat-wrow" },
-            h("span", { className: "sf-stat-l" },
+          h("div", { className: "sb-stat-n" }, humanSize(used),
+            total ? h("span", { className: "sb-stat-pct" }, Math.round(pct) + "%") : null),
+          h("div", { className: "sb-stat-wrow" },
+            h("span", { className: "sb-stat-l" },
               limit ? tc("占用 · 上限 " + humanSize(limit), "used · cap " + humanSize(limit))
                 : tc("占用 · 无上限", "used · no cap")),
-            free ? h("span", { className: "sf-stat-l sf-stat-free" },
+            free ? h("span", { className: "sb-stat-l sb-stat-free" },
               tc("剩 " + free, free + " free")) : null),
           // 贴在卡片底边、脱离布局流，不参与撑高
           total ? h("div", {
-            className: "sf-stat-bar is-h-" + tone,
+            className: "sb-stat-bar is-h-" + tone,
             title: tc("这批下载占可用空间 " + Math.round(pct) + "%",
               Math.round(pct) + "% of free space in use"),
           }, h("i", { style: { width: pct + "%" } })) : null),
@@ -1113,12 +1113,12 @@
     }
 
     function viewSeg() {
-      return h("div", { className: "sf-seg" },
+      return h("div", { className: "sb-seg" },
         [{ id: "grid", icon: "grid", zh: "网格", en: "Grid" },
         { id: "list", icon: "list", zh: "列表", en: "List" }].map(function (v, i) {
           return h("button", {
             key: i,
-            className: "sf-segb" + (view === v.id ? " is-on" : ""),
+            className: "sb-segb" + (view === v.id ? " is-on" : ""),
             title: tc(v.zh, v.en),
             onClick: function () { switchView(v.id); },
           }, ico(v.icon));
@@ -1142,7 +1142,7 @@
       // 只剩一项时也留着：这枚下拉本身就是「这里能筛」的提示
       if (!opts.length) return null;
       return h("select", {
-        className: "sf-input sf-select sf-select--mini" + (value ? " is-on" : ""),
+        className: "sb-input sb-select sb-select--mini" + (value ? " is-on" : ""),
         value: value, onChange: function (e) { onChange(e.target.value); },
         title: allLabel,
       },
@@ -1152,7 +1152,7 @@
 
     function selToggle() {
       return h("button", {
-        className: "sf-icb" + (selOn ? " is-acc" : ""),
+        className: "sb-icb" + (selOn ? " is-acc" : ""),
         title: selOn ? tc("退出多选（Esc）", "Exit selection (Esc)") : tc("多选", "Select"),
         "aria-label": tc("多选", "Select"), "aria-pressed": selOn,
         onClick: function () { if (selOn) exitSel(); else setSelOn(true); },
@@ -1161,7 +1161,7 @@
 
     function refreshBtn() {
       return h("button", {
-        className: "sf-icb" + (refreshing ? " is-busy" : ""), disabled: refreshing,
+        className: "sb-icb" + (refreshing ? " is-busy" : ""), disabled: refreshing,
         title: tc("刷新", "Refresh"), "aria-label": tc("刷新", "Refresh"),
         onClick: doRefresh,
       }, ico("refresh"));
@@ -1180,8 +1180,8 @@
           }), setRes, tc("全部分辨率", "All resolutions")),
         ].filter(Boolean)
         : [];
-      return h("div", { className: "sf-tools" + (toolsOpen ? " is-open" : "") },
-        h("label", { className: "sf-search" },
+      return h("div", { className: "sb-tools" + (toolsOpen ? " is-open" : "") },
+        h("label", { className: "sb-search" },
           ico("search"),
           h("input", {
             type: "search", value: q,
@@ -1190,16 +1190,16 @@
           })),
         // 窄屏唯一的一枚「更多」：筛选项、视图、多选、刷新，加上当前 tab 的批量动作
         h("button", {
-          className: "sf-icb sf-tools-more" + (toolsOpen ? " is-acc" : ""),
+          className: "sb-icb sb-tools-more" + (toolsOpen ? " is-acc" : ""),
           title: tc("更多工具", "More tools"), "aria-label": tc("更多工具", "More tools"),
           "aria-expanded": toolsOpen,
           onClick: function () { setToolsOpen(!toolsOpen); },
         }, ico("more")),
-        h("div", { className: "sf-tools-extra" },
-          MEXTRA.length ? h("div", { className: "sf-tools-mob" }, MEXTRA) : null,
+        h("div", { className: "sb-tools-extra" },
+          MEXTRA.length ? h("div", { className: "sb-tools-mob" }, MEXTRA) : null,
           candFilters,
           // 这一组图标在窄屏单独占一行，不至于把刷新孤零零地甩到第三行
-          h("div", { className: "sf-tools-icons" },
+          h("div", { className: "sb-tools-icons" },
             selToggle(),
             viewSeg(),
             refreshBtn())));
@@ -1212,15 +1212,15 @@
       if (tab === "pending") {
         return [
           isWsp() ? h("button", {
-            className: "sf-btn sf-btn-sm" + dis(),
+            className: "sb-btn sb-btn-sm" + dis(),
             onClick: function () { runSel("push"); },
           }, ico("download"), tc("交给 Whisparr", "Send to Whisparr"))
             : h("button", {
-            className: "sf-btn sf-btn-sm" + dis(),
+            className: "sb-btn sb-btn-sm" + dis(),
             onClick: function () { runSel("search"); },
           }, ico("search"), tc("立即搜索", "Search")),
           h("button", {
-            className: "sf-btn sf-btn-sm sf-btn-ghost" + dis(),
+            className: "sb-btn sb-btn-sm sb-btn-ghost" + dis(),
             onClick: function () { runSel("ignore"); },
           }, ico("ban"), tc("忽略", "Ignore")),
         ];
@@ -1228,11 +1228,11 @@
       if (tab === "results") {
         return [
           h("button", {
-            className: "sf-btn sf-btn-sm" + dis(),
+            className: "sb-btn sb-btn-sm" + dis(),
             onClick: function () { runSel("push"); },
           }, ico("download"), tc("推送最佳", "Push best")),
           h("button", {
-            className: "sf-btn sf-btn-sm sf-btn-ghost" + dis(),
+            className: "sb-btn sb-btn-sm sb-btn-ghost" + dis(),
             onClick: function () { runSel("ignore"); },
           }, ico("ban"), tc("忽略", "Ignore")),
         ];
@@ -1240,27 +1240,27 @@
       if (tab === "downloading") {
         return [
           isWsp() ? null : h("button", {
-            className: "sf-btn sf-btn-sm" + dis(),
+            className: "sb-btn sb-btn-sm" + dis(),
             onClick: function () { runSel("resume"); },
           }, ico("play"), tc("继续", "Resume")),
           isWsp() ? null : h("button", {
-            className: "sf-btn sf-btn-sm sf-btn-ghost" + dis(),
+            className: "sb-btn sb-btn-sm sb-btn-ghost" + dis(),
             onClick: function () { runSel("pause"); },
           }, ico("pause"), tc("暂停", "Pause")),
           h("button", {
-            className: "sf-btn sf-btn-sm sf-btn-ghost is-danger" + dis(),
+            className: "sb-btn sb-btn-sm sb-btn-ghost is-danger" + dis(),
             onClick: function () { runSel("remove"); },
           }, ico("trash"), tc("移除", "Remove")),
         ].filter(Boolean);
       }
       if (tab === "done") {
         return [h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost is-danger" + dis(),
+          className: "sb-btn sb-btn-sm sb-btn-ghost is-danger" + dis(),
           onClick: function () { runSel("forget"); },
         }, ico("trash"), tc("移除记录", "Remove"))];
       }
       return [h("button", {
-        className: "sf-btn sf-btn-sm" + dis(),
+        className: "sb-btn sb-btn-sm" + dis(),
         onClick: function () { runSel("restore"); },
       }, ico("plus"), tc("恢复", "Restore"))];
     }
@@ -1268,25 +1268,25 @@
     function selBar() {
       if (!selOn) return null;
       var n = selIds().length;
-      return h("div", { className: "sf-selbar" },
+      return h("div", { className: "sb-selbar" },
         h("button", {
-          className: "sf-icb", title: tc("退出多选（Esc）", "Exit selection (Esc)"),
+          className: "sb-icb", title: tc("退出多选（Esc）", "Exit selection (Esc)"),
           onClick: exitSel,
         }, ico("x")),
-        h("span", { className: "sf-selbar-n" }, tc("已选 " + n, n + " selected")),
+        h("span", { className: "sb-selbar-n" }, tc("已选 " + n, n + " selected")),
         h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost", disabled: !n,
+          className: "sb-btn sb-btn-sm sb-btn-ghost", disabled: !n,
           onClick: function () { setSel({}); },
         }, tc("清空", "Clear")),
         h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost", disabled: !VIS.length,
+          className: "sb-btn sb-btn-sm sb-btn-ghost", disabled: !VIS.length,
           onClick: function () {
             var next = {};
             VIS.forEach(function (id) { next[id] = true; });
             setSel(next);
           },
         }, tc("全选", "Select all")),
-        h("div", { className: "sf-selbar-act" }, selActions()));
+        h("div", { className: "sb-selbar-act" }, selActions()));
     }
 
     // 列表模式下按天分组：今天 / 昨天 / 最近 7 天 / 更早
@@ -1307,7 +1307,7 @@
     ];
 
     function pill(hue, text, iconName) {
-      return h("span", { className: "sf-pill is-h-" + hue },
+      return h("span", { className: "sb-pill is-h-" + hue },
         iconName ? ico(iconName) : null, text);
     }
     function warnPill(text) { return pill("ye", text); }
@@ -1338,17 +1338,17 @@
 
     // ─── 通用渲染件 ───────────────────────────────────────────────────────
     function badge(hue, content, title) {
-      return h("span", { className: "sf-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
+      return h("span", { className: "sb-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
         content);
     }
     // 带图标的徽章：图标与文字要作为两个子节点，不能字符串拼（会渲染成 [object Object]）
     function badgeIco(hue, iconName, text, title) {
-      return h("span", { className: "sf-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
+      return h("span", { className: "sb-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
         ico(iconName), text);
     }
     function iconBtn(name, title, onClick, cls) {
       return h("button", {
-        className: "sf-icb" + (cls ? " " + cls : ""), title: title,
+        className: "sb-icb" + (cls ? " " + cls : ""), title: title,
         onClick: onClick, "aria-label": title,
       }, ico(name));
     }
@@ -1357,33 +1357,33 @@
       var k = String(key);
       var picked = selOn && !!sel[k];
       return h("article", {
-        className: "sf-tile" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
+        className: "sb-tile" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
         key: key,
         onClick: selOn ? function (e) {
           var t = e.target;
-          if (t && t.closest && t.closest("button, a, .sf-shot--btn, .sf-title--btn")) return;
+          if (t && t.closest && t.closest("button, a, .sb-shot--btn, .sb-title--btn")) return;
           toggleSel(k);
         } : null,
       },
         coverNode,
-        h("div", { className: "sf-tile-body" }, body.filter(Boolean)),
-        foot && foot.length ? h("div", { className: "sf-tile-foot" }, foot.filter(Boolean)) : null);
+        h("div", { className: "sb-tile-body" }, body.filter(Boolean)),
+        foot && foot.length ? h("div", { className: "sb-tile-foot" }, foot.filter(Boolean)) : null);
     }
 
     // 列表上方的一条：左边一句话（连接状态 / 条数），右边这一屏的批量动作。
     // 窄屏只留左边那句话，按钮搬进工具条的「更多」。
     function listBar(meta, buttons, wide) {
       var shown = (buttons || []).filter(Boolean);
-      return h("div", { className: "sf-listbar" + (wide ? " sf-listbar--wide" : "") },
-        h("div", { className: "sf-listbar-meta" }, meta),
-        shown.length ? h("div", { className: "sf-listbar-btns" }, shown) : null);
+      return h("div", { className: "sb-listbar" + (wide ? " sb-listbar--wide" : "") },
+        h("div", { className: "sb-listbar-meta" }, meta),
+        shown.length ? h("div", { className: "sb-listbar-btns" }, shown) : null);
     }
 
     // 分组头：图标 + 名字 + 计数 pill + 右侧折叠箭头。整行可点收起。
     function groupHead(key, hue, iconName, label, n, extra) {
       var folded = !!fold[key];
       return h("button", {
-        className: "sf-gh is-h-" + hue + (folded ? " is-fold" : ""),
+        className: "sb-gh is-h-" + hue + (folded ? " is-fold" : ""),
         onClick: function () {
           var next = Object.assign({}, fold);
           next[key] = !next[key];
@@ -1391,10 +1391,10 @@
         },
       },
         ico(iconName),
-        h("span", { className: "sf-gh-name" }, label),
-        h("span", { className: "sf-gn" }, n),
-        h("span", { className: "sf-gh-tail" }, extra || null),
-        ico("chevron", "sf-gh-caret"));
+        h("span", { className: "sb-gh-name" }, label),
+        h("span", { className: "sb-gn" }, n),
+        h("span", { className: "sb-gh-tail" }, extra || null),
+        ico("chevron", "sb-gh-caret"));
     }
 
     // 封面 + 标题是进详情的入口；卡片本身不响应点击，里面的按钮才不会被吃掉。
@@ -1409,7 +1409,7 @@
       var dur = fmtDur(s.duration);
       var picked = selOn && !!sel[String(s.id)];
       return h("div", {
-        className: "sf-shot sf-shot--btn" + (prog != null ? " has-prog" : ""),
+        className: "sb-shot sb-shot--btn" + (prog != null ? " has-prog" : ""),
         onClick: selOn ? function () { toggleSel(s.id); } : (onOpen || function () { openDetail(s.id); }),
         title: selOn ? tc("勾选", "Select") : tc("查看详情", "Open details"),
       },
@@ -1420,32 +1420,32 @@
               var o = {}; o[s.id] = true; setShotBroken(Object.assign({}, shotBroken, o));
             },
           })
-          : h("span", { className: "sf-shot-ph sf-lib" }, s.code || "—"),
+          : h("span", { className: "sb-shot-ph sb-lib" }, s.code || "—"),
         selOn
-          ? h("span", { className: "sf-shot-check" + (picked ? " is-on" : "") },
+          ? h("span", { className: "sb-shot-check" + (picked ? " is-on" : "") },
             picked ? ico("check") : null)
           : null,
-        s.code ? h("span", { className: "sf-shot-code sf-lib" }, s.code) : null,
+        s.code ? h("span", { className: "sb-shot-code sb-lib" }, s.code) : null,
         badgeNode || null,
-        prog == null ? null : h("div", { className: "sf-shot-prog" },
+        prog == null ? null : h("div", { className: "sb-shot-prog" },
           h("i", { style: { width: prog + "%" } })),
         prog != null
-          ? h("span", { className: "sf-shot-pct" }, prog + "%")
-          : dur ? h("span", { className: "sf-shot-dur" }, dur) : null);
+          ? h("span", { className: "sb-shot-pct" }, prog + "%")
+          : dur ? h("span", { className: "sb-shot-dur" }, dur) : null);
     }
 
     function sceneLine(s) {
       var bits = [(s.performers || []).join(" / "), s.date, s.studio].filter(Boolean);
-      return h("div", { className: "sf-meta" + (bits.length ? " sf-lib" : "") },
+      return h("div", { className: "sb-meta" + (bits.length ? " sb-lib" : "") },
         bits.join(" · ") || "—");
     }
 
-    // 库内容标记：sf-lib 只说明「这串来自 Stash 库」，插件自己的统计、种子名不加，
+    // 库内容标记：sb-lib 只说明「这串来自 Stash 库」，插件自己的统计、种子名不加，
     // 外部遮蔽插件据此只遮库内容。类名本身不参与任何样式。
     // 一行里混了库内容与插件统计时（「演员 · 大小 · 3 小时前」），库那截单独包一层。
     function libLine(main, rest) {
       var out = [];
-      if (main) out.push(main === "—" ? "—" : h("span", { className: "sf-lib" }, main));
+      if (main) out.push(main === "—" ? "—" : h("span", { className: "sb-lib" }, main));
       (rest || []).forEach(function (x) { if (x) out.push(" · ", x); });
       return out.length ? out : "—";
     }
@@ -1462,10 +1462,10 @@
       if (!list.length) return null;
       var shown = list.slice(0, max);
       var rest = list.length - shown.length;
-      return h("div", { className: "sf-tags " + (cls || "") },
-        shown.map(function (t) { return h("span", { className: "sf-tag sf-lib", key: t }, t); }),
+      return h("div", { className: "sb-tags " + (cls || "") },
+        shown.map(function (t) { return h("span", { className: "sb-tag sb-lib", key: t }, t); }),
         rest > 0 ? h("span", {
-          className: "sf-tag sf-tag-more", title: list.slice(max).join("、"),
+          className: "sb-tag sb-tag-more", title: list.slice(max).join("、"),
         }, "+" + rest) : null);
     }
 
@@ -1500,7 +1500,7 @@
 
     // 为什么是这条：三态理由 chip。ok=支持，no=缺失（红字），na=只是无法判断。
     function reasonChip(kind, text) {
-      return h("span", { className: "sf-rc is-" + kind }, text);
+      return h("span", { className: "sb-rc is-" + kind }, text);
     }
     function reasonChips(s, c) {
       var out = [];
@@ -1525,7 +1525,7 @@
     }
     function reasonRow(s, c) {
       var chips = reasonChips(s, c);
-      return chips.length ? h("div", { className: "sf-rcs" }, chips) : null;
+      return chips.length ? h("div", { className: "sb-rcs" }, chips) : null;
     }
 
     // Every card here is already in the tab it belongs to, so "Found" or
@@ -1544,12 +1544,12 @@
       if (!best) return null;
       if (best.freeleech && !allFree(s)) {
         return h("span", {
-          className: "sf-pill is-h-gr",
+          className: "sb-pill is-h-gr",
           title: tc("站点把这条标为免费：下载量不计入分享率",
             "The tracker marks this freeleech: the download does not count against your ratio"),
         }, tc("免比率", "Freeleech"));
       }
-      if (best.tag) return h("span", { className: "sf-pill is-h-or" }, best.tag);
+      if (best.tag) return h("span", { className: "sb-pill is-h-or" }, best.tag);
       return null;
     }
 
@@ -1559,20 +1559,20 @@
       var pushing = busy === "push:" + s.id;
       var pass = c.verdict === "pass";
       return h("div", {
-        className: "sf-cand" + (c.verdict === "fail" ? " is-off" : "") + (o.best ? " is-best" : ""),
+        className: "sb-cand" + (c.verdict === "fail" ? " is-off" : "") + (o.best ? " is-best" : ""),
         key: (c.infohash || c.title || i) + "",
       },
-        h("div", { className: "sf-cand-main" },
-          h("div", { className: "sf-cand-title sf-lib", title: c.title }, c.title),
-          h("div", { className: "sf-row-badges", style: { marginTop: "5px" } },
+        h("div", { className: "sb-cand-main" },
+          h("div", { className: "sb-cand-title sb-lib", title: c.title }, c.title),
+          h("div", { className: "sb-row-badges", style: { marginTop: "5px" } },
             releaseBadges(c, false, allFree(s))),
           c.failed && c.failed.length
-            ? h("div", { className: "sf-rcs" },
-              h("span", { className: "sf-rc is-no" }, tc("卡在 ", "failed ") + c.failed.join(" / ")))
+            ? h("div", { className: "sb-rcs" },
+              h("span", { className: "sb-rc is-no" }, tc("卡在 ", "failed ") + c.failed.join(" / ")))
             : reasonRow(s, c)),
-        h("div", { className: "sf-cand-side" },
+        h("div", { className: "sb-cand-side" },
           h("button", {
-            className: "sf-btn sf-btn-sm" + (pass ? "" : " sf-btn-ghost"),
+            className: "sb-btn sb-btn-sm" + (pass ? "" : " sb-btn-ghost"),
             disabled: pushing,
             onClick: function () { doPush(s.id, i); },
           }, pass ? tc("推送", "Push") : tc("强推", "Push anyway"))));
@@ -1584,35 +1584,35 @@
       var picked = selOn && !!sel[k];
       var onHit = selOn ? function () { toggleSel(k); } : o.onOpen;
       return h("div", {
-        className: "sf-row" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
+        className: "sb-row" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
         key: o.key,
         onClick: selOn ? function (e) {
           var t = e.target;
-          if (t && t.closest && t.closest("button, a, .sf-row-shot, .sf-row-title")) return;
+          if (t && t.closest && t.closest("button, a, .sb-row-shot, .sb-row-title")) return;
           toggleSel(k);
         } : null,
       },
         h("div", {
-          className: "sf-row-shot",
+          className: "sb-row-shot",
           onClick: onHit,
           title: selOn ? tc("勾选", "Select") : tc("查看详情", "Open details"),
         },
           o.shot ? h("img", { src: o.shot, alt: "", loading: "lazy" })
-            : h("span", { className: "sf-shot-ph sf-lib" }, o.code || "—"),
+            : h("span", { className: "sb-shot-ph sb-lib" }, o.code || "—"),
           selOn
-            ? h("span", { className: "sf-shot-check" + (picked ? " is-on" : "") },
+            ? h("span", { className: "sb-shot-check" + (picked ? " is-on" : "") },
               picked ? ico("check") : null)
             : null,
-          o.prog == null ? null : h("div", { className: "sf-shot-prog" },
+          o.prog == null ? null : h("div", { className: "sb-shot-prog" },
             h("i", { style: { width: o.prog + "%" } }))),
-        h("div", { className: "sf-row-main" },
-          h("div", { className: "sf-row-title" + (o.lib ? " sf-lib" : ""), title: o.title, onClick: onHit },
+        h("div", { className: "sb-row-main" },
+          h("div", { className: "sb-row-title" + (o.lib ? " sb-lib" : ""), title: o.title, onClick: onHit },
             o.title || tc("（无标题）", "(no title)")),
-          o.sub ? h("div", { className: "sf-row-sub" }, o.sub) : null,
-          o.release ? h("div", { className: "sf-row-release sf-lib", title: o.release }, o.release) : null),
-        h("div", { className: "sf-row-state" }, o.state),
-        h("div", { className: "sf-row-badges" }, o.badges || []),
-        h("div", { className: "sf-row-act" }, (o.actions || []).filter(Boolean)));
+          o.sub ? h("div", { className: "sb-row-sub" }, o.sub) : null,
+          o.release ? h("div", { className: "sb-row-release sb-lib", title: o.release }, o.release) : null),
+        h("div", { className: "sb-row-state" }, o.state),
+        h("div", { className: "sb-row-badges" }, o.badges || []),
+        h("div", { className: "sb-row-act" }, (o.actions || []).filter(Boolean)));
     }
 
     function pendingCard(s) {
@@ -1634,13 +1634,13 @@
       }
       var body = [
         h("div", {
-          className: "sf-tile-title sf-title--btn sf-lib", title: s.title,
+          className: "sb-tile-title sb-title--btn sb-lib", title: s.title,
           onClick: openOf(s.id),
         }, s.title || tc("（无标题）", "(no title)")),
         sceneLine(s),
-        h("div", { className: "sf-meta sf-screen-line" }, bits.join(" · ")),
+        h("div", { className: "sb-meta sb-screen-line" }, bits.join(" · ")),
         cands.length
-          ? h("div", { className: "sf-meta" },
+          ? h("div", { className: "sb-meta" },
             s.status === "low_confidence"
               ? tc("搜到 " + cands.length + " 个 · 信息不全，需确认",
                   cands.length + " found · incomplete, check")
@@ -1648,17 +1648,17 @@
                   cands.length + " found, none passed"))
           : null,
       ];
-      if (s.error) body.push(h("div", { className: "sf-meta sf-err" }, s.error));
+      if (s.error) body.push(h("div", { className: "sb-meta sb-err" }, s.error));
       return tile(s.id, coverOf(s, statusPill(s.status)),
         body,
         [
           isWsp()
             ? h("button", {
-              className: "sf-btn sf-btn-md", disabled: busy === "push:" + s.id,
+              className: "sb-btn sb-btn-md", disabled: busy === "push:" + s.id,
               onClick: function () { doPush(s.id, 0); },
             }, ico("download"), tc("交给 Whisparr", "Send to Whisparr"))
             : h("button", {
-              className: "sf-btn sf-btn-md", disabled: isBusy,
+              className: "sb-btn sb-btn-md", disabled: isBusy,
               onClick: function () { doSearch(s.id); },
             }, isBusy ? tc("搜索中…", "Searching…") : tc("立即搜索", "Search")),
           iconBtn("ban", tc("忽略", "Ignore"), function () { doIgnore(s.id, false); },
@@ -1705,25 +1705,25 @@
       var pushing = busy === "push:" + s.id;
       var body = [
         h("div", {
-          className: "sf-tile-title sf-title--btn sf-lib", title: s.title,
+          className: "sb-tile-title sb-title--btn sb-lib", title: s.title,
           onClick: openOf(s.id),
         }, s.title || tc("（无标题）", "(no title)")),
         sceneLine(s),
-        h("div", { className: "sf-score" },
+        h("div", { className: "sb-score" },
           pill("gr", tc(pass.length + " 个通过", pass.length + " passed")),
           unk.length ? warnPill(tc("待确认 " + unk.length, unk.length + " to check")) : null,
-          bad.length ? h("span", { className: "sf-meta sf-rej" }, tc("淘汰 " + bad.length, bad.length + " rejected")) : null),
+          bad.length ? h("span", { className: "sb-meta sb-rej" }, tc("淘汰 " + bad.length, bad.length + " rejected")) : null),
       ];
       if (best) {
         // 绿块本身就是「最佳」的那个：不再挂文字标签，窄屏标题没地方被它挤
-        body.push(h("div", { className: "sf-best" },
-          h("div", { className: "sf-cand-title sf-lib", title: best.title }, best.title),
-          h("div", { className: "sf-row-badges", style: { marginTop: "4px" } },
+        body.push(h("div", { className: "sb-best" },
+          h("div", { className: "sb-cand-title sb-lib", title: best.title }, best.title),
+          h("div", { className: "sb-row-badges", style: { marginTop: "4px" } },
             releaseBadges(best, true, allFree(s)))));
       }
       return tile(s.id, coverOf(s, badgeOf(s)), body, [
         best ? h("button", {
-          className: "sf-btn sf-btn-md", disabled: pushing,
+          className: "sb-btn sb-btn-md", disabled: pushing,
           onClick: function () { doPush(s.id, bestIdx); },
         }, ico("download"), pushing ? tc("推送中…", "Pushing…") : tc("推送最佳", "Push best")) : null,
         iconBtn("list", tc("详情", "Details"), function () { openDetail(s.id); }),
@@ -1747,7 +1747,7 @@
         onOpen: function () { openDetail(s.id); },
         state: h("div", null,
           pill("gr", tc(pass.length + " 通过", pass.length + " passed")),
-          unk.length ? h("div", { className: "sf-meta" },
+          unk.length ? h("div", { className: "sb-meta" },
             tc(unk.length + " 待确认", unk.length + " to check")) : null),
         badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat([durBadge(s.duration)]),
         actions: [
@@ -1773,10 +1773,10 @@
       var sc = byId[p.sceneId] || {};
       var dur = fmtDur(sc.duration);
       var body = [
-        h("div", { className: "sf-tile-title sf-lib", title: p.name },
+        h("div", { className: "sb-tile-title sb-lib", title: p.name },
           p.code || p.name || "—"),
-        h("div", { className: "sf-meta sf-lib", title: p.name }, p.name || ""),
-        h("div", { className: "sf-meta" },
+        h("div", { className: "sb-meta sb-lib", title: p.name }, p.name || ""),
+        h("div", { className: "sb-meta" },
           humanSize(p.downloaded) + " / " + humanSize(p.size) +
           (p.ready ? "" : (p.dlspeed ? " · " + humanSize(p.dlspeed) + "/s" : "") +
             (p.eta ? " · ETA " + etaText(p.eta) : "")) +
@@ -1784,7 +1784,7 @@
       ];
       var foot = [];
       if (p.ready) foot.push(h("button", {
-        className: "sf-btn sf-btn-md", disabled: importing,
+        className: "sb-btn sb-btn-md", disabled: importing,
         onClick: function () { doImport(p.sceneId); },
       }, ico("download"), importing ? tc("入库中…", "Importing…") : tc("入库", "Import")));
       if (!isWsp() && !p.ready && p.state !== "missing") foot.push(iconBtn(
@@ -1798,7 +1798,7 @@
         id: p.sceneId, code: p.code || "", duration: sc.duration || 0,
         shot: p.shot || sc.shot || "",
       }, paused
-        ? Api.React.createElement("span", { className: "sf-pill is-h-ye" },
+        ? Api.React.createElement("span", { className: "sb-pill is-h-ye" },
             ico("pause"), tc("已暂停", "Paused"))
         : statusPill(progStateOf(p)), p.ready ? null : done,
         function () { openDl(p.sceneId); }), body, foot);
@@ -1822,7 +1822,7 @@
         onOpen: function () { openDl(p.sceneId); },
         state: h("div", null,
           statusPill(progStateOf(p)),
-          p.ready ? null : h("div", { className: "sf-meta" },
+          p.ready ? null : h("div", { className: "sb-meta" },
             done + "% · " + humanSize(p.downloaded))),
         badges: [durBadge((byId[p.sceneId] || {}).duration), badge("", paused ? tc("已暂停", "paused") : tc("进行中", "active"))],
         actions: [
@@ -1843,12 +1843,12 @@
       var d = (ctrl && ctrl.daemon) || {};
       var ok = conn ? conn.ok : true;
       var dn = dlName();
-      return h("span", { className: "sf-conn" + (ok ? " is-ok" : " is-bad") },
-        h("span", { className: "sf-dot" }),
-        h("span", { className: "sf-conn-text" },
+      return h("span", { className: "sb-conn" + (ok ? " is-ok" : " is-bad") },
+        h("span", { className: "sb-dot" }),
+        h("span", { className: "sb-conn-text" },
           ok ? tc(dn + " 已连接", dn + " connected")
             : tc(dn + " 连接失败：", dn + " failed: ") + ((conn && conn.error) || "")),
-        h("span", { className: "sf-meta" },
+        h("span", { className: "sb-meta" },
           d.alive
             ? tc("守护中 · " + agoText(d.ago) + "前心跳", "worker alive · " + agoText(d.ago) + " ago")
             : tc("页面驱动，关页即停", "page-driven, stops when closed")));
@@ -1863,12 +1863,12 @@
       return flags.map(function (f, i) {
         var isOn = !!c[f[0]];
         return h("button", {
-          className: "sf-auto-flag" + (isOn ? " is-on" : ""),
+          className: "sb-auto-flag" + (isOn ? " is-on" : ""),
           key: i,
           title: isOn ? tc("点击关闭", "Click to turn off") : tc("点击开启", "Click to turn on"),
           onClick: function () { flipFlag(f[0]); },
         },
-          h("i", { className: "sf-auto-dot" }),
+          h("i", { className: "sb-auto-dot" }),
           f[1]);
       });
     }
@@ -1891,19 +1891,19 @@
       var on = keys.filter(function (k) { return c[k]; }).length;
       var flags = autoFlags(c);
       // 窄屏三个开关藏起来，改从工具条的「更多」里点（同一组按钮，换了个位置）
-      MEXTRA.push(h("div", { className: "sf-auto-flags", key: "auto-mob" }, autoFlags(c)));
-      return h("div", { className: "sf-autobar" + (on === 0 ? " is-idle" : "") },
-        h("div", { className: "sf-auto-flags" }, flags),
-        h("span", { className: "sf-meta" },
+      MEXTRA.push(h("div", { className: "sb-auto-flags", key: "auto-mob" }, autoFlags(c)));
+      return h("div", { className: "sb-autobar" + (on === 0 ? " is-idle" : "") },
+        h("div", { className: "sb-auto-flags" }, flags),
+        h("span", { className: "sb-meta" },
           on === 0 ? tc("自动化全部关闭，不会自己动", "all automation off")
             : d.alive ? tc("守护中 · " + agoText(d.ago) + "前心跳", "worker alive · " + agoText(d.ago) + " ago")
               : tc("页面驱动，关页即停", "page-driven, stops when closed")),
         d.alive ? null : h("button", {
-          className: "sf-btn sf-btn-sm", disabled: busy === "daemon",
+          className: "sb-btn sb-btn-sm", disabled: busy === "daemon",
           onClick: toggleDaemon,
         }, tc("后台运行", "Run in background")),
         h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost",
+          className: "sb-btn sb-btn-sm sb-btn-ghost",
           onClick: function () { switchTab("settings"); },
         }, tc("设置", "Settings")));
     }
@@ -1912,17 +1912,17 @@
       var s = byId[p.sceneId] || {};
       var body = [
         h("div", {
-          className: "sf-tile-title sf-title--btn sf-lib", title: s.title || p.name,
+          className: "sb-tile-title sb-title--btn sb-lib", title: s.title || p.name,
           onClick: openOf(p.sceneId, openDl),
         }, s.title || p.code || p.name || "—"),
         sceneLine(s),
-        h("div", { className: "sf-meta" }, humanSize(p.size)),
+        h("div", { className: "sb-meta" }, humanSize(p.size)),
       ];
       return tile(p.sceneId, coverOf({
         id: p.sceneId, code: p.code || s.code || "", duration: s.duration || 0,
         shot: p.shot || s.shot || "",
       }, statusPill("imported"), null, function () { openDl(p.sceneId); }), body, [
-        h("a", { className: "sf-btn sf-btn-md sf-btn-link", href: appUrl("/scenes/" + p.sceneId) },
+        h("a", { className: "sb-btn sb-btn-md sb-btn-link", href: appUrl("/scenes/" + p.sceneId) },
           tc("打开", "Open")),
       ]);
     }
@@ -1939,7 +1939,7 @@
         state: statusPill("imported"),
         badges: [durBadge(s.duration)],
         actions: [h("a", {
-          className: "sf-icb", href: appUrl("/scenes/" + p.sceneId), target: "_blank",
+          className: "sb-icb", href: appUrl("/scenes/" + p.sceneId), target: "_blank",
           rel: "noreferrer", title: tc("打开场景", "Open scene"),
         }, ico("external"))],
       });
@@ -1948,13 +1948,13 @@
     function ignoredCard(s) {
       return tile(s.id, coverOf(s, statusPill("ignored")), [
         h("div", {
-          className: "sf-tile-title sf-title--btn sf-lib", title: s.title,
+          className: "sb-tile-title sb-title--btn sb-lib", title: s.title,
           onClick: openOf(s.id),
         }, s.title || s.code || "—"),
         sceneLine(s),
       ], [
         h("button", {
-          className: "sf-btn sf-btn-md sf-btn-ghost",
+          className: "sb-btn sb-btn-md sb-btn-ghost",
           onClick: function () { doIgnore(s.id, true); },
         }, ico("plus"), tc("恢复", "Restore")),
       ]);
@@ -2087,10 +2087,10 @@
 
     // ─── settings ─────────────────────────────────────────────────────────
     function field(label, control, hint) {
-      return h("label", { className: "sf-field" },
-        h("span", { className: "sf-field-label" }, label),
+      return h("label", { className: "sb-field" },
+        h("span", { className: "sb-field-label" }, label),
         control,
-        hint ? h("span", { className: "sf-field-hint" }, hint) : null);
+        hint ? h("span", { className: "sb-field-hint" }, hint) : null);
     }
 
     function patch(key, value) {
@@ -2132,7 +2132,7 @@
     }
 
     function automationPanel() {
-      if (!ctrlDraft) return h("div", { className: "sf-empty" }, tc("加载中…", "Loading…"));
+      if (!ctrlDraft) return h("div", { className: "sb-empty" }, tc("加载中…", "Loading…"));
       var d = (ctrl && ctrl.daemon) || {};
       var alive = !!d.alive;
       var gi = (ctrl && ctrl.gate) || { used: 0, limit: 0, open: true };
@@ -2163,50 +2163,50 @@
         o[key] = value;
         setCtrlDraft(o);
       }
-      return h("section", { className: "sf-panel sf-panel--auto" },
+      return h("section", { className: "sb-panel sb-panel--auto" },
         panelHead("clock", "自动化", "Automation",
-          h("span", { className: "sf-panel-tag" },
+          h("span", { className: "sb-panel-tag" },
             alive ? tc("守护中 · " + agoText(d.ago) + "前", "worker alive · " + agoText(d.ago) + " ago")
               : d.stopping ? tc("正在停止", "stopping")
                 : tc("守护未运行", "worker stopped"))),
-        h("div", { className: "sf-toggles" }, switches.map(function (sw) {
-          return h("label", { className: "sf-toggle sf-toggle--row", key: sw.key },
-            h("span", { className: "sf-toggle-text" },
+        h("div", { className: "sb-toggles" }, switches.map(function (sw) {
+          return h("label", { className: "sb-toggle sb-toggle--row", key: sw.key },
+            h("span", { className: "sb-toggle-text" },
               h("b", null, sw.label),
-              h("span", { className: "sf-meta" }, sw.hint)),
+              h("span", { className: "sb-meta" }, sw.hint)),
             h("input", {
               type: "checkbox", checked: !!ctrlDraft[sw.key],
               onChange: function (e) { toggle(sw.key, e.target.checked); },
             }));
         })),
-        h("div", { className: "sf-grid2 sf-grid2--cards" },
+        h("div", { className: "sb-grid2 sb-grid2--cards" },
           field(tc("总量上限 GB", "Total limit GB"),
             h("input", {
-              className: "sf-input", type: "number", min: "0", step: "1",
+              className: "sb-input", type: "number", min: "0", step: "1",
               value: ctrlDraft.maxTotalGB,
               onChange: function (e) { num("maxTotalGB", e.target.value); },
             }), tc("未入库的下载总量，0 = 不限", "In-flight bytes, 0 = no limit")),
           field(tc("每日条数", "Per day"),
             h("input", {
-              className: "sf-input", type: "number", min: "0", step: "1",
+              className: "sb-input", type: "number", min: "0", step: "1",
               value: ctrlDraft.maxPerDay,
               onChange: function (e) { num("maxPerDay", e.target.value); },
             }), tc("24 小时内最多推几条，0 = 不限", "Pushes per 24 h, 0 = no limit"))),
-        isWsp() ? null : h("div", { className: "sf-grid2 sf-grid2--cards" },
+        isWsp() ? null : h("div", { className: "sb-grid2 sb-grid2--cards" },
           field(tc("搜索间隔 秒", "Search gap s"),
             h("input", {
-              className: "sf-input", type: "number", min: "0", step: "1",
+              className: "sb-input", type: "number", min: "0", step: "1",
               value: ctrlDraft.searchGap,
               onChange: function (e) { num("searchGap", e.target.value); },
             }), tc("查完一次要等这么久才查下一次，0 = 不限", "Min seconds after one query before the next, 0 = off")),
           field(tc("每小时搜索", "Searches / hour"),
             h("input", {
-              className: "sf-input", type: "number", min: "0", step: "1",
+              className: "sb-input", type: "number", min: "0", step: "1",
               value: ctrlDraft.searchPerHour,
               onChange: function (e) { num("searchPerHour", e.target.value); },
             }), tc("每小时最多查几次，0 = 不限", "Indexer queries per hour, 0 = no cap"))),
-        h("div", { className: "sf-actions sf-actions--foot" },
-          h("span", { className: "sf-meta" },
+        h("div", { className: "sb-actions sb-actions--foot" },
+          h("span", { className: "sb-meta" },
             gi.limit > 0
               ? tc("占用 " + humanSize(gi.used) + " / " + humanSize(gi.limit) + (gi.open ? "" : " · 已触顶"),
                 humanSize(gi.used) + " / " + humanSize(gi.limit) + (gi.open ? "" : " · at limit"))
@@ -2214,19 +2214,19 @@
             searchLine,
             d.lastAction ? " · " + tc("最近：", "last: ") + actionText(d.lastAction) : ""),
           // 两个按钮绑成一组：换行时一起下去，不要一个在上一行、一个在下一行
-          h("div", { className: "sf-btn-row" },
+          h("div", { className: "sb-btn-row" },
             h("button", {
-              className: "sf-btn sf-btn-md", disabled: busy === "control",
+              className: "sb-btn sb-btn-md", disabled: busy === "control",
               onClick: function () { saveControl(ctrlDraft); },
             }, tc("保存", "Save")),
             h("button", {
-              className: "sf-btn sf-btn-md sf-btn-ghost", disabled: busy === "daemon",
+              className: "sb-btn sb-btn-md sb-btn-ghost", disabled: busy === "daemon",
               onClick: toggleDaemon,
             }, alive ? tc("停止守护", "Stop worker") : tc("启动守护", "Start worker")))));
     }
 
     function rulesPanel() {
-      if (!draft) return h("div", { className: "sf-empty" }, tc("加载中…", "Loading…"));
+      if (!draft) return h("div", { className: "sb-empty" }, tc("加载中…", "Loading…"));
       var f = ruleForm || emptyForm();
       function setF(key, value) {
         var o = {};
@@ -2258,17 +2258,17 @@
       });
       var numInput = function (key, hint, step) {
         return h("input", {
-          className: "sf-input", type: "number", min: "0", step: step || "1",
+          className: "sb-input", type: "number", min: "0", step: step || "1",
           value: f[key], placeholder: tc("不限", "any"),
           onChange: function (e) { setF(key, e.target.value); },
         });
       };
-      return h("section", { className: "sf-panel sf-panel--rules sf-panel--wide" },
+      return h("section", { className: "sb-panel sb-panel--rules sb-panel--wide" },
         panelHead("check", "筛选规则", "Rules",
-          h("span", { className: "sf-meta" },
+          h("span", { className: "sb-meta" },
             tc("全部满足才通过", "Every rule must pass"))),
-        h("div", { className: "sf-form" },
-          h("div", { className: "sf-form-row" },
+        h("div", { className: "sb-form" },
+          h("div", { className: "sb-form-row" },
             field(tc("最低做种", "Min seeders"), numInput("minSeed"),
               tc("低于这个数的不要", "Releases below this are dropped")),
             field(tc("最多文件数", "Max files"), numInput("maxFiles"),
@@ -2276,66 +2276,66 @@
             field(tc("视频最少体积 MB", "Min video size MB"),
               numInput("minMB", "", "10"),
               tc("整包视频总量，1000 = 1GB；磁力按整包体积算", "Total video bytes; 1000 = 1GB. Magnets use the release size"))),
-          h("div", { className: "sf-form-row" },
-            h("div", { className: "sf-field sf-field-wide" },
-              h("span", { className: "sf-field-label" }, tc("分辨率", "Resolution")),
-              h("div", { className: "sf-chips" },
+          h("div", { className: "sb-form-row" },
+            h("div", { className: "sb-field sb-field-wide" },
+              h("span", { className: "sb-field-label" }, tc("分辨率", "Resolution")),
+              h("div", { className: "sb-chips" },
                 RES_CHOICES.map(function (r) {
                   var on = (f.res || []).indexOf(r) >= 0;
                   return h("button", {
                     key: r, type: "button",
-                    className: "sf-chip" + (on ? " is-on" : ""),
+                    className: "sb-chip" + (on ? " is-on" : ""),
                     onClick: function () { toggleRes(r); },
                   }, r);
                 }),
-                h("span", { className: "sf-field-hint" },
+                h("span", { className: "sb-field-hint" },
                   (f.res || []).length ? tc("只留选中的", "Only these")
                     : tc("不选 = 不限", "None selected = any"))))),
-          h("div", { className: "sf-form-row" },
-            h("div", { className: "sf-field sf-field-wide" },
-              h("span", { className: "sf-field-label" }, tc("视频格式", "Video format")),
-              h("div", { className: "sf-chips" },
+          h("div", { className: "sb-form-row" },
+            h("div", { className: "sb-field sb-field-wide" },
+              h("span", { className: "sb-field-label" }, tc("视频格式", "Video format")),
+              h("div", { className: "sb-chips" },
                 FORMAT_CHOICES.map(function (x) {
                   var on = (f.fmt || []).indexOf(x) >= 0;
                   return h("button", {
                     key: x, type: "button",
-                    className: "sf-chip" + (on ? " is-on" : ""),
+                    className: "sb-chip" + (on ? " is-on" : ""),
                     onClick: function () { toggleFmt(x); },
                   }, x.toUpperCase());
                 }),
-                h("span", { className: "sf-field-hint" },
+                h("span", { className: "sb-field-hint" },
                   (f.fmt || []).length
                     ? tc("只留选中的；取消 ISO 即忽略 ISO 资源", "Only these; untick ISO to ignore ISO releases")
                     : tc("不选 = 不限", "None selected = any"))))),
-          h("div", { className: "sf-form-row" },
+          h("div", { className: "sb-form-row" },
             field(tc("标题必须包含", "Title must contain"),
               h("input", {
-                className: "sf-input", value: f.must, spellCheck: false,
+                className: "sb-input", value: f.must, spellCheck: false,
                 placeholder: tc("可不填，多个用空格分隔", "Optional, space separated"),
                 onChange: function (e) { setF("must", e.target.value); },
               })),
             field(tc("标题排除", "Title must not contain"),
               h("input", {
-                className: "sf-input", value: f.ban, spellCheck: false,
+                className: "sb-input", value: f.ban, spellCheck: false,
                 placeholder: tc("可不填，多个用空格分隔", "Optional, space separated"),
                 onChange: function (e) { setF("ban", e.target.value); },
               }))),
-          h("div", { className: "sf-form-row" },
-            h("div", { className: "sf-field sf-field-wide" },
-              h("span", { className: "sf-field-label" },
+          h("div", { className: "sb-form-row" },
+            h("div", { className: "sb-field sb-field-wide" },
+              h("span", { className: "sb-field-label" },
                 tc("整包拉黑关键词", "Reject the whole release")),
               h("input", {
-                className: "sf-input", value: f.banPack, spellCheck: false,
+                className: "sb-input", value: f.banPack, spellCheck: false,
                 placeholder: tc("例如：乐鱼 第一会所", "e.g. a watermark or a spam site"),
                 onChange: function (e) { setF("banPack", e.target.value); },
               }),
-              h("span", { className: "sf-field-hint" },
+              h("span", { className: "sb-field-hint" },
                 tc("标题或包内任一文件名命中就整包不要，空格分隔多个，留空 = 不启用",
                   "Matched in the title or any file name; space separated, empty = off")))),
-          h("div", { className: "sf-form-row" },
+          h("div", { className: "sb-form-row" },
             field(tc("下载哪些文件", "Which files"),
               h("select", {
-                className: "sf-input", value: selId || "custom",
+                className: "sb-input", value: selId || "custom",
                 onChange: function (e) { pickPreset("fileSelect", FILE_SCOPE, e.target.value); },
               }, FILE_SCOPE.map(function (o) {
                 var zh = o.id === "video" ? "只要视频" : o.id === "videoSub" ? "视频 + 字幕" : "全部文件";
@@ -2345,7 +2345,7 @@
                 tc("自定义", "Custom"))]))),
             field(tc("样片目录", "Sample clips"),
               h("select", {
-                className: "sf-input", value: excId || "custom",
+                className: "sb-input", value: excId || "custom",
                 onChange: function (e) { pickPreset("fileExclude", EXCLUDE_SCOPE, e.target.value); },
               }, EXCLUDE_SCOPE.map(function (o) {
                 return h("option", { value: o.id, key: o.id },
@@ -2355,7 +2355,7 @@
               tc("种子里的 Sample 短片", "The Sample clip some releases carry")),
             field(tc("小文件门槛", "Small files"),
               h("select", {
-                className: "sf-input", value: shareId || "custom",
+                className: "sb-input", value: shareId || "custom",
                 onChange: function (e) {
                   if (e.target.value !== "custom") patch("fileMinShare", e.target.value);
                 },
@@ -2366,70 +2366,70 @@
               tc("低于正片这个体积比例的附带文件不下", "Attached files below this share of the main video")),
             field(tc("规则无法判定时", "When undecidable"),
               h("select", {
-                className: "sf-input", value: draft.unknown || "ask",
+                className: "sb-input", value: draft.unknown || "ask",
                 onChange: function (e) { patch("unknown", e.target.value); },
               }, ["ask", "allow", "reject"].map(function (k) {
                 return h("option", { value: k, key: k }, UNKNOWN_POLICY[k]());
               })), tc("磁力看不到包内文件", "Magnets hide their files"))),
-          h("details", { className: "sf-adv" },
+          h("details", { className: "sb-adv" },
             h("summary", null, tc("其他规则（高级）", "Other rules (advanced)")),
-            h("div", { className: "sf-rank" },
-              h("div", { className: "sf-rank-head" },
+            h("div", { className: "sb-rank" },
+              h("div", { className: "sb-rank-head" },
                 tc("怎么选出「最佳」", "How the best release is picked")),
-              h("div", { className: "sf-rank-row" },
+              h("div", { className: "sb-rank-row" },
                 h("span", null, tc("番号出现在标题里", "Code in the release name")),
                 h("code", null, "+0.6")),
-              h("div", { className: "sf-rank-row" },
+              h("div", { className: "sb-rank-row" },
                 h("span", null, tc("发布日期出现在标题里", "Release date in the name")),
                 h("code", null, "+0.2")),
-              h("div", { className: "sf-rank-row" },
+              h("div", { className: "sb-rank-row" },
                 h("span", null, tc("搜索词其余部分的重合度", "Rest of the query, by overlap")),
                 h("code", null, "≤ +0.2")),
-              h("div", { className: "sf-rank-row" },
+              h("div", { className: "sb-rank-row" },
                 h("span", null, tc("带 -C / -U / -UC 后缀（需勾选）", "-C / -U / -UC re-upload (if ticked)")),
                 h("code", null, "+0.25")),
-              h("div", { className: "sf-rank-row" },
+              h("div", { className: "sb-rank-row" },
                 h("span", null, tc("含「最新地址」文件（需勾选）", "Carries a 最新地址 note (if ticked)")),
                 h("code", null, "+0.30")),
-              h("span", { className: "sf-field-hint" },
+              h("span", { className: "sb-field-hint" },
                 tc("只在已经通过筛选的候选里比，同分取做种多的；分数不参与淘汰",
                   "Compared only among candidates that already passed; ties go to more seeders. The score never rejects anything"))),
-            h("div", { className: "sf-prefs" },
-              h("label", { className: "sf-check-inline" },
+            h("div", { className: "sb-prefs" },
+              h("label", { className: "sb-check-inline" },
                 h("input", {
                   type: "checkbox", checked: !!draft.preferSuffix,
                   onChange: function (e) { patch("preferSuffix", e.target.checked); },
                 }),
                 h("span", null, tc("带 -C / -U / -UC 后缀的优先", "-C / -U / -UC re-uploads first"))),
-              h("label", { className: "sf-check-inline" },
+              h("label", { className: "sb-check-inline" },
                 h("input", {
                   type: "checkbox", checked: !!draft.preferAdFile,
                   onChange: function (e) { patch("preferAdFile", e.target.checked); },
                 }),
                 h("span", null, tc("含「最新地址」文件的优先", "Releases carrying a 最新地址 note")))),
             h("textarea", {
-              className: "sf-textarea", rows: 4, spellCheck: false,
+              className: "sb-textarea", rows: 4, spellCheck: false,
               value: f.extra || "",
               placeholder: "largest_video_share >= 0.2",
               onChange: function (e) { setF("extra", e.target.value); },
             }),
-            h("span", { className: "sf-field-hint" },
+            h("span", { className: "sb-field-hint" },
               tc("这一框里的行原样生效，通常不用动", "These lines apply verbatim; usually leave them alone")))),
         ruleErrors.length
-          ? h("div", { className: "sf-errors" }, ruleErrors.map(function (e) {
-            return h("div", { className: "sf-err", key: e.line },
+          ? h("div", { className: "sb-errors" }, ruleErrors.map(function (e) {
+            return h("div", { className: "sb-err", key: e.line },
               tc("第 " + e.line + " 行", "Line " + e.line) + " · " + e.text + " — " + e.error);
           }))
           : null,
-        h("div", { className: "sf-actions" },
+        h("div", { className: "sb-actions" },
           h("button", {
-            className: "sf-btn sf-btn-md", disabled: busy === "rules",
+            className: "sb-btn sb-btn-md", disabled: busy === "rules",
             onClick: function () {
               saveRules(Object.assign({}, draft, { text: buildText(ruleForm || emptyForm()) }));
             },
           }, tc("保存规则", "Save rules")),
           h("button", {
-            className: "sf-btn sf-btn-md sf-btn-ghost", disabled: busy === "rules" || !defaults,
+            className: "sb-btn sb-btn-md sb-btn-ghost", disabled: busy === "rules" || !defaults,
             onClick: function () {
               if (!defaults) return;
               setRuleForm(parseForm(defaults.text));
@@ -2440,11 +2440,11 @@
 
     function ruleLine(r, total) {
       var killed = r.fail + ((evalResult && evalResult.unknown === "reject") ? r.unknown : 0);
-      return h("div", { className: "sf-rule" + (killed ? " is-hit" : ""), key: r.line },
-        h("code", { className: "sf-rule-text" }, r.text),
-        h("span", { className: "sf-meta" },
+      return h("div", { className: "sb-rule" + (killed ? " is-hit" : ""), key: r.line },
+        h("code", { className: "sb-rule-text" }, r.text),
+        h("span", { className: "sb-meta" },
           killed + "/" + total + " " + tc("淘汰", "rejected")),
-        r.unknown ? h("span", { className: "sf-meta sf-unknown" },
+        r.unknown ? h("span", { className: "sb-meta sb-unknown" },
           r.unknown + " " + tc("未知", "unknown")) : null);
     }
 
@@ -2461,17 +2461,17 @@
         if (r.isMagnet) bits.push(tc("磁力", "magnet"));
         if (r.error) bits.push(r.error);
         return h("div", {
-          className: "sf-cand sf-cand-eval" + (r.outcome === "reject" ? " is-off" : ""),
+          className: "sb-cand sb-cand-eval" + (r.outcome === "reject" ? " is-off" : ""),
           key: "e" + i,
         },
-          h("div", { className: "sf-cand-main" },
-            h("div", { className: "sf-cand-title sf-lib", title: r.title }, r.title),
-            h("div", { className: "sf-meta" }, bits.join(" · ")),
+          h("div", { className: "sb-cand-main" },
+            h("div", { className: "sb-cand-title sb-lib", title: r.title }, r.title),
+            h("div", { className: "sb-meta" }, bits.join(" · ")),
             r.select && r.select.names && r.select.names.length && r.select.kept < r.select.total
-              ? h("div", { className: "sf-meta sf-picked sf-lib" }, r.select.names.join("  "))
+              ? h("div", { className: "sb-meta sb-picked sb-lib" }, r.select.names.join("  "))
               : null,
             r.failed && r.failed.length
-              ? h("div", { className: "sf-meta sf-err" }, tc("卡在：", "failed: ") + r.failed.join(" / "))
+              ? h("div", { className: "sb-meta sb-err" }, tc("卡在：", "failed: ") + r.failed.join(" / "))
               : null),
           verdictPill(r.outcome));
       });
@@ -2479,38 +2479,38 @@
 
     function evalPanel() {
       var total = (evalResult && evalResult.candidates) ? evalResult.candidates.length : 0;
-      return h("section", { className: "sf-panel sf-panel--eval sf-panel--wide" },
+      return h("section", { className: "sb-panel sb-panel--eval sb-panel--wide" },
         panelHead("play", "试运行", "Dry run",
-          h("div", { className: "sf-head-right" },
+          h("div", { className: "sb-head-right" },
             h("select", {
-              className: "sf-input sf-select", value: evalPick || (withCands[0] && withCands[0].id) || "",
+              className: "sb-input sb-select", value: evalPick || (withCands[0] && withCands[0].id) || "",
               onChange: function (e) { setEvalPick(e.target.value); },
             }, withCands.length ? withCands.map(function (s) {
               return h("option", { value: s.id, key: s.id },
                 (s.code || s.title || s.id) + " · " + (s.candidates || []).length);
             }) : h("option", { value: "" }, tc("没有已搜索的场景", "nothing searched yet"))),
             h("button", {
-              className: "sf-btn sf-btn-md",
+              className: "sb-btn sb-btn-md",
               disabled: !withCands.length || !!evalBusy,
               onClick: function () { runEval(evalPick || (withCands[0] && withCands[0].id)); },
             }, evalBusy ? tc("预检中…", "Fetching…") : tc("运行", "Run")))),
         evalResult
           ? h("div", null,
             evalResult.errors && evalResult.errors.length
-              ? h("div", { className: "sf-errors" }, evalResult.errors.map(function (e) {
-                return h("div", { className: "sf-err", key: "x" + e.line },
+              ? h("div", { className: "sb-errors" }, evalResult.errors.map(function (e) {
+                return h("div", { className: "sb-err", key: "x" + e.line },
                   tc("第 " + e.line + " 行", "Line " + e.line) + " · " + e.error);
               }))
               : null,
-            h("div", { className: "sf-rules" },
+            h("div", { className: "sb-rules" },
               (evalResult.rules || []).map(function (r) { return ruleLine(r, total); })),
-            h("div", { className: "sf-meta sf-eval-sum" },
+            h("div", { className: "sb-meta sb-eval-sum" },
               tc("未预检 " + (evalResult.pending || 0) + " 个 · 无法判定的按「" +
                 UNKNOWN_POLICY[evalResult.unknown || "ask"]() + "」处理",
                 (evalResult.pending || 0) + " not prefetched · unknown treated as \"" +
                 UNKNOWN_POLICY[evalResult.unknown || "ask"]() + "\"")),
-            h("div", { className: "sf-cands" }, evalRows()))
-          : h("div", { className: "sf-empty" },
+            h("div", { className: "sb-cands" }, evalRows()))
+          : h("div", { className: "sb-empty" },
             withCands.length
               ? tc("选一个场景点运行：先抓种子清单，再逐条统计淘汰数",
                 "Pick a scene and run: fetch torrents, then count what each rule kills")
@@ -2543,92 +2543,92 @@
       var close = function () { setDetailId(""); };
       var actions = [
         isWsp() ? h("button", {
-          className: "sf-btn sf-btn-md", disabled: pushing,
+          className: "sb-btn sb-btn-md", disabled: pushing,
           onClick: function () { doPush(s.id, 0); },
         }, ico("download"), tc("交给 Whisparr", "Send to Whisparr"))
           : h("button", {
-          className: "sf-btn sf-btn-md", disabled: searching,
+          className: "sb-btn sb-btn-md", disabled: searching,
           onClick: function () { doSearch(s.id); },
         }, ico("search"), searching ? tc("搜索中…", "Searching…") : tc("重新搜索", "Search again")),
         h("a", {
-          className: "sf-btn sf-btn-md sf-btn-ghost sf-btn-link",
+          className: "sb-btn sb-btn-md sb-btn-ghost sb-btn-link",
           href: appUrl("/scenes/" + s.id), target: "_blank", rel: "noreferrer",
         }, ico("external"), tc("打开场景", "Open scene")),
         s.status === "ignored" ? h("button", {
-          className: "sf-btn sf-btn-md sf-btn-ghost",
+          className: "sb-btn sb-btn-md sb-btn-ghost",
           onClick: function () { doIgnore(s.id, true); },
         }, ico("plus"), tc("恢复", "Restore")) : h("button", {
-          className: "sf-btn sf-btn-md sf-btn-ghost",
+          className: "sb-btn sb-btn-md sb-btn-ghost",
           onClick: function () { close(); doIgnore(s.id, false); },
         }, ico("ban"), tc("忽略", "Ignore")),
       ];
 
       // BEST PICK 条：一条最该推送的，理由写全，先给按钮再给列表
-      var pick = best ? h("div", { className: "sf-pick" },
-        h("div", { className: "sf-pick-head" },
-          h("span", { className: "sf-pick-tag" }, tc("最佳选择", "BEST PICK")),
+      var pick = best ? h("div", { className: "sb-pick" },
+        h("div", { className: "sb-pick-head" },
+          h("span", { className: "sb-pick-tag" }, tc("最佳选择", "BEST PICK")),
           pill("gr", tc("通过全部规则", "passed every rule"))),
-        h("div", { className: "sf-pick-name sf-lib", title: best.title }, best.title || ""),
-        h("div", { className: "sf-row-badges", style: { marginTop: "6px" } }, releaseBadges(best, false, allFree(s))),
+        h("div", { className: "sb-pick-name sb-lib", title: best.title }, best.title || ""),
+        h("div", { className: "sb-row-badges", style: { marginTop: "6px" } }, releaseBadges(best, false, allFree(s))),
         reasonRow(s, best),
-        h("div", { className: "sf-pick-foot" },
+        h("div", { className: "sb-pick-foot" },
           h("button", {
-            className: "sf-btn sf-btn-md", disabled: pushing,
+            className: "sb-btn sb-btn-md", disabled: pushing,
             onClick: function () { doPush(s.id, cands.indexOf(best)); },
           }, ico("download"), pushing ? tc("推送中…", "Pushing…") : tc("推送这条", "Push this one")),
-          h("span", { className: "sf-meta" },
+          h("span", { className: "sb-meta" },
             tc("同组内按番号 / 日期 / 标题重合度排序", "Ranked by code, date and title overlap")))) : null;
 
       // 分组头：给了 foldOpt 就是可折叠的（「已淘汰」默认收起，省得占版面）
       function group(label, hue, iconName, items, foldOpt) {
         if (!items.length) return null;
         var folded = !!(foldOpt && foldOpt.folded);
-        return h("div", { className: "sf-group", key: label },
+        return h("div", { className: "sb-group", key: label },
           foldOpt
             ? h("button", {
-              className: "sf-gh is-h-" + hue + (folded ? " is-fold" : ""),
+              className: "sb-gh is-h-" + hue + (folded ? " is-fold" : ""),
               onClick: foldOpt.onToggle, "aria-expanded": !folded,
             },
               ico(iconName),
-              h("span", { className: "sf-gh-name" }, label),
-              h("span", { className: "sf-gn" }, items.length),
-              h("span", { className: "sf-gh-tail" }),
-              ico("chevron", "sf-gh-caret"))
-            : h("div", { className: "sf-gh is-h-" + hue, style: { cursor: "default" } },
+              h("span", { className: "sb-gh-name" }, label),
+              h("span", { className: "sb-gn" }, items.length),
+              h("span", { className: "sb-gh-tail" }),
+              ico("chevron", "sb-gh-caret"))
+            : h("div", { className: "sb-gh is-h-" + hue, style: { cursor: "default" } },
               ico(iconName),
-              h("span", { className: "sf-gh-name" }, label),
-              h("span", { className: "sf-gn" }, items.length)),
-          folded ? null : h("div", { className: "sf-cands" }, items.map(function (c) {
+              h("span", { className: "sb-gh-name" }, label),
+              h("span", { className: "sb-gn" }, items.length)),
+          folded ? null : h("div", { className: "sb-cands" }, items.map(function (c) {
             return candRow(s, c, { best: c === best, showVerdict: c !== best });
           })));
       }
 
       return h(ModalBack, { onClose: close },
-        h("div", { className: "sf-modal" },
-          h("button", { className: "sf-modal-x", onClick: close, title: tc("关闭", "Close") },
+        h("div", { className: "sb-modal" },
+          h("button", { className: "sb-modal-x", onClick: close, title: tc("关闭", "Close") },
             ico("x")),
-          h("div", { className: "sf-modal-head" },
-            h("div", { className: "sf-modal-shot" },
+          h("div", { className: "sb-modal-head" },
+            h("div", { className: "sb-modal-shot" },
               shot ? h("img", { src: shot, alt: "", loading: "lazy" })
-                : h("span", { className: "sf-shot-ph sf-lib" }, s.code || "—")),
-            h("div", { className: "sf-modal-info" },
-              h("div", { className: "sf-modal-code sf-lib" }, s.code || "—"),
-              h("h2", { className: "sf-modal-title sf-lib", title: s.title },
+                : h("span", { className: "sb-shot-ph sb-lib" }, s.code || "—")),
+            h("div", { className: "sb-modal-info" },
+              h("div", { className: "sb-modal-code sb-lib" }, s.code || "—"),
+              h("h2", { className: "sb-modal-title sb-lib", title: s.title },
                 s.title || tc("（无标题）", "(no title)")),
-              h("div", { className: "sf-meta sf-lib" },
+              h("div", { className: "sb-meta sb-lib" },
                 [s.date, s.studio, fmtDur(s.duration)].filter(Boolean).join(" · ") || "—"),
-              chipRow(s.performers, 7, "sf-tags--perf"),
-              h("div", { className: "sf-score" },
+              chipRow(s.performers, 7, "sb-tags--perf"),
+              h("div", { className: "sb-score" },
                 s.status ? statusPill(s.status) : null,
-                cands.length ? h("span", { className: "sf-meta" },
+                cands.length ? h("span", { className: "sb-meta" },
                   tc("搜到 " + cands.length + " 个 · " + pass.length + " 个通过",
                     cands.length + " found · " + pass.length + " passed")) : null,
-                s.rating ? h("span", { className: "sf-meta" },
+                s.rating ? h("span", { className: "sb-meta" },
                   "★ " + (s.rating / 20).toFixed(1)) : null),
               chipRow(s.tags, 7),
-              s.details ? h("p", { className: "sf-modal-details sf-lib-desc" }, s.details) : null,
-              h("div", { className: "sf-modal-actions" }, actions))),
-          h("div", { className: "sf-modal-body" },
+              s.details ? h("p", { className: "sb-modal-details sb-lib-desc" }, s.details) : null,
+              h("div", { className: "sb-modal-actions" }, actions))),
+          h("div", { className: "sb-modal-body" },
             cands.length
               ? h("div", null,
                 pick,
@@ -2638,7 +2638,7 @@
                   folded: rejFolded,
                   onToggle: function () { setRejFolded(!rejFolded); },
                 }))
-              : h("div", { className: "sf-empty" },
+              : h("div", { className: "sb-empty" },
                 tc("这个场景还没有搜到资源。点「重新搜索」或等后台自动跑。",
                   "No releases yet. Search now, or wait for the background pass.")))));
     }
@@ -2673,54 +2673,54 @@
       var live2 = p.status !== "imported";
       if (p.ready) {
         actions.push(h("button", {
-          className: "sf-btn sf-btn-md", disabled: importing,
+          className: "sb-btn sb-btn-md", disabled: importing,
           onClick: function () { doImport(dlId); },
         }, ico("download"), importing ? tc("入库中…", "Importing…") : tc("入库", "Import")));
       } else if (!isWsp() && live2 && p.state !== "missing") {
         actions.push(h("button", {
-          className: "sf-btn sf-btn-md", disabled: acting,
+          className: "sb-btn sb-btn-md", disabled: acting,
           onClick: function () { doTorrent(p, paused ? "resume" : "pause"); },
         }, ico(paused ? "play" : "pause"), paused ? tc("继续", "Resume") : tc("暂停", "Pause")));
       }
       if (live2 && !p.ready) {
         actions.push(h("button", {
-          className: "sf-btn sf-btn-md sf-btn-ghost", disabled: acting,
+          className: "sb-btn sb-btn-md sb-btn-ghost", disabled: acting,
           onClick: function () { doTorrent(p, "remove"); },
         }, ico("trash"), tc("移除任务", "Remove")));
       }
       actions.push(h("a", {
-        className: "sf-btn sf-btn-md sf-btn-ghost sf-btn-link",
+        className: "sb-btn sb-btn-md sb-btn-ghost sb-btn-link",
         href: appUrl("/scenes/" + dlId), target: "_blank", rel: "noreferrer",
       }, ico("external"), tc("打开场景", "Open scene")));
 
       return h(ModalBack, { onClose: close },
         h("div", {
-          className: "sf-modal sf-modal--dl",
+          className: "sb-modal sb-modal--dl",
         },
-          h("button", { className: "sf-modal-x", onClick: close, title: tc("关闭", "Close") },
+          h("button", { className: "sb-modal-x", onClick: close, title: tc("关闭", "Close") },
             ico("x")),
-          h("div", { className: "sf-modal-head" },
-            h("div", { className: "sf-modal-shot" },
+          h("div", { className: "sb-modal-head" },
+            h("div", { className: "sb-modal-shot" },
               shot ? h("img", { src: shot, alt: "", loading: "lazy" })
-                : h("span", { className: "sf-shot-ph sf-lib" }, p.code || "—")),
-            h("div", { className: "sf-modal-info" },
-              h("div", { className: "sf-modal-code sf-lib" }, p.code || s.code || "—"),
-              h("h2", { className: "sf-modal-title sf-lib", title: s.title || p.name },
+                : h("span", { className: "sb-shot-ph sb-lib" }, p.code || "—")),
+            h("div", { className: "sb-modal-info" },
+              h("div", { className: "sb-modal-code sb-lib" }, p.code || s.code || "—"),
+              h("h2", { className: "sb-modal-title sb-lib", title: s.title || p.name },
                 s.title || p.name || tc("（无标题）", "(no title)")),
-              h("div", { className: "sf-meta sf-lib" }, sceneSub(s)),
-              h("div", { className: "sf-score" }, statusPill(progStateOf(p))))),
-          h("div", { className: "sf-dl-body" },
-            h("div", { className: "sf-dl-state" },
-              h("span", { className: "sf-dl-pct" }, p.ready ? "100%" : done + "%"),
+              h("div", { className: "sb-meta sb-lib" }, sceneSub(s)),
+              h("div", { className: "sb-score" }, statusPill(progStateOf(p))))),
+          h("div", { className: "sb-dl-body" },
+            h("div", { className: "sb-dl-state" },
+              h("span", { className: "sb-dl-pct" }, p.ready ? "100%" : done + "%"),
               paused ? pill("ye", tc("已暂停", "paused")) : null,
               p.state === "missing" ? pill("re", isWsp()
                 ? tc("Whisparr 里没有这个场景", "not in Whisparr")
                 : tc("下载器里没有这个任务", "not in the downloader")) : null),
-            h("div", { className: "sf-bar sf-bar--lg" },
+            h("div", { className: "sb-bar sb-bar--lg" },
               h("i", { style: { width: (p.ready ? 100 : done) + "%" } })),
-            h("div", { className: "sf-dl-nums" }, nums),
-            h("div", { className: "sf-dl-name sf-lib" }, p.name || "—")),
-          h("div", { className: "sf-dl-foot" }, actions)));
+            h("div", { className: "sb-dl-nums" }, nums),
+            h("div", { className: "sb-dl-name sb-lib" }, p.name || "—")),
+          h("div", { className: "sb-dl-foot" }, actions)));
     }
 
     // 括号说明整体不拆行：窄屏上「(Stash side)」不能一半在上一行、一半在下一行
@@ -2732,29 +2732,29 @@
       return [
         h("span", { key: "p" }, s.slice(0, i)),
         " ",
-        h("span", { className: "sf-nb", key: "nb" }, s.slice(i).trim()),
+        h("span", { className: "sb-nb", key: "nb" }, s.slice(i).trim()),
       ];
     }
 
     // 面板统一标题：彩色图标块 + 标题 + 右侧状态胶囊，设置页各卡片因此长一样的头
     function panelHead(iconName, zh, en, right) {
-      return h("div", { className: "sf-panel-head" },
-        h("div", { className: "sf-panel-title" },
-          h("span", { className: "sf-panel-ico" }, ico(iconName)),
+      return h("div", { className: "sb-panel-head" },
+        h("div", { className: "sb-panel-title" },
+          h("span", { className: "sb-panel-ico" }, ico(iconName)),
           h("h3", null, tc(zh, en))),
         right || null);
     }
 
     // 设置页的「多选一」行：左边标题+说明，右边一排分段按钮，改动立即生效并记住
     function segRow(title, hint, opts, cur, pick) {
-      return h("div", { className: "sf-toggle sf-toggle--row" },
-        h("span", { className: "sf-toggle-text" },
+      return h("div", { className: "sb-toggle sb-toggle--row" },
+        h("span", { className: "sb-toggle-text" },
           h("b", null, title),
-          h("span", { className: "sf-meta" }, hint)),
-        h("div", { className: "sf-seg" }, opts.map(function (o) {
+          h("span", { className: "sb-meta" }, hint)),
+        h("div", { className: "sb-seg" }, opts.map(function (o) {
           return h("button", {
             key: o.id, type: "button", title: o.title || "",
-            className: "sf-segb" + (cur === o.id ? " is-on" : ""),
+            className: "sb-segb" + (cur === o.id ? " is-on" : ""),
             onClick: function () { pick(o.id); },
           }, o.label);
         })));
@@ -2774,7 +2774,7 @@
         [{ id: "none", label: tc("禁用", "Off") },
         { id: "dim", label: tc("变暗", "Dim") },
         { id: "zoom", label: tc("放大", "Zoom") }],
-        coverFx(), function (v) { prefPut("sf.coverFx", v); });
+        coverFx(), function (v) { prefPut("sb.coverFx", v); });
     }
 
     function coverRatioChoice() {
@@ -2783,26 +2783,26 @@
         [{ id: "16x9", label: "16:9", title: tc("16:9", "16:9") },
         { id: "3x2", label: "3:2", title: tc("3:2", "3:2") },
         { id: "4x3", label: "4:3", title: tc("4:3", "4:3") }],
-        coverRatio(), function (v) { prefPut("sf.coverRatio", v); });
+        coverRatio(), function (v) { prefPut("sb.coverRatio", v); });
     }
 
     function settingsPanel() {
-      return h("div", { className: "sf-settings" },
+      return h("div", { className: "sb-settings" },
         automationPanel(),
-        h("section", { className: "sf-panel sf-panel--ui" },
+        h("section", { className: "sb-panel sb-panel--ui" },
           panelHead("grid", "界面", "Interface",
-            h("span", { className: "sf-panel-tag" },
+            h("span", { className: "sb-panel-tag" },
               tc("仅当前浏览器", "This browser"))),
-          h("div", { className: "sf-toggles" }, h(NavBadgeToggle),
+          h("div", { className: "sb-toggles" }, h(NavBadgeToggle),
             h(PrefSwitch, {
               get: showVerOn,
-              set: function (v) { prefSet("sf.showVer", v); },
+              set: function (v) { prefSet("sb.showVer", v); },
               title: tc("显示版本号", "Show version"),
               hint: tc("标题旁显示插件版本号", "Shows the plugin version beside the title"),
             }),
             h(PrefSwitch, {
               get: showStatsOn,
-              set: function (v) { prefSet("sf.showStats", v); },
+              set: function (v) { prefSet("sb.showStats", v); },
               title: tc("显示统计栏", "Show stats"),
               hint: tc("顶部那排统计卡", "The stat cards on top"),
             }),
@@ -2811,17 +2811,17 @@
             coverRatioChoice())),
         isWsp() ? null : rulesPanel(),
         isWsp() ? null : evalPanel(),
-        h("section", { className: "sf-panel sf-panel--checks sf-panel--wide" },
+        h("section", { className: "sb-panel sb-panel--checks sb-panel--wide" },
           panelHead("info", "自检", "Checks",
-            h("span", { className: "sf-meta" },
+            h("span", { className: "sb-meta" },
               tc("连接与路径在插件设置页配置", "Connection and paths live in the plugin settings"))),
-          self ? h("div", { className: "sf-checks" }, (self.checks || []).map(function (c) {
-            return h("div", { className: "sf-check" + (c.ok ? " is-ok" : " is-bad"), key: c.key },
+          self ? h("div", { className: "sb-checks" }, (self.checks || []).map(function (c) {
+            return h("div", { className: "sb-check" + (c.ok ? " is-ok" : " is-bad"), key: c.key },
               pill(c.ok ? "gr" : "re", c.ok ? "OK" : "!"),
-              h("span", { className: "sf-check-name" }, nbLabel(c.label || c.key)),
-              h("span", { className: "sf-meta" }, c.detail || ""),
-              c.hint && !c.ok ? h("span", { className: "sf-hint" }, c.hint) : null);
-          })) : h("div", { className: "sf-empty" }, tc("加载中…", "Loading…"))));
+              h("span", { className: "sb-check-name" }, nbLabel(c.label || c.key)),
+              h("span", { className: "sb-meta" }, c.detail || ""),
+              c.hint && !c.ok ? h("span", { className: "sb-hint" }, c.hint) : null);
+          })) : h("div", { className: "sb-empty" }, tc("加载中…", "Loading…"))));
     }
 
     // 一组 = 折叠头 + 卡片墙或列表行；空组不出现。
@@ -2829,14 +2829,14 @@
       if (!items.length) return null;
       var gk = tab + ":" + key;
       var folded = !!fold[gk];
-      return h("section", { className: "sf-group", key: gk },
+      return h("section", { className: "sb-group", key: gk },
         groupHead(gk, hue, iconName, label, items.length, extra),
         folded ? null : (view === "grid"
-          ? h("div", { className: "sf-cards" }, items.map(cardFn))
-          : h("div", { className: "sf-rows" }, items.map(rowFn))));
+          ? h("div", { className: "sb-cards" }, items.map(cardFn))
+          : h("div", { className: "sb-rows" }, items.map(rowFn))));
     }
 
-    function emptyBox(text) { return h("div", { className: "sf-empty" }, text); }
+    function emptyBox(text) { return h("div", { className: "sb-empty" }, text); }
 
     var body = null;
     if (tab === "pending") {
@@ -2845,7 +2845,7 @@
       var miss = pend.filter(function (s) { return s.status === "no_result"; });
       var fresh = pend.filter(function (s) { return s.status === "captured"; });
       VIS = pend.map(function (s) { return String(s.id); });
-      body = h("div", { className: "sf-stack" },
+      body = h("div", { className: "sb-stack" },
         autoBar(),
         q && !pend.length
           ? emptyBox(tc("没有匹配「" + q + "」的场景", "Nothing matches \"" + q + "\""))
@@ -2868,7 +2868,7 @@
         return (!idx || (b.indexer || "") === idx) && (!res || (b.resolution || "") === res);
       });
       VIS = foundList.map(function (s) { return String(s.id); });
-      body = h("div", { className: "sf-stack" },
+      body = h("div", { className: "sb-stack" },
         autoBar(),
         section("pass", "gr", "check", tc("通过筛选", "Passed"), foundList, resultCard, resultRow),
         !found.length ? emptyBox(tc(
@@ -2887,15 +2887,15 @@
       var noLive = !live.length;
       var bulk = [
         isWsp() ? null : h("button", {
-          className: "sf-btn sf-btn-sm", key: "b1", disabled: noLive || busy === "bulk:resume",
+          className: "sb-btn sb-btn-sm", key: "b1", disabled: noLive || busy === "bulk:resume",
           onClick: function () { doBulk("resume"); },
         }, ico("play"), tc("全部下载", "Resume all")),
         isWsp() ? null : h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost", key: "b2", disabled: noLive || busy === "bulk:pause",
+          className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b2", disabled: noLive || busy === "bulk:pause",
           onClick: function () { doBulk("pause"); },
         }, ico("pause"), tc("全部暂停", "Pause all")),
         h("button", {
-          className: "sf-btn sf-btn-sm sf-btn-ghost", key: "b3",
+          className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b3",
           disabled: noLive || busy === "bulk:remove_missing" || !anyMissing,
           title: anyMissing ? "" : (isWsp()
             ? tc("Whisparr 里都还在", "Nothing is missing")
@@ -2904,8 +2904,8 @@
         }, ico("trash"), tc("移除缺失", "Remove missing")),
       ].filter(Boolean);
       // 窄屏这几个按钮跟着工具条的「更多」走
-      MEXTRA.push(h("div", { className: "sf-listbar-btns", key: "bulk-mob" }, bulk));
-      body = h("div", { className: "sf-stack" },
+      MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "bulk-mob" }, bulk));
+      body = h("div", { className: "sb-stack" },
         listBar(connLine(), bulk, true),
         section("ready", "bl", "download", tc("待入库", "Ready"), ready, progressCard, progressRow),
         showReady ? section("busy", "cy", "download",
@@ -2924,13 +2924,13 @@
       var buckets = [[], [], [], []];
       doneList.forEach(function (p) { buckets[dayBucket(p.at)].push(p); });
       var clearBtn = h("button", {
-        className: "sf-btn sf-btn-sm sf-btn-ghost", key: "clr", disabled: busy === "done:clear",
+        className: "sb-btn sb-btn-sm sb-btn-ghost", key: "clr", disabled: busy === "done:clear",
         onClick: clearDone,
       }, ico("trash"), tc("清空记录", "Clear list"));
-      if (done.length) MEXTRA.push(h("div", { className: "sf-listbar-btns", key: "done-mob" }, [clearBtn]));
-      body = h("div", { className: "sf-stack" },
+      if (done.length) MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "done-mob" }, [clearBtn]));
+      body = h("div", { className: "sb-stack" },
         done.length ? listBar(
-          h("span", { className: "sf-meta" }, tc(done.length + " 条已入库", done.length + " imported")),
+          h("span", { className: "sb-meta" }, tc(done.length + " 条已入库", done.length + " imported")),
           [clearBtn]) : null,
         buckets.map(function (items, i) {
           return section("day" + i, "bl", "clock", DAY_LABEL[i](), items, doneCard, doneRow);
@@ -2942,13 +2942,13 @@
       var ign = ignored.filter(hit);
       VIS = ign.map(function (s) { return String(s.id); });
       var restoreBtn = h("button", {
-        className: "sf-btn sf-btn-sm sf-btn-ghost", key: "rst", disabled: busy === "ignore:all",
+        className: "sb-btn sb-btn-sm sb-btn-ghost", key: "rst", disabled: busy === "ignore:all",
         onClick: bulkRestore,
       }, ico("plus"), tc("全部还原", "Restore all"));
-      if (ignored.length) MEXTRA.push(h("div", { className: "sf-listbar-btns", key: "ign-mob" }, [restoreBtn]));
-      body = h("div", { className: "sf-stack" },
+      if (ignored.length) MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "ign-mob" }, [restoreBtn]));
+      body = h("div", { className: "sb-stack" },
         ignored.length ? listBar(
-          h("span", { className: "sf-meta" }, tc(ignored.length + " 个已忽略", ignored.length + " ignored")),
+          h("span", { className: "sb-meta" }, tc(ignored.length + " 个已忽略", ignored.length + " ignored")),
           [restoreBtn]) : null,
         section("ign", "tx3", "ban", tc("已忽略", "Ignored"), ign, ignoredCard, ignoredRow),
         !ignored.length ? emptyBox(tc("没有忽略的场景", "Nothing ignored")) : null);
@@ -2959,25 +2959,25 @@
     var healthy = self && self.ok;
     var fails = ((self && self.checks) || []).filter(function (c) { return !c.ok; });
     var daemonAlive = !!(ctrl && ctrl.daemon && ctrl.daemon.alive);
-    return h("div", { className: "sf-page " + (pageIsDark() ? "is-dark" : "is-light") +
-        " sf-fx-" + coverFx() + " sf-r-" + coverRatio() },
-      h("header", { className: "sf-head" },
-        h("div", { className: "sf-brand" },
-          h("span", { className: "sf-logo" }, faIcon("faMagnet", "sf-logo-ico") || "SF"),
-          h("div", { className: "sf-brand-text" },
-            h("div", { className: "sf-name" }, tc("补档", "Scene Backfill")),
+    return h("div", { className: "sb-page " + (pageIsDark() ? "is-dark" : "is-light") +
+        " sb-fx-" + coverFx() + " sb-r-" + coverRatio() },
+      h("header", { className: "sb-head" },
+        h("div", { className: "sb-brand" },
+          h("span", { className: "sb-logo" }, faIcon("faMagnet", "sb-logo-ico") || "SF"),
+          h("div", { className: "sb-brand-text" },
+            h("div", { className: "sb-name" }, tc("补档", "Scene Backfill")),
             h("div", {
-              className: "sf-meta",
+              className: "sb-meta",
               title: showVerOn()
                 ? "v" + PLUGIN_VERSION + (self && self.qbVersion ? " · " + self.qbVersion : "")
                 : (self && self.qbVersion ? self.qbVersion : ""),
             },
               tc("缺文件的场景自动补种", "Fills scenes that have no file") +
               (showVerOn() ? " · v" + PLUGIN_VERSION : "")))),
-        h("div", { className: "sf-head-right" },
+        h("div", { className: "sb-head-right" },
           // 自检状态：桌面端是「√ 自检通过」，窄屏只留一个 √（文字藏起来，宽度收成方块）
           self ? h("button", {
-            className: "sf-pill sf-pill--mini" + (healthy ? " is-icon-only" : "") +
+            className: "sb-pill sb-pill--mini" + (healthy ? " is-icon-only" : "") +
               " is-h-" + (healthy ? "gr" : "re"),
             title: fails.length
               ? fails.map(function (c) { return (c.label || c.key) + "：" + (c.detail || ""); }).join("\n")
@@ -2986,10 +2986,10 @@
               : tc(fails.length + " 项未通过", fails.length + " failed"),
             onClick: function () { switchTab("settings"); },
           }, ico(healthy ? "check" : "alert"),
-            healthy ? h("span", { className: "sf-pill-txt" }, tc("自检通过", "Checks OK"))
+            healthy ? h("span", { className: "sb-pill-txt" }, tc("自检通过", "Checks OK"))
               : String(fails.length)) : null,
           h("button", {
-            className: "sf-icb" + (daemonAlive ? " is-acc" : ""),
+            className: "sb-icb" + (daemonAlive ? " is-acc" : ""),
             disabled: busy === "daemon",
             title: daemonAlive ? tc("后台守护中，点击停止", "Worker running, click to stop")
               : tc("后台运行（关页也能继续）", "Run in background"),
@@ -2997,28 +2997,28 @@
             onClick: toggleDaemon,
           }, ico(daemonAlive ? "pause" : "play")))),
 
-      h("div", { className: "sf-tabrow" },
-        h("nav", { className: "sf-tabs" }, tabs.map(function (t) {
+      h("div", { className: "sb-tabrow" },
+        h("nav", { className: "sb-tabs" }, tabs.map(function (t) {
           return h("button", {
             key: t.id,
-            className: "sf-tab is-h-" + t.hue + (tab === t.id ? " is-on" : ""),
+            className: "sb-tab is-h-" + t.hue + (tab === t.id ? " is-on" : ""),
             onClick: function () { switchTab(t.id); },
           }, ico(t.icon), t.label,
             t.id === "done"
-              ? (dinc > 0 ? h("span", { className: "sf-count is-new" },
+              ? (dinc > 0 ? h("span", { className: "sb-count is-new" },
                 "+" + (dinc > 99 ? "99" : dinc)) : null)
               : t.n && !t.hideCount
-                ? h("span", { className: "sf-count" + (t.id === "pending" ? " is-hot" : "") }, t.n)
+                ? h("span", { className: "sb-count" + (t.id === "pending" ? " is-hot" : "") }, t.n)
                 : null);
         }))),
 
       showStatsOn() ? statsRow() : null,
       toolsBar(),
       selBar(),
-      h("main", { className: "sf-body" }, body),
+      h("main", { className: "sb-body" }, body),
       detailModal(),
       dlModal(),
-      msg ? h("div", { className: "sf-toast" + (msg.bad ? " is-bad" : "") }, msg.text) : null);
+      msg ? h("div", { className: "sb-toast" + (msg.bad ? " is-bad" : "") }, msg.text) : null);
   }
 
   // ─── register ───────────────────────────────────────────────────────────
@@ -3083,7 +3083,7 @@
             to: "/plugins/SceneBackfill",
             activeClassName: "active",
             className: "btn minimal p-4 p-xl-2 d-flex d-xl-inline-block " +
-              "flex-column justify-content-between align-items-center sf-nav-item",
+              "flex-column justify-content-between align-items-center sb-nav-item",
           },
             React.createElement(FAIcon, {
               icon: FAS.faMagnet || FAS.faDownload,
@@ -3091,7 +3091,7 @@
               fixedWidth: true,
             }),
             React.createElement("span", null, zh ? "补档" : "Backfill"),
-            b ? React.createElement("span", { className: "sf-nav-n is-" + b.tone, key: "n" },
+            b ? React.createElement("span", { className: "sb-nav-n is-" + b.tone, key: "n" },
               b.plus ? (b.n > 99 ? "+99" : "+" + b.n)
                 : (b.n > 99 ? "99+" : String(b.n))) : null));
       }
@@ -3164,7 +3164,7 @@
           if (!navEnabled()) return [props];
           var kids = React.Children.toArray(props.children);
           if (kids.some(function (c) { return c && c.type === NavItem; })) return [props];
-          kids.push(React.createElement(NavItem, { key: "sf-nav" }));
+          kids.push(React.createElement(NavItem, { key: "sb-nav" }));
           return [Object.assign({}, props, { children: kids })];
         } catch (e) {
           return [props];
@@ -3200,17 +3200,17 @@
 
     function Rows(props) {
       var items = props.items || [];
-      return h("div", { className: "sf-test-list" }, items.map(function (it, i) {
+      return h("div", { className: "sb-test-list" }, items.map(function (it, i) {
         // Three states: ok ✓ / bad ✗ / skip – (an optional check that neither
         // passed nor failed should not carry a green tick).
         var st = it.state || (it.ok ? "ok" : "bad");
-        return h("div", { className: "sf-test-row is-" + st, key: i },
-          h("span", { className: "sf-test-mark" },
+        return h("div", { className: "sb-test-row is-" + st, key: i },
+          h("span", { className: "sb-test-mark" },
             st === "skip" ? "–" : (st === "ok" ? "✓" : "✗")),
-          h("div", { className: "sf-test-body" },
-            h("div", { className: "sf-test-name" }, it.label || it.key || ""),
-            h("div", { className: "sf-test-detail" }, String(it.detail || "")),
-            it.hint ? h("div", { className: "sf-test-hint" }, it.hint) : null));
+          h("div", { className: "sb-test-body" },
+            h("div", { className: "sb-test-name" }, it.label || it.key || ""),
+            h("div", { className: "sb-test-detail" }, String(it.detail || "")),
+            it.hint ? h("div", { className: "sb-test-hint" }, it.hint) : null));
       }));
     }
 
@@ -3229,7 +3229,7 @@
       //    phase, before React's bubble handlers run.
       React.useEffect(function () {
         if (!props.show) return undefined;
-        var content = document.querySelector(".sf-test-content");
+        var content = document.querySelector(".sb-test-content");
         var root = content && content.closest(".modal");
         if (!root) return undefined;
         var pressed = false, dragged = false, sx = 0, sy = 0;
@@ -3270,18 +3270,18 @@
 
       var body;
       if (st.loading) {
-        body = h("div", { className: "sf-test-wait" },
-          h("span", { className: "sf-test-dots" }, h("i"), h("i"), h("i")),
+        body = h("div", { className: "sb-test-wait" },
+          h("span", { className: "sb-test-dots" }, h("i"), h("i"), h("i")),
           h("span", null, tc("测试中…", "Testing…")));
       } else if (st.error) {
-        body = h("div", { className: "sf-test-err" }, st.error);
+        body = h("div", { className: "sb-test-err" }, st.error);
       } else {
         body = h(Rows, { items: st.items || [] });
       }
       return h(Modal, {
         show: !!props.show, onHide: props.onClose, backdrop: "static",
-        centered: true, dialogClassName: "sf-test-dialog",
-        contentClassName: "sf-test-content" + (pageIsDark() ? "" : " is-light"),
+        centered: true, dialogClassName: "sb-test-dialog",
+        contentClassName: "sb-test-content" + (pageIsDark() ? "" : " is-light"),
       },
         h(Modal.Header, { closeButton: true, onClick: stopBubble, onMouseDown: stopBubble },
           h(Modal.Title, null, tc("插件自检", "Plugin checks"))),
@@ -3313,14 +3313,14 @@
       // An anchor, not a button: Collapsable Plugin Settings treats the last
       // button in the card header as the enable switch and would restyle it.
       var trigger = h("a", {
-        className: "btn btn-primary sf-test-btn", role: "button", tabIndex: 0,
+        className: "btn btn-primary sb-test-btn", role: "button", tabIndex: 0,
         onClick: function (e) { e.preventDefault(); openIt(); },
         onKeyDown: function (e) {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openIt(); }
         },
       },
         (RAF.FontAwesomeIcon && FAS.faFlask)
-          ? h(RAF.FontAwesomeIcon, { icon: FAS.faFlask, className: "sf-test-ico" }) : null,
+          ? h(RAF.FontAwesomeIcon, { icon: FAS.faFlask, className: "sb-test-ico" }) : null,
         tc("测试", "Test"));
 
       return h(React.Fragment, null, trigger,

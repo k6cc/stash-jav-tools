@@ -28,7 +28,7 @@
 | **部署/更新插件并校验版本** | `deploy_plugin.py` | `python deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill --in-place`（覆盖文件 → reloadPlugins → 轮询 version；同 id 旧副本会报警）。从插件源安装的插件必须加 `--in-place`，删目录会被 Stash 当成卸载，检查更新失效 |
 | 跑任意插件 op（参数复杂时必用） | `plugin_op.py` | `python plugin_op.py SceneBackfill '{"mode":"capture","lang":"zh"}'`（或 `--file args.json`；`--raw` 看 errors） |
 | 改插件状态做 UI 验证前存/还原 | `state_snapshot.py` | `snap` → 测 → `restore`（先停守护，否则 90 s 内被整份覆盖） |
-| 多视口 UI 回归（对齐/列数/换行/横向溢出） | `ui_probe.py` | `python ui_probe.py --path /plugins/SceneBackfill --selector ".sf-check-name" --sizes 345,390,768,860,1024` |
+| 多视口 UI 回归（对齐/列数/换行/横向溢出） | `ui_probe.py` | `python ui_probe.py --path /plugins/SceneBackfill --selector ".sb-check-name" --sizes 345,390,768,860,1024` |
 | SceneBackfill 发版前一键验收（只读） | `tests/SceneBackfill/scripts/sf_verify.py` | `python sf_verify.py`（selftest + 规则回读 + 下载器连接 + 守护心跳 + state 巡检；`--with-worker-start` 可拉起守护） |
 | tagMerge 映射维护/校验 | `tests/tagMerge/scripts/` | `tagmap_norm.py` / `tagmap_verify.py` / `tagmap_scrape_defs.py`（用法见 `tests/tagMerge/SCRIPTS.md`） |
 | 探 javstash 某番号/演员 | `tests/javstashAutofill/scripts/probe_javstash.py` | `python probe_javstash.py --code T38-072` / `--performer 三上悠亜` / `--fetch <uuid>` |

@@ -19,7 +19,7 @@ python stash-testkit/state_snapshot.py snap SceneBackfill
 python stash-testkit/state_snapshot.py restore SceneBackfill
 python stash-testkit/deploy_plugin.py E:/Temp/stash-jav-tools/SceneBackfill --in-place
 python stash-testkit/ui_probe.py --path /plugins/SceneBackfill \
-  --selector ".sf-check-name" --sizes 345,390,768,860,1024
+  --selector ".sb-check-name" --sizes 345,390,768,860,1024
 ```
 
 ## 一次完整验证

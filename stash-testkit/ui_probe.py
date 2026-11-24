@@ -8,8 +8,8 @@
 依赖：`stash_dev.py`（默认 E:/stashAPP/devtools，可用 --dev 或环境变量 STASH_DEV 覆盖）
 
 用法：
-  python ui_probe.py --path /plugins/SceneBackfill --selector ".sf-check-name" --sizes 345,390,768,860,1024
-  python ui_probe.py --path /plugins/SceneBackfill --selector ".sf-card" --sizes 390,768 --height 844
+  python ui_probe.py --path /plugins/SceneBackfill --selector ".sb-check-name" --sizes 345,390,768,860,1024
+  python ui_probe.py --path /plugins/SceneBackfill --selector ".sb-card" --sizes 390,768 --height 844
 
 输出每行：
   size      视口宽×高

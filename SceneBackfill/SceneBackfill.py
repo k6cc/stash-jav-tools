@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.13"
+PLUGIN_VERSION = "0.1.14"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -537,7 +537,7 @@ class QB:
             parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
                          f'name="stopped"\r\n\r\ntrue\r\n'.encode())
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
-                     f'name="torrents"; filename="sf.torrent"\r\n'
+                     f'name="torrents"; filename="sb.torrent"\r\n'
                      f"Content-Type: application/x-bittorrent\r\n\r\n".encode()
                      + raw_bytes + b"\r\n")
         parts.append(f"--{boundary}--\r\n".encode())
@@ -696,7 +696,7 @@ class Aria2:
     def _call(self, method, params=None):
         if not self.base:
             raise Aria2Error("Motrix URL is empty")
-        payload = {"jsonrpc": "2.0", "id": "sf", "method": method,
+        payload = {"jsonrpc": "2.0", "id": "sb", "method": method,
                    "params": ([f"token:{self.secret}"] if self.secret else []) + list(params or [])}
         req = urllib.request.Request(self.url, data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -873,7 +873,7 @@ def motrix_probe(base, key):
                 return "web", ""
     except Exception:
         pass
-    payload = {"jsonrpc": "2.0", "id": "sf", "method": "aria2.getVersion",
+    payload = {"jsonrpc": "2.0", "id": "sb", "method": "aria2.getVersion",
                "params": (["token:" + key] if key else [])}
     try:
         req = urllib.request.Request(base + "/jsonrpc", data=json.dumps(payload).encode(),
@@ -2344,7 +2344,7 @@ def do_selftest_whisparr(ctx, cfg, s):
 
 
 def _probe_write(path):
-    probe = os.path.join(local_path(path), ".sf_probe")
+    probe = os.path.join(local_path(path), ".sb_probe")
     try:
         with open(probe, "w", encoding="utf-8") as f:
             f.write("ok")
@@ -3103,7 +3103,7 @@ def push_scene(ctx, st, sid, idx, file_index=""):
         raise RuntimeError(t_(ctx, "该候选没有可用的种子或磁力链接", "No torrent or magnet for this candidate"))
 
     savepath = s["savePath"] or "/downloads"
-    tags = f"sf:{sid}"
+    tags = f"sb:{sid}"
     rules = get_rules(st)
     if torrent_bytes:
         # The .torrent carries its own file list, so the pick is decided before

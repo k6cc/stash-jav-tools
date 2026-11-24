@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "0.1.15"
+PLUGIN_VERSION = "0.1.16"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -3390,7 +3390,55 @@ def _torrent_bulk(ctx, st, action, ids=None):
 
 # ─── 入库 ────────────────────────────────────────────────────────────────
 
+def import_job_path(ctx):
+    return os.path.join(data_dir(ctx), "import_job.json")
+
+
+def _job_write(ctx, job):
+    """Progress for the page: a separate file, so status reads never wait on
+    state.json (which the import itself keeps rewriting)."""
+    p = import_job_path(ctx)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(job, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def do_import_status(ctx):
+    try:
+        with open(import_job_path(ctx), "r", encoding="utf-8") as f:
+            return {"ok": True, "job": json.load(f)}
+    except Exception:
+        return {"ok": True, "job": None}
+
+
+def _run_locked(ctx, fn, wait=5.0):
+    """Manual imports share the worker's run lock: two imports of the same
+    scene would scan twice and race on sceneMerge."""
+    lk = RunLock(run_lock_path(ctx))
+    deadline = time.time() + wait
+    while not lk.acquire():
+        if time.time() >= deadline:
+            raise RuntimeError(t_(ctx, "另一个任务正在运行，稍后再试",
+                                  "Another run is in progress, try again later"))
+        time.sleep(0.25)
+    try:
+        return fn()
+    finally:
+        lk.release()
+
+
 def do_import(ctx):
+    ids = _id_list(ctx.arg("ids"))
+    if ids:
+        return _run_locked(ctx, lambda: _import_bulk(ctx, ids))
+    return _run_locked(ctx, lambda: _import_one(ctx))
+
+
+def _import_one(ctx):
     st = load_state(ctx)
     sid = str(ctx.arg("sceneId"))
     rec = st["scenes"].get(sid)
@@ -3402,25 +3450,12 @@ def do_import(ctx):
     return out
 
 
-def import_scene(ctx, st, sid):
-    """Scan the finished files where they are, then link them to the scene.
-
-    Nothing is moved: the plugin never touches files. The download folder must
-    sit inside a Stash library, otherwise the scan finds nothing to link.
-    """
-    if pipeline_kind(ctx.config()) == "whisparr":
-        return import_scene_whisparr(ctx, st, sid)
-    cfg = ctx.config()
-    s = settings_view(cfg)
+def _import_sources(ctx, s, st, qb, sid, info):
     rec = st["scenes"].get(sid) or {}
     chosen = rec.get("chosen") or {}
     h = (chosen.get("hash") or "").lower()
     if not h:
         raise RuntimeError(t_(ctx, "该场景还没有推送记录", "Nothing pushed for this scene"))
-
-    qb = make_downloader(cfg)
-    qb.login()
-    info = {t["hash"].lower(): t for t in qb.info([h])}.get(h)
     if not info:
         raise RuntimeError(t_(ctx, "下载器里找不到该任务", "Torrent not found in the downloader"))
     if float(info.get("progress") or 0) < 0.999 or (info.get("state") or "") in QB_BUSY_STATES:
@@ -3450,7 +3485,104 @@ def import_scene(ctx, st, sid):
         raise RuntimeError(t_(
             ctx, "下载目录不在 Stash 库路径内，扫描不到这些文件；把它加进库路径",
             "The download folder is outside a Stash library; add it to a library path"))
+    return sources
 
+
+def _import_bulk(ctx, ids):
+    """Import many scenes with one scan instead of one scan per scene."""
+    st = load_state(ctx)
+    ids = [str(x) for x in ids]
+    job = {"at": int(time.time()), "total": len(ids), "done": 0,
+           "phase": "prepare", "failed": [], "running": True}
+    _job_write(ctx, job)
+    ok = 0
+    try:
+        if pipeline_kind(ctx.config()) == "whisparr":
+            job["phase"] = "link"
+            _job_write(ctx, job)
+            for sid in ids:
+                try:
+                    out = import_scene_whisparr(ctx, st, sid)
+                    if out.get("ok"):
+                        ok += 1
+                    else:
+                        job["failed"].append({"sceneId": sid, "error": out.get("error") or "import failed"})
+                except Exception as e:
+                    job["failed"].append({"sceneId": sid, "error": _safe_text(str(e))[:180]})
+                job["done"] += 1
+                save_state(ctx, st)
+                _job_write(ctx, job)
+            return {"ok": True, "count": ok, "failed": job["failed"]}
+
+        cfg = ctx.config()
+        s = settings_view(cfg)
+        qb = make_downloader(cfg)
+        qb.login()
+
+        hashes = {}
+        for sid in ids:
+            h = (((st["scenes"].get(sid) or {}).get("chosen") or {}).get("hash") or "").lower()
+            if h:
+                hashes[sid] = h
+        infos = {}
+        if hashes:
+            infos = {t["hash"].lower(): t for t in qb.info(list(set(hashes.values())))}
+
+        plans, targets = [], []
+        for sid in ids:
+            try:
+                sources = _import_sources(ctx, s, st, qb, sid, infos.get(hashes.get(sid, "")))
+                plans.append((sid, sources))
+                targets.extend(sources)
+            except Exception as e:
+                job["failed"].append({"sceneId": sid, "error": _safe_text(str(e))[:180]})
+                job["done"] += 1
+        _job_write(ctx, job)
+
+        found = {}
+        if targets:
+            job["phase"] = "scan"
+            _job_write(ctx, job)
+            found = scan_and_find_many(ctx, targets)
+
+        job["phase"] = "link"
+        _job_write(ctx, job)
+        for sid, sources in plans:
+            try:
+                out = _link_scanned_files(ctx, st, sid, sources, found)
+                if out.get("ok"):
+                    ok += 1
+                else:
+                    job["failed"].append({"sceneId": sid, "error": out.get("error") or "import failed"})
+            except Exception as e:
+                job["failed"].append({"sceneId": sid, "error": _safe_text(str(e))[:180]})
+            job["done"] += 1
+            save_state(ctx, st)
+            _job_write(ctx, job)
+        return {"ok": True, "count": ok, "failed": job["failed"]}
+    finally:
+        job["running"] = False
+        job["phase"] = "done"
+        job["finishedAt"] = int(time.time())
+        _job_write(ctx, job)
+
+
+def import_scene(ctx, st, sid):
+    """Scan the finished files where they are, then link them to the scene.
+
+    Nothing is moved: the plugin never touches files. The download folder must
+    sit inside a Stash library, otherwise the scan finds nothing to link.
+    """
+    if pipeline_kind(ctx.config()) == "whisparr":
+        return import_scene_whisparr(ctx, st, sid)
+    cfg = ctx.config()
+    s = settings_view(cfg)
+    rec = st["scenes"].get(sid) or {}
+    h = ((rec.get("chosen") or {}).get("hash") or "").lower()
+    qb = make_downloader(cfg)
+    qb.login()
+    info = {t["hash"].lower(): t for t in qb.info([h])}.get(h) if h else None
+    sources = _import_sources(ctx, s, st, qb, sid, info)
     return _link_scanned_files(ctx, st, sid, sources)
 
 
@@ -4054,19 +4186,25 @@ def _clear_merge_mark(ctx, rec):
             pass
 
 
-def _link_scanned_files(ctx, st, sid, targets):
+def _link_scanned_files(ctx, st, sid, targets, found=None):
     """Scan the finished files, then merge the scenes Stash made onto the
-    original empty scene. Shared by the downloader and Whisparr pipelines."""
+    original empty scene. Shared by the downloader and Whisparr pipelines.
+
+    Bulk import scans every path once and passes the combined map in; only the
+    entries belonging to this scene are used.
+    """
     rec = st["scenes"].get(sid) or {}
-    found = scan_and_find_many(ctx, targets)
-    missing = [p for p in targets if p not in found]
+    if found is None:
+        found = scan_and_find_many(ctx, targets)
+    sub = {p: found[p] for p in targets if p in found}
+    missing = [p for p in targets if p not in sub]
     if missing:
         rec["error"] = t_(ctx, f"扫描后仍缺 {len(missing)} 个文件",
                           f"{len(missing)} file(s) still missing after scan")
         save_state(ctx, st)
-        if not found:
+        if not sub:
             return {"ok": False, "error": rec["error"]}
-    ids = list(found.values())
+    ids = list(sub.values())
     owner = ctx.gql("""
     query($ids: [ID!]!) {
       findFiles(ids: $ids) { files { id path ... on VideoFile { scenes { id } } } }
@@ -4257,6 +4395,7 @@ OPS = {
     "push": do_push,
     "progress": do_progress,
     "import": do_import,
+    "import_status": do_import_status,
     "ignore": do_ignore,
     "done": do_done,
     "rules": do_rules,

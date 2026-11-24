@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "0.1.15";
+  var PLUGIN_VERSION = "0.1.16";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -453,6 +453,9 @@
     var conn = connState[0], setConn = connState[1];
     var busyState = useState("");
     var busy = busyState[0], setBusy = busyState[1];
+    // 批量入库是单个长请求，进度由后端写进 import_job.json，这里轮询显示。
+    var ijobState = useState(null);
+    var ijob = ijobState[0], setIjob = ijobState[1];
     var msgState = useState(null);
     var msg = msgState[0], setMsg = msgState[1];
     var detailState = useState("");
@@ -639,6 +642,20 @@
     useEffect(function () { reload(); }, []);
     useEffect(function () { if (tab === "settings" && !draft) loadRules(); }, [tab, draft]);
 
+    useEffect(function () {
+      if (busy !== "bulk:import") { setIjob(null); return undefined; }
+      var stop = false;
+      function pull() {
+        if (stop) return;
+        op({ mode: "import_status" }).then(function (r) {
+          if (!stop && r && r.job) setIjob(r.job);
+        }).catch(function () {});
+      }
+      pull();
+      var t = window.setInterval(pull, 1200);
+      return function () { stop = true; window.clearInterval(t); };
+    }, [busy]);
+
     // Esc closes the popup; the backdrop click does too. In multi-select Esc
     // means "leave selection", which is the only way out on a phone.
     useEffect(function () {
@@ -798,7 +815,34 @@
         .then(function () { setBusy(""); });
     }
 
+    function importLabel() {
+      if (busy !== "bulk:import") return tc("全部入库", "Import all");
+      if (!ijob) return tc("入库中…", "Importing…");
+      if (ijob.phase === "scan") return tc("扫描中 · " + ijob.total, "Scanning " + ijob.total);
+      if (ijob.phase === "prepare") return tc("准备中 · " + ijob.total, "Preparing " + ijob.total);
+      return tc("入库中 " + (ijob.done || 0) + "/" + (ijob.total || 0),
+        "Importing " + (ijob.done || 0) + "/" + (ijob.total || 0));
+    }
+
     function doBulk(action) {
+      if (action === "import") {
+        var rids = (prog || []).filter(function (p) { return p.ready; })
+          .map(function (p) { return String(p.sceneId); });
+        if (!rids.length) return;
+        setBusy("bulk:import");
+        op({ mode: "import", ids: rids })
+          .then(function (r) {
+            var n = (r && r.count) || 0;
+            var bad = (r && r.failed) || [];
+            toast(bad.length
+              ? tc("已入库 " + n + " 个，失败 " + bad.length + " 个",
+                n + " imported, " + bad.length + " failed")
+              : tc("已入库 " + n + " 个", n + " imported"), bad.length > 0);
+            return Promise.all([loadCapture(), loadProgress()]);
+          }).catch(function (e) { toast(String(e.message || e), true); })
+          .then(function () { setBusy(""); });
+        return;
+      }
       if (action === "remove_missing" && !window.confirm(isWsp()
         ? tc("清掉记录里 Whisparr 已经没有的场景？它们会退回重新加片。",
              "Forget scenes Whisparr no longer has? They go back to being sent.")
@@ -895,6 +939,15 @@
         job = op({ mode: "torrent", ids: ids, action: kind });
       } else if (kind === "search") {
         job = eachSel(ids, function (sid) { return op({ mode: "search", sceneId: sid }); });
+      } else if (kind === "import") {
+        // 只有下载完成的行能入库；隐藏的其它组即便还留在 sel 里也跳过
+        var readySet = {};
+        (prog || []).forEach(function (p) { if (p.ready) readySet[String(p.sceneId)] = true; });
+        ids = ids.filter(function (sid) { return readySet[String(sid)]; });
+        if (!ids.length) { setBusy(""); return; }
+        // 与「全部入库」同一个长请求：借同一个进度轮询显示 i/N
+        setBusy("bulk:import");
+        job = op({ mode: "import", ids: ids });
       } else if (kind === "push") {
         job = eachSel(ids, function (sid) {
           if (isWsp()) return op({ mode: "push", sceneId: sid });
@@ -907,14 +960,24 @@
       }
       (job || Promise.resolve({ count: 0 })).then(function (r) {
         var n = r && r.count != null ? r.count : n0;
-        toast(kind === "search" ? tc("已搜索 " + n + " 个", n + " searched")
-          : kind === "push" ? tc("已推送 " + n + " 个", n + " pushed")
-            : kind === "ignore" ? tc("已忽略 " + n + " 个", n + " ignored")
-              : kind === "restore" ? tc("已恢复 " + n + " 个", n + " restored")
-                : kind === "forget" ? tc("已移除 " + n + " 条记录", n + " records dropped")
-                  : kind === "resume" ? tc("已继续 " + n + " 个", n + " resumed")
-                    : kind === "pause" ? tc("已暂停 " + n + " 个", n + " paused")
-                      : tc("已移除 " + n + " 个任务", n + " removed"));
+        var bad = (r && r.failed) || [];
+        var msg;
+        if (kind === "import") {
+          msg = bad.length
+            ? tc("已入库 " + n + " 个，失败 " + bad.length + " 个",
+              n + " imported, " + bad.length + " failed")
+            : tc("已入库 " + n + " 个", n + " imported");
+        } else {
+          msg = kind === "search" ? tc("已搜索 " + n + " 个", n + " searched")
+            : kind === "push" ? tc("已推送 " + n + " 个", n + " pushed")
+              : kind === "ignore" ? tc("已忽略 " + n + " 个", n + " ignored")
+                : kind === "restore" ? tc("已恢复 " + n + " 个", n + " restored")
+                  : kind === "forget" ? tc("已移除 " + n + " 条记录", n + " records dropped")
+                    : kind === "resume" ? tc("已继续 " + n + " 个", n + " resumed")
+                      : kind === "pause" ? tc("已暂停 " + n + " 个", n + " paused")
+                        : tc("已移除 " + n + " 个任务", n + " removed");
+        }
+        toast(msg, kind === "import" && bad.length > 0);
         exitSel();
         if (kind === "push") switchTab("downloading");
         return Promise.all([loadCapture(), loadProgress()]);
@@ -1095,10 +1158,10 @@
           tab === "results", function () { switchTab("results"); }),
         statCard(live.length, "cy",
           isWsp() ? tc("Whisparr 中", "In Whisparr") : tc("下载中", "Downloading"),
-          tab === "downloading" && !filter, function () { switchTab("downloading"); setFilter(""); }),
+          tab === "downloading" && !filter, function () { switchTab("downloading"); setFilter(""); exitSel(); }),
         statCard(readyRows.length, "bl", tc("待入库", "Ready"),
           tab === "downloading" && filter === "ready",
-          function () { switchTab("downloading"); setFilter("ready"); }),
+          function () { switchTab("downloading"); setFilter("ready"); exitSel(); }),
         h("button", {
           className: "sb-stat sb-stat--wide" + (over ? " is-h-re" : ""),
           onClick: function () { switchTab("settings"); },
@@ -1247,6 +1310,18 @@
         ];
       }
       if (tab === "downloading") {
+        if (filter === "ready") {
+          return [
+            h("button", {
+              className: "sb-btn sb-btn-sm" + dis(),
+              onClick: function () { runSel("import"); },
+            }, ico("download"), tc("入库", "Import")),
+            h("button", {
+              className: "sb-btn sb-btn-sm sb-btn-ghost is-danger" + dis(),
+              onClick: function () { runSel("remove"); },
+            }, ico("trash"), tc("移除", "Remove")),
+          ];
+        }
         return [
           isWsp() ? null : h("button", {
             className: "sb-btn sb-btn-sm" + dis(),
@@ -1362,13 +1437,14 @@
       }, ico(name));
     }
 
-    function tile(key, coverNode, body, foot) {
+    function tile(key, coverNode, body, foot, canPick) {
       var k = String(key);
-      var picked = selOn && !!sel[k];
+      var picking = selOn && canPick !== false;
+      var picked = picking && !!sel[k];
       return h("article", {
-        className: "sb-tile" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
+        className: "sb-tile" + (picking ? " is-pick" : "") + (picked ? " is-sel" : ""),
         key: key,
-        onClick: selOn ? function (e) {
+        onClick: picking ? function (e) {
           var t = e.target;
           if (t && t.closest && t.closest("button, a, .sb-shot--btn, .sb-title--btn")) return;
           toggleSel(k);
@@ -1440,16 +1516,17 @@
 
     // 封面：左下搜索方式（没有就不占位），
     // 右下时长（下载中是百分比，时长就退到卡片正文里）。
-    function coverOf(s, badgeNode, prog, onOpen) {
+    function coverOf(s, badgeNode, prog, onOpen, canPick) {
       var shot = shotOf[s.id] || s.shot || "";
       var broken = shotBroken[s.id];
       var dur = fmtDur(s.duration);
-      var picked = selOn && !!sel[String(s.id)];
+      var picking = selOn && canPick !== false;
+      var picked = picking && !!sel[String(s.id)];
       var term = searchBadge(s);
       return h("div", {
         className: "sb-shot sb-shot--btn" + (prog != null ? " has-prog" : ""),
-        onClick: selOn ? function () { toggleSel(s.id); } : (onOpen || function () { openDetail(s.id); }),
-        title: selOn ? tc("勾选", "Select") : tc("查看详情", "Open details"),
+        onClick: picking ? function () { toggleSel(s.id); } : (onOpen || function () { openDetail(s.id); }),
+        title: picking ? tc("勾选", "Select") : tc("查看详情", "Open details"),
       },
         shot && !broken
           ? h("img", {
@@ -1459,7 +1536,7 @@
             },
           })
           : h("span", { className: "sb-shot-ph sb-lib" }, s.code || "—"),
-        selOn
+        selOn && canPick !== false
           ? h("span", { className: "sb-shot-check" + (picked ? " is-on" : "") },
             picked ? ico("check") : null)
           : null,
@@ -1619,12 +1696,13 @@
     // 列表行：96px 封面 + 标题/副标题 + 状态 + 徽章 + 图标按钮
     function rowOf(o) {
       var k = String(o.key);
-      var picked = selOn && !!sel[k];
-      var onHit = selOn ? function () { toggleSel(k); } : o.onOpen;
+      var picking = selOn && o.pick !== false;
+      var picked = picking && !!sel[k];
+      var onHit = picking ? function () { toggleSel(k); } : o.onOpen;
       return h("div", {
-        className: "sb-row" + (selOn ? " is-pick" : "") + (picked ? " is-sel" : ""),
+        className: "sb-row" + (picking ? " is-pick" : "") + (picked ? " is-sel" : ""),
         key: o.key,
-        onClick: selOn ? function (e) {
+        onClick: picking ? function (e) {
           var t = e.target;
           if (t && t.closest && t.closest("button, a, .sb-row-shot, .sb-row-title")) return;
           toggleSel(k);
@@ -1633,11 +1711,11 @@
         h("div", {
           className: "sb-row-shot",
           onClick: onHit,
-          title: selOn ? tc("勾选", "Select") : tc("查看详情", "Open details"),
+          title: picking ? tc("勾选", "Select") : tc("查看详情", "Open details"),
         },
           o.shot ? h("img", { src: o.shot, alt: "", loading: "lazy" })
             : h("span", { className: "sb-shot-ph sb-lib" }, o.code || "—"),
-          selOn
+          picking
             ? h("span", { className: "sb-shot-check" + (picked ? " is-on" : "") },
               picked ? ico("check") : null)
             : null,
@@ -1803,6 +1881,12 @@
       return "pushed";
     }
 
+    // 多选只开放给这一屏能执行的动作：下载中页只能选正在下载的，
+    // 待入库视图只能选待入库的；丢失与其它组不出现勾选框。
+    function pickableOf(p) {
+      return filter === "ready" ? !!p.ready : (!p.ready && p.state !== "missing");
+    }
+
     function progressCard(p) {
       var importing = busy === "import:" + p.sceneId;
       var acting = busy === "torrent:" + p.sceneId;
@@ -1842,7 +1926,7 @@
         ? Api.React.createElement("span", { className: "sb-pill is-h-ye" },
             ico("pause"), tc("已暂停", "Paused"))
         : statusPill(progStateOf(p)), p.ready ? null : done,
-        function () { openDl(p.sceneId); }), body, foot);
+        function () { openDl(p.sceneId); }, pickableOf(p)), body, foot, pickableOf(p));
     }
 
     function progressRow(p) {
@@ -1856,6 +1940,7 @@
       ].filter(Boolean).join(" · ");
       return rowOf({
         key: p.sceneId, code: p.code,
+        pick: pickableOf(p),
         title: (byId[p.sceneId] || {}).title || p.code || p.name, lib: true,
         shot: p.shot || (byId[p.sceneId] || {}).shot || "",
         sub: [humanSize(p.size), rate].filter(Boolean).join(" · "),
@@ -2923,30 +3008,38 @@
       var ready = liveList.filter(function (p) { return p.ready; });
       var lost = liveList.filter(function (p) { return !p.ready && p.state === "missing"; });
       var busy2 = liveList.filter(function (p) { return !p.ready && p.state !== "missing"; });
-      VIS = (filter === "ready" ? ready : liveList).map(function (p) { return String(p.sceneId); });
+      VIS = (filter === "ready" ? ready : busy2).map(function (p) { return String(p.sceneId); });
       var showBusy = filter !== "ready";
       var hasBusy = live.some(function (p) { return !p.ready && p.state !== "missing"; });
       // 没有任务时按钮照常占位（置灰），否则这行只剩连接状态，高度会比有卡片时矮一截
       var noLive = !live.length;
-      var bulk = [
+      var removeMissing = h("button", {
+        className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b3",
+        disabled: noLive || busy === "bulk:remove_missing" || !anyMissing,
+        title: anyMissing ? "" : (isWsp()
+          ? tc("Whisparr 里都还在", "Nothing is missing")
+          : tc("下载器里都还在", "Nothing is missing")),
+        onClick: function () { doBulk("remove_missing"); },
+      }, ico("trash"), tc("移除缺失", "Remove missing"));
+      var bulk = filter === "ready" ? [
+        h("button", {
+          className: "sb-btn sb-btn-sm", key: "b1",
+          disabled: !readyRows.length || busy === "bulk:import",
+          onClick: function () { doBulk("import"); },
+        }, ico("download"), importLabel()),
+        removeMissing,
+      ] : [
         isWsp() ? null : h("button", {
           className: "sb-btn sb-btn-sm", key: "b1",
-          disabled: filter === "ready" || !hasBusy || busy === "bulk:resume",
+          disabled: !hasBusy || busy === "bulk:resume",
           onClick: function () { doBulk("resume"); },
         }, ico("play"), tc("全部继续", "Resume all")),
         isWsp() ? null : h("button", {
           className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b2",
-          disabled: filter === "ready" || !hasBusy || busy === "bulk:pause",
+          disabled: !hasBusy || busy === "bulk:pause",
           onClick: function () { doBulk("pause"); },
         }, ico("pause"), tc("全部暂停", "Pause all")),
-        h("button", {
-          className: "sb-btn sb-btn-sm sb-btn-ghost", key: "b3",
-          disabled: noLive || busy === "bulk:remove_missing" || !anyMissing,
-          title: anyMissing ? "" : (isWsp()
-            ? tc("Whisparr 里都还在", "Nothing is missing")
-            : tc("下载器里都还在", "Nothing is missing")),
-          onClick: function () { doBulk("remove_missing"); },
-        }, ico("trash"), tc("移除缺失", "Remove missing")),
+        removeMissing,
       ].filter(Boolean);
       // 窄屏这几个按钮跟着工具条的「更多」走
       MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "bulk-mob" }, bulk));

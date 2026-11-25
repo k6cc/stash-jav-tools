@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "1.0.2";
+  var PLUGIN_VERSION = "1.0.3";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a

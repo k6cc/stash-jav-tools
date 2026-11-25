@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.0.3"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -1585,6 +1585,42 @@ def indexer_search(cfg, query, timeout=60):
     return torznab_search(cfg, query, timeout)
 
 
+class IndexerError(RuntimeError):
+    """索引器在 200 里回 <error>：请求成功、结果失败。带码和原因，让调用方
+    能把它和「搜索到 0 条」分开 —— 以前两者都是空列表，密钥错了也显示「没搜到」。"""
+
+    def __init__(self, code, description):
+        self.code = (code or "").strip()
+        self.description = (description or "").strip()
+        super().__init__(self.text(False))
+
+    def text(self, zh):
+        head = "索引器返回错误" if zh else "Indexer error"
+        if self.code:
+            head += ("（%s）" % self.code) if zh else (" (%s)" % self.code)
+        if self.description:
+            head += ("：" if zh else ": ") + self.description
+        return head
+
+    def localized(self, zh):
+        self.args = (self.text(zh),)
+        return self
+
+
+def torznab_error(root):
+    """Newznab 把失败写在 <error code=… description=…/> 里：整份文档就是它，
+    少数源把它塞进 <channel>。命中返回 IndexerError，否则 None。"""
+    tag = (root.tag or "").rsplit("}", 1)[-1].lower()
+    node = root if tag == "error" else root.find("error")
+    if node is None:
+        ch = root.find("channel")
+        if ch is not None:
+            node = ch.find("error")
+    if node is None:
+        return None
+    return IndexerError(node.get("code"), node.get("description") or node.text)
+
+
 def torznab_search(cfg, query, timeout=60):
     url = torznab_url(cfg)
     key = _settings_str(cfg, "indexerApiKey")
@@ -1633,6 +1669,12 @@ def torznab_search(cfg, query, timeout=60):
             "resolution": candidate_resolution(title),
             "publishDate": item.findtext("pubDate") or "",
         })
+    # 有条目就是有条目（个别源会同时回几条结果和一条错误），一条都没有再判错误：
+    # 真没搜到是空 <channel>，不是 <error>
+    if not out:
+        err = torznab_error(root)
+        if err:
+            raise err
     return out
 
 
@@ -2268,7 +2310,7 @@ def do_selftest(ctx):
             t_(ctx, "填 Jackett 或 Prowlarr 地址与 API Key",
                "Fill in the Jackett or Prowlarr URL and API key"))
     else:
-        ok, detail = _probe_indexer(cfg)
+        ok, detail = _probe_indexer(cfg, ctx.zh)
         add("jackett", "索引器", "Indexer", ok, detail,
             t_(ctx, "确认 Jackett / Prowlarr 在运行，API Key 正确",
                "Check that Jackett / Prowlarr is up and the API key is right"))
@@ -2410,7 +2452,7 @@ def _probe_write(path):
         return False, str(e)[:120]
 
 
-def _probe_indexer(cfg):
+def _probe_indexer(cfg, zh=False):
     """最便宜的一次调用：Jackett 用 t=caps，Prowlarr 用 /api/v1/indexer 列表。
     两者都能验证地址 + 密钥，又不占用索引器的搜索配额。"""
     key = _settings_str(cfg, "indexerApiKey")
@@ -2439,6 +2481,10 @@ def _probe_indexer(cfg):
         return False, f"HTTP {e.code}"
     except Exception as e:
         return False, _safe_text(str(e))[:120]
+    err = torznab_error(root)
+    if err:
+        # 200 + <error> 很常见（密钥错、配额满、索引器挂了）；只报 tag 名等于什么都没说
+        return False, _safe_text(err.text(zh))[:140]
     if not root.tag.endswith("caps"):
         return False, f"unexpected reply: {root.tag.split('}')[-1]}"
     n = len(root.findall(".//category"))
@@ -2956,6 +3002,10 @@ def search_scene(ctx, st, sid, paced=False):
         qkind, query = kind, term
         try:
             results = indexer_search(cfg, term, net_timeout(cfg))
+        except IndexerError as e:
+            # 配额用尽、密钥失效、站点挂了：换下一个搜索词只会撞同一个错，
+            # 所以不继续退档，直接把原因抛上去（不是「没搜到」）
+            raise e.localized(ctx.zh)
         finally:
             mark_search(st)
         if results:
@@ -3958,6 +4008,11 @@ def run_tick(ctx, st, ctrl, src):
                 rec["attempts"] = int(rec.get("attempts") or 0) + 1
                 rec["searchedAt"] = int(time.time())
                 actions.append("search!:" + sid)
+                # 索引器自己出问题（配额用尽 / 密钥失效 / 站点挂了）：这一轮
+                # 剩下的场景会撞同一个错，继续搜只是把每条的退避都推高
+                if isinstance(e, IndexerError):
+                    save_state(ctx, st)
+                    break
             save_state(ctx, st)
 
     if src == "worker":

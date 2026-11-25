@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "1.0.1";
+  var PLUGIN_VERSION = "1.0.2";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -1495,6 +1495,9 @@
       var code = String(s.code || "");
       if (kind === "code" || (q && q === code)) return code || q;
       if (kind === "title") return tc("标题", "Title");
+      if (kind === "studio_perf") return tc("片商+演员", "Studio + performer");
+      if (kind === "date_perf") return tc("日期+演员", "Date + performer");
+      // 旧记录（搜索词带日期后缀）
       if (kind === "performer") return tc("演员+日期", "Performer + date");
       if (kind === "studio") return tc("工作室+日期", "Studio + date");
       if (q) {

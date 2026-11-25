@@ -183,7 +183,11 @@ def load_state(ctx):
 # snapshot back would roll a switch the page saved meanwhile -- the switch
 # flips in the UI and is gone one tick later. Each writer therefore owns a few
 # top-level keys and re-reads the rest from disk just before writing.
-OWN_SCENES = ("scenes", "content", "daemon", "lastCapture", "durOff", "pipeline")
+# `search` belongs here because the query gate is only useful across process
+# runs: the page searches one scene per request, so a counter that dies with
+# the request never reaches searchPerHour.
+OWN_SCENES = ("scenes", "content", "daemon", "lastCapture", "durOff", "pipeline",
+              "search")
 OWN_CONTROL = ("control",)
 OWN_RULES = ("rules",)
 
@@ -2780,24 +2784,61 @@ def do_done(ctx):
 
 # ─── 搜索 ────────────────────────────────────────────────────────────────
 
+def looks_like_code(code):
+    """Whether a scene's `code` is worth searching for.
+
+    Not every code is one: a scene scraped from a site that only exposes an
+    external id carries values like `japanhdv.com-6097`, and searching those
+    returns unrelated releases. Only the certain non-codes are rejected here --
+    a JAV code can be `n1234` or plain digits, so requiring the `ABC-123` shape
+    would drop real ones.
+    """
+    s = (code or "").strip()
+    if not s or len(s) > 24:
+        return False
+    if re.search(r"[\s.]", s):
+        return False
+    return not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-", s, re.I)
+
+
+def seed_date(value):
+    """`2026-11-04` -> `26 11 04`: the way western release names spell the date."""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", (value or "").strip())
+    if not m:
+        return ""
+    return m.group(1)[2:] + " " + m.group(2) + " " + m.group(3)
+
+
 def search_terms(scene):
     """Queries to try in order, narrowest first, as (kind, text).
 
-    A code is a precise key and always wins. Western (stashdb) scenes carry no
-    code, so the release name is the fallback; performer and studio are the
-    last resort -- public indexers do index those, but matching is then by
-    relevance rather than by identity.
+    A real code is a precise key and wins outright: JAV release names carry it
+    and none of the western terms below appear in them, so a coded scene only
+    gets its title as a fallback.
+
+    Western (stashdb) scenes carry no code and their release names read
+    `StudioName 26 11 04 Performer`, so studio + performer is the narrowest key
+    there, date + performer comes next, and the title last -- it is often not
+    in the filename at all. Both western terms need a Latin performer name;
+    on a Japanese one they only cost a query.
     """
     code = (scene.get("code") or "").strip()
     title = " ".join((scene.get("title") or "").split())
     date = (scene.get("date") or "").strip()
     studio = ((scene.get("studio") or {}).get("name") or "").strip()
-    stack = []
-    for p in (scene.get("performers") or [])[:2]:
-        name = (p.get("name") if isinstance(p, dict) else p) or ""
-        if name.strip():
-            stack.append(name.strip())
-    perf = stack
+    names = []
+    for p in (scene.get("performers") or []):
+        if isinstance(p, dict):
+            name, gender = (p.get("name") or "").strip(), (p.get("gender") or "").upper()
+        else:
+            name, gender = (p or "").strip(), ""
+        if name:
+            names.append((name, gender))
+    # One name, not two: release names list the lead, and indexers AND their
+    # tokens, so a second performer turns a hit into a miss. Female first --
+    # that is who the filenames name, and all-gay scenes fall back to the first.
+    lead = [n for n, g in names if g in ("FEMALE", "TRANSGENDER_FEMALE")]
+    perf = lead[0] if lead else (names[0][0] if names else "")
     terms = []
 
     def add(kind, t):
@@ -2805,16 +2846,23 @@ def search_terms(scene):
         if t and t.lower() not in [x.lower() for _, x in terms]:
             terms.append((kind, t))
 
-    if code:
+    if code and looks_like_code(code):
         add("code", code)
+        if title:
+            add("title", " ".join(title.split()[:8]))
+        return terms
+
+    latin = bool(re.search(r"[A-Za-z]", perf))
+    if latin and studio:
+        add("studio_perf", studio + " " + perf)
+    day = seed_date(date)
+    if latin and day:
+        add("date_perf", day + " " + perf)
     if title:
         add("title", " ".join(title.split()[:8]))
-    if not code:
-        if perf:
-            add("performer", " ".join(perf) + (" " + date if date else ""))
-        if studio:
-            add("studio", studio + (" " + date if date else ""))
-    return terms[:3]
+    if not terms and code:
+        add("code", code)
+    return terms
 
 
 def do_search(ctx):
@@ -2888,7 +2936,7 @@ def search_scene(ctx, st, sid, paced=False):
       findScene(id: $id) {
         id title code date
         studio { name }
-        performers { name }
+        performers { name gender }
       }
     }""", {"id": sid})
     scene = data.get("findScene") or {}

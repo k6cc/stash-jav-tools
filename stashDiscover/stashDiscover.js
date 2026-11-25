@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.9";
+  var PLUGIN_VERSION = "2.8.10";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -1928,8 +1928,37 @@
     });
   }
 
+  // 翻页后回到列表顶部：点的是底部分页条，列表顶部早已滚出视口。
+  // 只在顶部确实在视口外时滚，吸顶栏（--ssd-stick-top 与吸顶工具条）占掉的高度让出去。
+  function scrollListTop(node) {
+    if (!node || !node.isConnected) return;
+    var off = 0;
+    try { off = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ssd-stick-top")) || 0; } catch (_) {}
+    var bars = document.querySelectorAll(".ssd-dp-toolbar, .ssd-tab-pane .filtered-list-toolbar");
+    for (var j = 0; j < bars.length; j++) {
+      var cs = getComputedStyle(bars[j]);
+      if (cs.position !== "sticky" && cs.position !== "fixed") continue;
+      if (node.contains(bars[j])) continue;   // 列表里的吸顶条跟着列表一起走，不算遮挡
+      var br = bars[j].getBoundingClientRect();
+      if (br.height && br.top <= off + 4) off = Math.max(off, br.bottom);
+    }
+    var top = node.getBoundingClientRect().top;
+    if (top >= off) return;                   // 已经在视口里，不动
+    var y = Math.max(0, window.scrollY + top - off - 8);
+    try { window.scrollTo({ top: y, behavior: "auto" }); } catch (_) { window.scrollTo(0, y); }
+  }
+
+  // 翻页请求在骨架态时高度不足，滚不到顶 —— 留着标志等数据回来那次渲染再滚
+  var _pendingListTop = false;
+  function flushListTop() {
+    if (!_pendingListTop || _state.loading) return;
+    _pendingListTop = false;
+    requestAnimationFrame(function () { scrollListTop(document.querySelector(".ssd-tab-pane")); });
+  }
+
   // Change page (fetches more if needed)
   function goToPage(pageNum) {
+    _pendingListTop = true;
     var isSearching = (_state.searchQuery || "").trim().length > 0;
     if (isSearching) {
       // Search mode: only paginate over already-loaded filtered results
@@ -1939,6 +1968,7 @@
       if (pageNum > maxPage) pageNum = maxPage;
       _state.currentPage = pageNum;
       renderTabContent();
+      flushListTop();
       return;
     }
     var maxPage = Math.max(1, Math.ceil(_state.cachedMissing.length / _state.perPage));
@@ -1950,6 +1980,7 @@
     }
     _state.currentPage = pageNum;
     loadAndRender(pageNum * _state.perPage);
+    flushListTop();
   }
 
   // Render the current page from the local cache immediately (when the cache
@@ -1961,10 +1992,11 @@
     var start = (_state.currentPage - 1) * _state.perPage;
     if (known > start) {
       renderTabContent();
+      flushListTop();
       if (_state.allLoaded || known >= needed) return;
       var before = _state.cachedMissing.length;
       ensureMissingLoaded(needed).then(function () {
-        if (_state.cachedMissing.length > before) renderTabContent();
+        if (_state.cachedMissing.length > before) { renderTabContent(); flushListTop(); }
       });
       return;
     }
@@ -1975,6 +2007,7 @@
       _state.loading = false;
       _state.viewState = computeResultViewState();
       renderTabContent();
+      flushListTop();
     });
   }
 
@@ -8258,9 +8291,19 @@
 
   var SEARCH_KIND_LABEL = {
     code: function () { return tc("番号", "code"); },
+    studio: function () { return tc("片商+演员", "studio + performer"); },
     date: function () { return tc("日期+演员", "date + performer"); },
     title: function () { return tc("标题", "title"); },
   };
+
+  // 「片商+演员」：欧美种子名常写成 `[StudioName.com] Jane Doe - ...`，片商去掉
+  // 空格与符号直接拼演员名，比日期+演员更少噪音（同一片商的条目一眼能认）。
+  function queryStudioPerformer(sc) {
+    var studio = String((sc && sc.studio && sc.studio.name) || "").replace(/[^A-Za-z0-9]/g, "");
+    var pf = queryPerformer(sc);
+    if (studio && pf && /[A-Za-z]/.test(pf.name)) return studio + " " + pf.name;
+    return null;
+  }
 
   // 返回 { q, kind }。kind 只用于告诉用户这词是怎么来的（自动判定是确定性的，
   // 用户看不到种子文件名，没法判得比这里更准 → 不给选项，只给可见性）。
@@ -8270,6 +8313,8 @@
     var d = queryDate(sc);
     var pf = queryPerformer(sc);
     if (code && looksLikeCode(code)) return { q: code, kind: "code" };
+    var sp = queryStudioPerformer(sc);
+    if (sp) return { q: sp, kind: "studio" };
     // 名字得是拉丁文才拼日期词：JAV 场景的演员名常是汉字/假名，塞进
     // `26 11 05 北岡果林` 这种词只会白跑一次请求。
     if (d && pf && /[A-Za-z]/.test(pf.name)) return { q: d + " " + pf.name, kind: "date" };
@@ -8277,16 +8322,18 @@
     return code ? { q: code, kind: "code" } : null;
   }
 
-  // 0 结果时的备选词：自动判定撞上「种子还没出」时换一次词再试。
-  // 只备「标题」一种：代码形 code 本来就是首选，非番号 code（TPDB 那种站点 id）
-  // 正是我们要避开的词，两者当备选都没意义。
+  // 备选词：日期+演员、标题。自动判定撞上「种子还没出」时换一次词再试；
+  // 主词搜到结果时也列出来（结果不合意可以直接换，不用手打）。
   // 做成按钮而不自动重试 —— 搜索是同步 op，反代 60s 会切，翻倍请求不可控。
   function searchQueryAlts(sc) {
     var primary = searchQueryFor(sc);
     if (!primary) return [];
+    var alts = [];
+    var d = queryDate(sc), pf = queryPerformer(sc);
+    if (d && pf && /[A-Za-z]/.test(pf.name)) alts.push({ q: d + " " + pf.name, kind: "date" });
     var title = String((sc && sc.title) || "").trim();
-    if (!title || title === primary.q) return [];
-    return [{ q: title, kind: "title" }];
+    if (title) alts.push({ q: title, kind: "title" });
+    return alts.filter(function (a) { return a.q !== primary.q; });
   }
 
   function handleSearchResources(item, btn) {
@@ -8303,6 +8350,7 @@
     var section = document.querySelector("[data-ssd-search]");
     if (!section) return;
 
+    _searchSceneDate = String((sc && (sc.release_date || sc.production_date)) || "").slice(0, 10);
     _searchAlts = searchQueryAlts(sc);
     _searchCands = [pick].concat(_searchAlts);
     _searchBarCtx = { item: item, btn: btn };
@@ -8589,7 +8637,24 @@
     return hit / qTokens.length;
   }
 
+  // Best match 也认场景自身的发行日期，不管这次搜索词是什么：接受
+  // 26.09.28 / 2026-09-28 / 28.09.2026 / 28.09.26，前后各放一天（部分 tracker 差一天）。
+  var _searchSceneDate = "";
+  function sceneDateForms(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m) return [];
+    var base = Date.UTC(+m[1], +m[2] - 1, +m[3]), out = [];
+    [-1, 0, 1].forEach(function (off) {
+      var d = new Date(base + off * 86400000);
+      var y = String(d.getUTCFullYear()), mo = ("0" + (d.getUTCMonth() + 1)).slice(-2), da = ("0" + d.getUTCDate()).slice(-2);
+      out.push(y.slice(2) + " " + mo + " " + da, y + " " + mo + " " + da, da + " " + mo + " " + y, da + " " + mo + " " + y.slice(2));
+    });
+    return out;
+  }
+  var ANY_DATE_RX = /(^| )((19|20)\d{2} [01]\d [0-3]\d|[0-3]\d [01]\d (19|20)\d{2}|\d{2} [01]\d [0-3]\d)( |$)/;
+
   function rankSearchResults(list, query) {
+    var dateForms = sceneDateForms(_searchSceneDate);
     var qNorm = normSearchText(query);
     var qTokens = searchQueryTokens(query);
     // 日期三元组单独看：token 命中不看顺序，`26 04 11 Millie Morgan` 与正确的
@@ -8602,6 +8667,12 @@
       if (qDate && base > 0) {
         var tn = " " + normSearchText(res && res.title) + " ";
         score = tn.indexOf(" " + qDate + " ") !== -1 ? Math.min(1, base + 0.34) : base * 0.85;
+      } else if (dateForms.length && base > 0) {
+        // 词里没有日期，但标题上的日期就是这部片的发行日 → 更像同一部
+        var tn2 = " " + normSearchText(res && res.title) + " ";
+        var hitDate = dateForms.some(function (f) { return tn2.indexOf(" " + f + " ") !== -1; });
+        if (hitDate) score = Math.min(1, base + 0.34);
+        else if (ANY_DATE_RX.test(tn2.trim())) score = base * 0.6;   // 带日期但不是这天
       }
       return { res: res, i: i, score: score };
     });
@@ -8626,9 +8697,10 @@
     return { primary: primary, low: low };
   }
 
-  // 0 结果时给一键换词：自动判定可能恰好撞上「种子还没出」，而换一种形态
-  // （标题 / 日期+演员 / 番号）经常能搜到。只给按钮、不自动重试 —— 搜索是
-  // 同步 op，反代 60s 会切，翻倍请求不可控，而且用户往往想自己看看词。
+  // 一键换词：自动判定可能恰好撞上「种子还没出」，换一种形态（片商+演员 /
+  // 日期+演员 / 标题）经常能搜到。搜到结果时也列出来 —— 结果不合意可以直接换，
+  // 不用手打。只给按钮、不自动重试 —— 搜索是同步 op，反代 60s 会切，翻倍请求
+  // 不可控，而且用户往往想自己看看词。
   // section 是结果盒：调用方传进来，不再读全局 —— 混用容器就是「多行备选」
   // 的源头（用户 2026-11-09）。
   function renderSearchAlts(section) {
@@ -8715,6 +8787,7 @@
       section.appendChild(lowBar);
     }
 
+    renderSearchAlts(section);
     renderSearchPage(section);
   }
 
@@ -9583,6 +9656,8 @@
 
   window.SSD = {
     version: PLUGIN_VERSION,
+    // 翻页后把列表顶部拉回视口（发现页的 render({top:true}) 走同一套吸顶偏移算法）
+    scrollListTop: scrollListTop,
     // GraphQL
     callGQL: callGQL,
     // 插件操作（自动带 lang）。发现页设置要拉 Whisparr 档案列表，复用它

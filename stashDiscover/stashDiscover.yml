@@ -1,6 +1,6 @@
 name: stashDiscover
 description: Finds scenes on your stash-box instances that your library doesn't own yet — a Discover tab on performer and studio pages, plus a Discover page for new releases from the performers and studios you follow. Browse, save, find download sources, and push to qBittorrent, Motrix, or Whisparr.
-version: 2.8.9
+version: 2.8.10
 url: https://discourse.stashapp.cc/t/stash-discover/17710
 errLog: info
 
@@ -41,6 +41,10 @@ settings:
     displayName: "Downloader Password / RPC Secret"
     description: "qBittorrent password, or a qB 5.2+ API key (qbt_...) which ignores the username. Motrix: desktop --rpc-secret or Server 2.4+ Web login key."
     type: STRING
+  downloaderCategory:
+    displayName: "Downloader Category"
+    description: "qBittorrent only. Category for pushed torrents, e.g. movies. Empty = none. The connection test checks it exists."
+    type: STRING
   whisparrUrl:
     displayName: "Whisparr URL"
     description: "Whisparr v3 base URL, e.g. http://127.0.0.1:6969. Leave empty to hide the Whisparr button."
@@ -51,7 +55,7 @@ settings:
     type: STRING
   preferredBox:
     displayName: "Preferred stash-box"
-    description: "Endpoint substring to prefer when several boxes are configured, e.g. javstash.org. Empty = query all."
+    description: "Performer and studio Discover tabs only. Endpoint substring to prefer, e.g. javstash.org. Empty = query all."
     type: STRING
   codeDedupe:
     displayName: "Scene code dedupe"

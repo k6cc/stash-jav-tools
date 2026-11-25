@@ -357,6 +357,8 @@ def do_push_download(stash, magnet="", link="", savepath="", zh=True):
     dl_pass = (cfg.get("downloaderPassword") or "").strip()
     # 密码栏同时承载 qB 5.2+ 的 API 密钥（qbt_ 开头），此时不再用用户名密码
     dl_key = dl_pass if dl_pass.lower().startswith("qbt_") else ""
+    # 推送分类（如 movies）：留空 = 不带 category，行为与旧版一致。Motrix 没有分类概念
+    dl_category = (cfg.get("downloaderCategory") or "").strip()
 
     if not dl_url:
         emit_error(_t(zh, "下载器地址未填写。", "Downloader URL not configured."))
@@ -377,7 +379,7 @@ def do_push_download(stash, magnet="", link="", savepath="", zh=True):
         return
 
     if dl_type in ("qbittorrent", "qb", "qbit"):
-        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, raw, savepath, zh, dl_key)
+        _push_qbittorrent(dl_url, dl_user, dl_pass, magnet, raw, savepath, zh, dl_key, dl_category)
     elif dl_type in ("motrix", "motrix2", "aria2"):
         _push_motrix(dl_url, dl_pass, magnet, raw, zh)
     else:
@@ -478,7 +480,7 @@ def _session_cookie(headers):
 
 
 def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=True,
-                      api_key=""):
+                      api_key="", category=""):
     # qB 5.2+ 的 API 密钥直接以 Bearer 认证，没有登录/登出往返；
     # 填了密钥就不再发用户名密码，两种方式互斥（密钥优先）。
     if api_key:
@@ -512,7 +514,7 @@ def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=Tr
 
     add_url = f"{base_url}/api/v2/torrents/add"
     if raw:
-        body, ctype = _qb_multipart(raw, savepath)
+        body, ctype = _qb_multipart(raw, savepath, category)
         status, text, _ = http_request(
             add_url, method="POST", data=body,
             headers=dict(hdr, **{"Content-Type": ctype}),
@@ -522,6 +524,8 @@ def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=Tr
         form_data = {"urls": magnet}
         if savepath:
             form_data["savepath"] = savepath
+        if category:
+            form_data["category"] = category
         status, text, _ = http_request(
             add_url, method="POST", data=form_data,
             headers=hdr,
@@ -554,13 +558,16 @@ def _push_qbittorrent(base_url, username, password, magnet, raw, savepath, zh=Tr
                       f"qBittorrent add failed (HTTP {status}): {text[:200]}"))
 
 
-def _qb_multipart(raw, savepath):
+def _qb_multipart(raw, savepath, category=""):
     """qB 的 /torrents/add 收 multipart；种子本体比磁力多带 announce 与 private 标志。"""
     boundary = "----stashDiscover" + base64.b16encode(os.urandom(8)).decode()
     parts = []
     if savepath:
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
                      f'name="savepath"\r\n\r\n{savepath}\r\n'.encode("utf-8"))
+    if category:
+        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
+                     f'name="category"\r\n\r\n{category}\r\n'.encode("utf-8"))
     parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
                  f'name="torrents"; filename="sd.torrent"\r\n'
                  f"Content-Type: application/x-bittorrent\r\n\r\n".encode()
@@ -993,9 +1000,35 @@ def _test_downloader(cfg, zh=True):
     item["detail"] = f"{host} · qBittorrent {version}"
     if api_key:
         item["detail"] += _t(zh, "（API 密钥）", " (API key)")
+    hints = []
     if save_path:
-        item["hint"] = _t(zh, f"默认保存路径 {save_path}", f"Default save path {save_path}")
+        hints.append(_t(zh, f"默认保存路径 {save_path}", f"Default save path {save_path}"))
+    category = (cfg.get("downloaderCategory") or "").strip()
+    if category:
+        hints.append(_category_hint(url, hdr, category, zh))
+    item["hint"] = " · ".join(h for h in hints if h)
     return item
+
+
+def _category_hint(url, hdr, category, zh=True):
+    """推送分类自检：读 qB 的分类表，确认设置里填的分类存在（只读，不创建）。
+    分类名写错不会报错 —— qB 会静默新建一个同名分类，下载规则于是不生效。"""
+    status, body, _ = http_request(f"{url}/api/v2/torrents/categories", headers=hdr, timeout=10)
+    if status != 200:
+        return _t(zh, f"读不到分类列表（HTTP {status}）", f"Could not read categories (HTTP {status})")
+    try:
+        cats = json.loads(body) or {}
+    except ValueError:
+        cats = {}
+    if not isinstance(cats, dict):
+        cats = {}
+    if category in cats:
+        path = str((cats.get(category) or {}).get("savePath") or "")
+        suffix = f" → {path}" if path else ""
+        return _t(zh, f"推送分类 {category}{suffix}", f"Push category {category}{suffix}")
+    return _t(zh,
+              f"推送分类「{category}」在 qBittorrent 里不存在，先在那边建好",
+              f"Push category \"{category}\" doesn't exist in qBittorrent yet; create it there first")
 
 
 # ─── Whisparr ──────────────────────────────────────────────────────────────

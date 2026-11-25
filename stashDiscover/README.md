@@ -1,6 +1,6 @@
 # stashDiscover
 
-> v2.8.9：qBittorrent 5.2+ 可在密码栏直接填 API 密钥；连接测试标注认证方式；下载器设置文案与 SceneBackfill 一致。
+> v2.8.10：找资源改按番号 → 片商+演员 → 日期+演员 → 标题的顺序取词，Best match 认场景日期；演员 / 工作室详情页翻页后回到顶部；qB 推送带分类，自检核对分类是否存在。
 
 Stash 插件（`interface: raw` + UI）：从已配置的 stash-box 实例中找出本地库未拥有的场景，浏览、加入库、找资源并推送到下载器。
 
@@ -48,9 +48,10 @@ USER stash
 | Downloader URL | STRING | — | qBittorrent Web UI（`http://host:8080`）；Motrix 桌面版 RPC（`http://host:16800`）或 Server 2.4+ Web（`http://host:8066`）。Docker 里用宿主 IP，不要 localhost |
 | Downloader Username | STRING | — | qBittorrent 登录名；Motrix 留空；密码栏填 API 密钥时留空 |
 | Downloader Password / RPC Secret | STRING | — | qBittorrent 密码，或 qB 5.2+ API 密钥（`qbt_...`，此时不用用户名）；Motrix 桌面版 `--rpc-secret` / Server 2.4+ Web 登录密钥 |
+| Downloader Category | STRING | — | 只对 qBittorrent 生效：推送时使用的分类（如 `movies`），留空 = 不带分类；设置页「测试」会确认该分类存在 |
 | Whisparr URL | STRING | — | Whisparr v3 地址，如 `http://127.0.0.1:6969`，留空 = 不使用 Whisparr |
 | Whisparr API Key | STRING | — | Whisparr → 设置 → 通用 → API Key |
-| Preferred stash-box | STRING | — | 优先查询的 box 端点子串，留空 = 查询全部已配置实例 |
+| Preferred stash-box | STRING | — | 演员与工作室详情页的查询源；端点子串，留空 = 查询全部已配置实例 |
 | Scene code dedupe | BOOLEAN | OFF | 关闭时只认 stash-box 场景 ID；打开后同番号也算同一条场景（欧美站的 code 多为站内编号或哈希，别开）。改后刷新页面 |
 | Discover page | BOOLEAN | ON | 发现页总闸：关闭后整页与关注新作提醒一并停用；演员 / 工作室 tab 不受影响 |
 

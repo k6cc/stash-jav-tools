@@ -192,18 +192,36 @@ def _post_json(url, payload, headers=None, timeout=15):
     return http_request(url, method="POST", data=body, headers=h, timeout=timeout)
 
 
+def _xml_local(tag):
+    return tag.rsplit("}", 1)[-1].lower() if isinstance(tag, str) else ""
+
+
 def _parse_torznab(xml_text):
+    """Return (items, error). Newznab answers a failed search with
+    <error code="…" description="…"/> and no items at all, so a broken indexer
+    (bad key, rate limit, tracker down) otherwise looks like "nothing found"."""
     results = []
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
         log_warn(f"Torznab XML parse error: {e}")
-        return results
+        return results, None
 
     ns = {"torznab": "http://torznab.com/schemas/2015/feed"}
     channel = root.find("channel")
+    # Newznab puts <error> at the top level (the whole document is the error);
+    # a few feeds nest it in <channel>, so check both. find() only looks at
+    # children, hence the tag test for the top-level form.
+    err = root if _xml_local(root.tag) == "error" else root.find("error")
+    if err is None and channel is not None:
+        err = channel.find("error")
+    if err is not None:
+        desc = (err.get("description") or err.text or "").strip()
+        code = (err.get("code") or "").strip()
+        log_warn(f"Torznab returned error {code}: {desc}")
+        return results, {"code": code, "description": desc}
     if channel is None:
-        return results
+        return results, None
 
     for item in channel.findall("item"):
         title = (item.findtext("title") or "").strip()
@@ -270,7 +288,7 @@ def _parse_torznab(xml_text):
     # Magnet-bearing results first, then by seeders — magnet-less proxy links
     # crowd the top when sorted by seeders alone
     results.sort(key=lambda r: (bool(r["magnet"]), r["seeders"]), reverse=True)
-    return results
+    return results, None
 
 
 def _human_size(n):
@@ -335,7 +353,16 @@ def do_search(stash, query, zh=True):
                       f"Jackett request failed (HTTP {status}): {body[:200]}"))
         return
 
-    results = _parse_torznab(body)
+    results, jerr = _parse_torznab(body)
+    if jerr:
+        # code 保留：索引器的错误码定义各家不一样，用户查 Jackett 日志要靠它
+        code = jerr.get("code") or ""
+        desc = jerr.get("description") or ""
+        head = _t(zh, "Jackett 返回错误", "Jackett returned an error")
+        tail = f"（{code}）" if code and zh else (f" ({code})" if code else "")
+        detail = f"：{desc}" if desc and zh else (f": {desc}" if desc else "")
+        emit_error(f"{head}{tail}{detail}" if detail else f"{head}{tail}")
+        return
     # count 必须与真正下发的条数分开：以前 count 报总数、payload 却截到 50，
     # 前端抬头显示 230 条而列表只有 50（论坛反馈「230 results 只显示几条」）
     total = len(results)
@@ -826,6 +853,17 @@ def _test_jackett(cfg, zh=True):
         title = ""
         try:
             root = ET.fromstring(body)
+            # 有的反代 / 版本会以 200 回 <error>，光看状态码会报「可达」
+            xerr = root if _xml_local(root.tag) == "error" else root.find("error")
+            if xerr is not None:
+                code = (xerr.get("code") or "").strip()
+                desc = (xerr.get("description") or xerr.text or "").strip()
+                item["ok"] = False
+                item["detail"] = _t(zh, "Jackett 返回错误" + (f"（{code}）" if code else ""),
+                                    "Jackett returned an error" + (f" ({code})" if code else ""))
+                if desc:
+                    item["hint"] = desc
+                return item
             srv = root.find("server")
             if srv is not None:
                 title = srv.get("title") or ""

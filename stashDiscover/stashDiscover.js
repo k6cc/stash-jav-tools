@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.10";
+  var PLUGIN_VERSION = "2.8.11";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -1143,6 +1143,7 @@
     boxSkipped: {},            // endpoint -> 被源删掉/合并、无法解析整数 id 的条目数
     boxByName: {},             // endpoint -> true when the ID failed and we matched by name
     droppedByWindow: 0,        // scenes dropped by the recent/preview window this round
+    droppedByMeta: 0,          // scenes with no source ID judged already in the library by title
     windowRelaxed: false,      // "unlimited time range (this session)"
     preferredFallback: false,  // preferred box had no ID → queried the others instead
     preferredBoxLabel: "",     // brand/raw name of the preferred box (notice text)
@@ -1169,6 +1170,8 @@
     currentPage: 1,
     sortDir: "DESC",           // DESC | ASC (pushed to box query as direction)
     sortField: "DATE",         // DATE | TITLE | DURATION | PERFORMERS（演员数，源端无对应枚举 → 按 DATE 取回后本地排）
+                               // | POPULARITY（stash-box 上匹配过该场景的用户数，源端排序，本地没有这个字段）
+    popUnsupported: {},        // endpoint -> true：该源不认 POPULARITY（stash-box 0.9 之前），菜单里不再出现热度
     zoom: 1,                   // card size 0-3 (native SceneCardGrid zoomWidths)
     displayMode: "grid",       // grid | list — seeded from localStorage below
     refocusSearch: false,      // restore search-input focus after re-render
@@ -1265,7 +1268,7 @@
     ).then(function (data) { return data.findStudio; });
   }
 
-  // 按过滤条件收集本地场景键（endpoint:stash_id + code），演员/工作室共用：
+  // 按过滤条件收集本地场景键（endpoint:stash_id + code + 标题），演员/工作室共用：
   // 演员传 {performers:{value:[id],...}}，工作室传 {studios:{value:[id],...}}
   function loadLocalSceneKeys(sceneFilter) {
     var keys = {};
@@ -1273,7 +1276,7 @@
 
     function fetchPage() {
       return callGQL(
-        "query($f:FindFilterType!,$sf:SceneFilterType!){findScenes(filter:$f,scene_filter:$sf){count scenes{id code stash_ids{endpoint stash_id}}}}",
+        "query($f:FindFilterType!,$sf:SceneFilterType!){findScenes(filter:$f,scene_filter:$sf){count scenes{id code title files{duration} stash_ids{endpoint stash_id}}}}",
         {
           f: { page: page, per_page: perPage },
           sf: sceneFilter
@@ -1290,6 +1293,15 @@
             // 番号键始终建好，由 isSceneOwned 按 codeDedupe 决定用不用
             // （开关随时切，索引不必作废）
             keys["code:" + String(s.code).trim().toLowerCase()] = true;
+          }
+          var dur = 0;
+          (s.files || []).forEach(function (f) {
+            if (!dur && f && Number(f.duration) > 0) dur = Number(f.duration);
+          });
+          if (s.title) {
+            var tk = "t:" + normTitle(s.title);
+            // 0 = 本地这条没有文件，时长未知（判定时退化成只比标题）
+            (keys[tk] || (keys[tk] = [])).push(dur);
           }
         });
         if (page * perPage < result.count) {
@@ -1327,9 +1339,16 @@
   // 源端的排序字段。「演员数」在 SceneQueryInput.SortEnum 里没有对应项（只有
   // DATE/TITLE/DURATION/CREATED_AT/…），所以按 DATE 把窗口内全集取回后本地重排：
   // 窗口已推到源端，一页通常就是全集。也因此它和 DATE 一样能按日期判「翻出窗口了」。
+  // 「热度」反过来：本地手上没有这个数，只能让源端排（POPULARITY 原样下发）。
   function serverSortField() {
     var f = _state.sortField || "DATE";
     return f === "PERFORMERS" ? "DATE" : f;
+  }
+
+  // 源不认 POPULARITY（stash-box 0.9 之前）：GraphQL 校验错误里会带这个字段名。
+  // 只认这一种；HTTP 400/422 不带字段名时分不清是热度还是别的参数错，不猜。
+  function isNoPopularityError(e) {
+    return !!e && e.ssdKind === "graphql" && /POPULARITY/.test(String(e.message || ""));
   }
 
   // Fetch ONE page from a stash-box (lazy loading — never pulls all 1000+ scenes).
@@ -1400,6 +1419,8 @@
   // Re-sort the local cache by the current sort field + direction
   function sortCachedMissing() {
     var field = _state.sortField || "DATE";
+    // 热度只有源端有，重排会把源给的顺序打乱成日期序 —— 保持原样
+    if (field === "POPULARITY") return;
     var sign = _state.sortDir === "ASC" ? 1 : -1;
     function key(it) {
       var sc = it.scene || {};
@@ -1514,6 +1535,8 @@
       }).catch(function (e) {
         var kind = (e && e.ssdKind) || "unknown";
         console.warn("[SSD] Box page failed for", b.name, kind, (e && e.message) || "");
+        // 这个源不认热度排序：记下来，去掉已取到的页后整表按日期重来
+        if (isNoPopularityError(e)) _state.popUnsupported[b.endpoint] = true;
         // Record the failure for the state panel instead of silently showing
         // an empty tab ("looks frozen" if the performer has no linked DB)
         _state.boxFailed[b.endpoint] = true;
@@ -1521,6 +1544,18 @@
         return [];
       });
     })).then(function (pageResults) {
+      // 有源不认热度：已取到的这几页是热度序，混进日期序没法用，整表作废重来。
+      // 先把 loadingPage 放掉，否则递归进去会卡在「等这一轮结束」。
+      if (_state.sortField === "POPULARITY" && _state.queryBoxes.some(function (b) {
+        return _state.popUnsupported[b.endpoint];
+      })) {
+        _state.loadingPage = false;
+        _state.sortField = "DATE";
+        resetBoxCache();
+        SSD.toast(tc("这个源不支持按热度排序，已改回按日期",
+                     "This source can't sort by popularity; back to date"));
+        return ensureMissingLoaded(needed);
+      }
       var newItems = [];
       pageResults.forEach(function (list) { newItems = newItems.concat(list); });
 
@@ -1530,8 +1565,13 @@
       var recentCut = recentCutoffDate(_state.recentDays);
       var previewCut = previewCutoffDate(_state.previewDays);
       var droppedNow = 0;
+      var metaNow = 0;
       var filtered = newItems.filter(function (item) {
-        if (isSceneOwned(item)) return false;
+        var m = localMatch(item);
+        if (m !== MATCH_NONE) {
+          if (m === MATCH_META) metaNow++;
+          return false;
+        }
         var rd = item.scene.release_date;
         if (!rd) return true;
         if (recentCut && rd < recentCut) { droppedNow++; return false; }
@@ -1539,6 +1579,7 @@
         return true;
       });
       _state.droppedByWindow += droppedNow;
+      _state.droppedByMeta += metaNow;
 
       // Dedup by code (merge with existing cache)
       var seenCodes = {};
@@ -1629,18 +1670,49 @@
     });
   }
 
-  function isSceneOwned(item, keys) {
-    var sc = item.scene;
+  // ── 「在库中」判定 ──────────────────────────────────────────────────────
+  // 编号（stash_ids / 番号）对不上但片子其实已经在库里的情况：本地那份是从别处
+  // 抓的，没写过源端 id。按标题认，标题一致再拿时长核一下（防同系列不同集）。
+  // 只在演员/工作室详情页的 tab 里做：那里的本地场景本来就按演员/工作室过滤过，
+  // 查询顺手多带 title/duration，不是全库扫描。发现页不做（那边的「在库中」
+  // 是演员级的编号判断，场景层面本来就不判）。
+  // 60s 是同一部片不同 release 的片头/片尾差异；本地没有文件（取不到时长）
+  // 或源没给时长时，只认标题全等。
+  var TITLE_DUR_TOL = 60;
+
+  function normTitle(t) {
+    return String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  }
+
+  function titleInLibrary(sc, keys) {
+    if (!sc || !sc.title) return false;
+    var durs = (keys || _state.localSceneKeys)["t:" + normTitle(sc.title)];
+    if (!durs || !durs.length) return false;
+    var d = Number(sc.duration) || 0;
+    var known = durs.filter(function (x) { return x > 0; });
+    if (!d || !known.length) return true;
+    return known.some(function (ld) { return Math.abs(ld - d) <= TITLE_DUR_TOL; });
+  }
+
+  var MATCH_NONE = 0, MATCH_ID = 1, MATCH_CODE = 2, MATCH_META = 3;
+
+  // 命中来源要分开记：只有 MATCH_META 是「编号对不上、靠标题认出来的」，
+  // 那部分数量进提示（其余本来就不显示）。
+  function localMatch(item, keys) {
+    var sc = item.scene || {};
     var owned = keys || _state.localSceneKeys;
-    var epKey = item.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase();
-    if (owned[epKey]) return true;
+    if (owned[item.endpoint.toLowerCase() + ":" + String(sc.id).toLowerCase()]) return MATCH_ID;
     // 番号键只在 codeDedupe 打开时参与比较；索引里始终留着 code 键，
     // 这样切换开关不必重建缓存（见 loadLocalSceneKeys）
-    if (sc.code && codeDedupeOn()) {
-      var codeKey = "code:" + String(sc.code).trim().toLowerCase();
-      if (owned[codeKey]) return true;
+    if (sc.code && codeDedupeOn() && owned["code:" + String(sc.code).trim().toLowerCase()]) {
+      return MATCH_CODE;
     }
-    return false;
+    if (titleInLibrary(sc, owned)) return MATCH_META;
+    return MATCH_NONE;
+  }
+
+  function isSceneOwned(item, keys) {
+    return localMatch(item, keys) !== MATCH_NONE;
   }
 
   // ─── 发现 tab 的会话内快照（10 分钟）──────────────────────────────────────
@@ -1748,24 +1820,10 @@
     _state.loadError = "";
     _state.errorKind = "";
     _state.currentPage = 1;
-    _state.cachedMissing = [];
-    _state.boxCursors = {};
-    _state.boxExhausted = {};
-    _state.boxLastSig = {};
-    _state.boxFailed = {};
-    _state.boxStatus = {};
-    _state.boxFetched = {};
-    _state.boxTruncated = {};
-    _state.boxSkipped = {};
-    _state.boxByName = {};
-    _state.boxPageSize = 100;
-    _state.boxFetchedTotal = 0;
-    _state.boxTotalCount = 0;
-    _state.droppedByWindow = 0;
+    resetBoxCache();
     _state.preferredFallback = false;
     _state.preferredBoxLabel = "";
     _state.showIgnored = false;
-    _state.allLoaded = false;
     _state.loadingPage = false;
     _tabSel.on = false;
     _tabSel.keys = {};
@@ -2018,21 +2076,9 @@
     loadAndRender(newPerPage);
   }
 
-  // Change sort field and/or direction.
-  // 窗口已经推给源端，源回的就是「窗口内全集」：allLoaded 时本地就有完整数据，
-  // 换个排序直接重排即可，不必回源。没取完才重查，两个方向的页游标不通用。
-  function applySort(field, dir) {
-    if (field === _state.sortField && dir === _state.sortDir) return;
-    _state.sortField = field;
-    _state.sortDir = dir;
-    sortCachedMissing();
-    _state.currentPage = 1;
-
-    if (_state.allLoaded) {
-      renderTabContent();
-      return;
-    }
-
+  // 换排序 / 回落时清掉已取到的页：页游标与「已到底」的判定都跟着排序走，
+  // 两个排序的同一页码不是同一批东西。
+  function resetBoxCache() {
     _state.cachedMissing = [];
     _state.boxCursors = {};
     _state.boxExhausted = {};
@@ -2047,7 +2093,27 @@
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
     _state.droppedByWindow = 0;
+    _state.droppedByMeta = 0;
     _state.allLoaded = false;
+  }
+
+  // Change sort field and/or direction.
+  // 窗口已经推给源端，源回的就是「窗口内全集」：allLoaded 时本地就有完整数据，
+  // 换个排序直接重排即可，不必回源。没取完才重查，两个方向的页游标不通用。
+  function applySort(field, dir) {
+    if (field === _state.sortField && dir === _state.sortDir) return;
+    _state.sortField = field;
+    _state.sortDir = dir;
+    sortCachedMissing();
+    _state.currentPage = 1;
+
+    // 热度只能由源端排：allLoaded 只说明本地拿全了，不代表本地有这个数
+    if (_state.allLoaded && field !== "POPULARITY") {
+      renderTabContent();
+      return;
+    }
+
+    resetBoxCache();
     _state.loading = true;
     _state.viewState = "loading";
     renderTabContent();
@@ -2607,6 +2673,9 @@
       if (_state.droppedByWindow > 0) {
         return tc("当前时间窗口内没有剩余场景", "Nothing left inside the time window");
       }
+      if (_state.droppedByMeta > 0) {
+        return tc("剩下的场景都已在库中", "The rest are already in your library");
+      }
       return tc("源上没有待发现的场景", "Nothing left to discover on the source");
     }
     // 搜索还在生效时，抬头说「都被忽略」不准确 —— 挡住结果的是搜索，不是忽略
@@ -2788,12 +2857,18 @@
 
     } else if (vs === "empty") {
       var dropped = _state.droppedByWindow;
+      var byMeta = _state.droppedByMeta;
       var failedN = failedSources();
       var lines = [];
       if (dropped > 0) {
         lines.push(tc(dropped + " 个场景被时间窗口过滤掉了。",
           dropped + " scene(s) were filtered out by the time window."));
-      } else {
+      }
+      if (byMeta > 0) {
+        lines.push(tc(byMeta + " 个场景没有源编号，按标题判断已在库中。",
+          byMeta + " scene(s) have no source ID but look already in your library by title."));
+      }
+      if (!dropped && !byMeta) {
         lines.push(tc("该演员在源上的场景都已在本库中。",
           "Every scene this performer has on the sources is already in your library."));
       }
@@ -4293,12 +4368,20 @@
     toolbar.appendChild(searchGroup);
 
     // Sort — field dropdown + caret button flips direction
+    // 热度 = stash-box 上匹配过该场景的用户数（全时段）。TPDB 没有这项数据；不认这个
+    // 枚举的老源也不列 —— 点了只会失败一次再回落。
+    var popOk = (_state.queryBoxes || []).some(function (b) {
+      return !isTPDBBox(b) && !_state.popUnsupported[b.endpoint];
+    });
     var SORT_FIELDS = [
       ["DATE", tc("日期", "Date")],
       ["TITLE", tc("标题", "Title")],
       ["DURATION", tc("时长", "Duration")],
       ["PERFORMERS", tc("演员数", "Performers")],
     ];
+    if (popOk || _state.sortField === "POPULARITY") {
+      SORT_FIELDS.push(["POPULARITY", tc("热度", "Popularity")]);
+    }
     var curField = _state.sortField || "DATE";
     var curLabel = SORT_FIELDS[0][1];
     SORT_FIELDS.forEach(function (f) { if (f[0] === curField) curLabel = f[1]; });
@@ -4352,6 +4435,10 @@
       item.className = "dropdown-item" + (f[0] === curField ? " active" : "");
       item.setAttribute("role", "button");
       item.textContent = f[1];
+      if (f[0] === "POPULARITY") {
+        item.title = tc("按 stash-box 上匹配过该场景的用户数排序",
+                       "By how many users matched the scene on the stash-box");
+      }
       item.onclick = function () {
         sortGroup.classList.remove("show");
         sortMenu.classList.remove("show");
@@ -9004,6 +9091,7 @@
     _state.boxFailed = {};
     _state.boxFetched = {};
     _state.droppedByWindow = 0;
+    _state.droppedByMeta = 0;
     _state.windowRelaxed = false;
     _state.preferredFallback = false;
     _state.preferredBoxLabel = "";

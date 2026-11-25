@@ -65,6 +65,7 @@
 
 /* 语义色工具类：设好 --c/--cr，组件只管取 */
 .is-h-tx3 { --c: var(--sb-tx3); --cr: 127, 127, 127; }
+.is-h-tx2 { --c: var(--sb-tx2); --cr: 150, 150, 150; }
 .is-h-re { --c: var(--sb-re); --cr: var(--sb-re-rgb); }
 .is-h-or { --c: var(--sb-or); --cr: var(--sb-or-rgb); }
 .is-h-ye { --c: var(--sb-ye); --cr: var(--sb-ye-rgb); }
@@ -132,18 +133,27 @@
 .sb-count {
   font-size: 10.5px; font-weight: 700; line-height: 1;
   padding: 3px 5px; border-radius: 5px;
-  background: var(--sb-sink); color: var(--sb-tx2);
+  /* 未选中态：非常淡的一层灰底 + 细边，只保证看得见，不跟 tab 抢颜色 */
+  background: rgba(127, 127, 127, .18);
+  border: 1px solid rgba(127, 127, 127, .26);
+  color: var(--sb-tx2);
   font-variant-numeric: tabular-nums;
 }
-.sb-tab.is-on .sb-count { background: rgba(0, 0, 0, .22); color: var(--sb-hi); }
+.sb-tab.is-on .sb-count {
+  background: rgba(0, 0, 0, .22); color: var(--sb-hi);
+  border-color: transparent;
+}
 .sb-count.is-hot { color: var(--sb-ye); }
 /* 未选中的数字跟着本组颜色走，选中时统一为高亮白 */
 .sb-tab .sb-count { color: var(--c, var(--sb-tx2)); }
-/* 已完成只显示增量：用绿色小胶囊，和总数区分开 */
+/* 已完成只显示增量：数字绿色，底还是那层淡灰 */
 .sb-count.is-new {
-  color: var(--sb-gr); background: rgba(var(--sb-gr-rgb), .15);
+  color: var(--sb-gr); background: rgba(127, 127, 127, .18);
+  border-color: rgba(127, 127, 127, .26);
 }
 .sb-tab.is-on .sb-count.is-new { color: var(--sb-gr); background: rgba(0, 0, 0, .22); }
+/* 搁置的增量不抢眼：跟 tab 一样走灰 */
+.sb-count.is-plain { color: var(--sb-tx2); }
 
 /* ── 统计卡（同时是筛选器）─────────────────────────────── */
 .sb-stats {
@@ -394,9 +404,13 @@
 /* 封面上的状态徽章：左上角一枚，与番号同一行 */
 .sb-shot .sb-pill {
   position: absolute; left: 4px; top: 4px;
-  padding: 3px 7px; font-size: 10.5px;
-  background: rgba(0, 0, 0, .62);
+  padding: 3px 7px; font-size: 10.5px; font-weight: 600;
+  background: rgba(0, 0, 0, .5);
+  border-color: rgba(255, 255, 255, .22);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .8);
 }
+/* 灰档（待搜索 / 搁置）：灰字、不加粗，亮度跟卡片标题一致；图标跟着文字走 */
+.sb-shot .sb-pill.is-h-tx2, .sb-shot .sb-pill.is-h-tx3 { color: var(--sb-tx); font-weight: 400; }
 .sb-shot .sb-pill .sb-ico { width: 11px; height: 11px; }
 .sb-shot-prog {
   position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
@@ -464,6 +478,9 @@
   margin-top: 5px;
 }
 .sb-score .sb-pill { font-size: 10.5px; padding: 3px 7px; }
+/* 判定计数：四枚同排，字号与内边距各压一档，390 宽也放得下 */
+.sb-score .sb-badge { font-size: 10.5px; padding: 0 6px; }
+.sb-score--row { margin-top: 0; }
 .sb-score .sb-meta { margin-top: 0; }
 /* 最佳候选：一块带左竖条的浅底。不再挂「最佳」字样——绿块本身就是标记，
    窄屏的标题本来就只有一行可读，不能被标签挤掉。 */
@@ -525,6 +542,12 @@
   font-size: 11px; color: var(--sb-tx3); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 搁置行：历史图标 + 完整标题（单行，超长省略） */
+.sb-row-release--ico { display: flex; align-items: center; gap: 5px; }
+.sb-row-release--ico .sb-ico { width: 12px; height: 12px; flex: 0 0 auto; }
+.sb-row-release--ico .sb-row-release-t {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .sb-row-state { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .sb-row-state .sb-meta { margin: 0; }
 .sb-row-badges { display: flex; align-items: center; gap: 5px; overflow: hidden; min-width: 0; }
@@ -550,6 +573,7 @@
 .sb-badge {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; line-height: 18px; padding: 0 7px;
+  min-height: 19px;  /* 文字改成 line-height:1 之后要撑回原来的高度 */
   border-radius: 6px; white-space: nowrap;
   border: 1px solid rgba(var(--cr, 127, 127, 127), .35);
   background: rgba(var(--cr, 127, 127, 127), .12);
@@ -557,6 +581,28 @@
 }
 .sb-badge.is-mute { border-color: var(--sb-line); background: var(--sb-sink); color: var(--sb-tx2); }
 .sb-badge .sb-ico { width: 11px; height: 11px; }
+/* 数字/文字压在徽章里时,字体自身的墨迹中心比行盒低约半个像素：上移一点才和图标齐 */
+.sb-badge .sb-badge-t { display: inline-block; line-height: 1; transform: translateY(-.5px); }
+/* 分辨率是挑片的主要依据：比其他徽章再重一档，不做成最暗的那枚 */
+.sb-badge--res { font-weight: 600; }
+/* 搁置卡：删掉的是哪个种子 —— 历史图标 + 完整标题，最多两行后省略 */
+.sb-hist {
+  display: flex; align-items: flex-start; gap: 5px;
+  margin-top: 4px; color: var(--sb-tx2);
+}
+.sb-hist .sb-ico { width: 12px; height: 12px; flex: 0 0 auto; margin-top: 2px; }
+.sb-hist .sb-hist-t {
+  font-size: 11px; line-height: 1.4;
+  flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+/* 锁：不带框、不带字，只在桌面端靠 title 说明 */
+.sb-lock {
+  display: inline-flex; align-items: center;
+  color: var(--sb-ye); cursor: default; flex-shrink: 0;
+}
+.sb-lock .sb-ico { width: 13px; height: 13px; }
 
 /* 理由 chip：ok=支持 / no=缺失（红字）/ na=中性 */
 .sb-rc {
@@ -1227,14 +1273,14 @@ select.sb-input option {
   .sb-tools-mob .sb-listbar-btns { margin: 0; justify-content: center; }
   .sb-autobar .sb-auto-flags,
   .sb-listbar .sb-listbar-btns { display: none; }
+  /* 搁置页破例：唯一的主操作留在列表条右侧，不塞进「更多」 */
+  .sb-listbar--keep .sb-listbar-btns { display: flex; }
   /* 状态那句占满剩余宽度，按钮靠右 */
   .sb-autobar .sb-meta { margin-left: 0; margin-right: auto; }
   /* 下载中的状态条与自动化条统一高度 */
   .sb-autobar, .sb-listbar { min-height: 38px; }
   /* 只剩一句话的那条：铺满一行，从左读起 */
   .sb-listbar { align-self: stretch; justify-content: flex-start; }
-  /* 卡片上的「淘汰 N」会把状态那行挤到换行，窄屏直接省掉 */
-  .sb-rej { display: none; }
   /* 自检 pill 收成 26px 方块，只留一枚 √ */
   .sb-pill--mini.is-icon-only { width: 26px; padding: 0; gap: 0; }
   .sb-pill--mini.is-icon-only .sb-pill-txt { display: none; }
@@ -1274,4 +1320,10 @@ select.sb-input option {
   .sb-tab { padding: 6px 9px; font-size: 12px; }
   .sb-brand { flex: 1 1 auto; }
   .sb-head-right { flex: 0 0 auto; }
+}
+/* 窄机（≤420）：四枚判定徽章仍要排成一行，再收一档 */
+@media (max-width: 420px) {
+  .sb-score { gap: 3px; }
+  .sb-score .sb-badge { font-size: 10.5px; padding: 0 4px; }
+  .sb-score .sb-badge .sb-ico { width: 10px; height: 10px; }
 }

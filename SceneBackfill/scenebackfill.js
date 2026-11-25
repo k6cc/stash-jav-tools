@@ -16,7 +16,7 @@
   window.__sbLoaded = true;
 
   var PLUGIN_ID = "SceneBackfill";
-  var PLUGIN_VERSION = "1.0.3";
+  var PLUGIN_VERSION = "1.1.0";
   var Api = window.PluginApi;
 
   // The nav entry and the page logo are the same magnet. Resolved lazily so a
@@ -171,6 +171,7 @@
   var UI_EVT = "sb:ui-pref";
   var NAV_BADGE_KEY = "sb.navBadge";
   var DONE_SEEN_KEY = "sb.doneSeen";
+  var PARK_SEEN_KEY = "sb.parkSeen";
   function prefOn(key, def) {
     try {
       var v = window.localStorage.getItem(key);
@@ -203,24 +204,28 @@
     try { window.dispatchEvent(new CustomEvent(NAV.badgeEvt)); } catch (e) { /* 同上 */ }
   }
 
-  // 已完成增量：上次看过「已完成」之后又入库了几条。第一次读取时把当前数量
-  // 记为基线，升级上来的老用户不会一次看到一大串「+N」。
-  function doneSeen() {
+  // 增量计数（已完成 / 搁置共用）：上次看过这个 tab 之后又多了几条。
+  // 第一次读取时把当前数量记为基线，升级上来的老用户不会一次看到一大串「+N」。
+  function seenOf(key) {
     try {
-      var v = window.localStorage.getItem(DONE_SEEN_KEY);
+      var v = window.localStorage.getItem(key);
       return v === null ? null : Math.max(0, Number(v) || 0);
     } catch (e) { return null; }
   }
-  function markDoneSeen(n) {
+  function markSeen(key, n) {
     var v = Math.max(0, Number(n) || 0);
-    try { window.localStorage.setItem(DONE_SEEN_KEY, String(v)); } catch (e) { /* 隐私模式 */ }
+    try { window.localStorage.setItem(key, String(v)); } catch (e) { /* 隐私模式 */ }
     try { window.dispatchEvent(new CustomEvent(NAV.badgeEvt)); } catch (e) { /* 同上 */ }
   }
-  function doneInc(n) {
-    var seen = doneSeen();
-    if (seen === null) { markDoneSeen(n); return 0; }
+  function incSince(key, n) {
+    var seen = seenOf(key);
+    if (seen === null) { markSeen(key, n); return 0; }
     return Math.max(0, (Number(n) || 0) - seen);
   }
+  function doneInc(n) { return incSince(DONE_SEEN_KEY, n); }
+  function parkInc(n) { return incSince(PARK_SEEN_KEY, n); }
+  function markDoneSeen(n) { markSeen(DONE_SEEN_KEY, n); }
+  function markParkSeen(n) { markSeen(PARK_SEEN_KEY, n); }
 
   // 导航角标：先看有结果，再看下载中，再看已完成增量，最后是待处理。
   // 数字对应的底色由调用方按 tone 上色（gr/cy/bl/ye）。
@@ -329,10 +334,14 @@
     alert: '<path d="M8 2.8 14 13H2z"/><path d="M8 6.6v3.1M8 11.5v.1"/>',
     x: '<path d="M4 4l8 8M12 4l-8 8"/>',
     ban: '<circle cx="8" cy="8" r="5.4"/><path d="M4.4 11.6 11.6 4.4"/>',
+    // 锁：手动移除过下载、恢复后也不会被自动推送
+    lock: '<rect x="3.4" y="6.9" width="9.2" height="6.2" rx="1.4"/><path d="M5.5 6.9V5.1a2.5 2.5 0 0 1 5 0v1.8"/>',
     pause: '<path d="M5.8 3.6v8.8M10.2 3.6v8.8"/>',
     play: '<path d="M5.4 3.4 12.4 8l-7 4.6z"/>',
     trash: '<path d="M3.2 4.6h9.6M6.3 4.6V3.1h3.4v1.5M4.8 4.6l.6 8.4h5.2l.6-8.4"/>',
     refresh: '<path d="M13.2 8a5.2 5.2 0 1 1-1.7-3.9M13.4 2.6v3h-3"/>',
+    // 历史记录：一圈回拨 + 表针，用在「这条搁置是删掉哪个种子来的」
+    history: '<path d="M3.2 8a4.9 4.9 0 1 0 1.5-3.5"/><path d="M3.4 2.6v2.4h2.4"/><path d="M8 5.6V8l2 1.3"/>',
     grid: '<rect x="2.6" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="2.6" width="4.6" height="4.6" rx="1"/><rect x="2.6" y="8.8" width="4.6" height="4.6" rx="1"/><rect x="8.8" y="8.8" width="4.6" height="4.6" rx="1"/>',
     list: '<circle cx="3.4" cy="4.4" r=".9" fill="currentColor" stroke="none"/><circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="3.4" cy="11.6" r=".9" fill="currentColor" stroke="none"/><path d="M6.2 4.4h7.2M6.2 8h7.2M6.2 11.6h7.2"/>',
     // 三个点：这枚按钮后面是「更多工具」，不再只是筛选
@@ -396,7 +405,7 @@
     importing: { hue: "cy", icon: "refresh", zh: "入库中", en: "Importing" },
     imported: { hue: "gr", icon: "check", zh: "已入库", en: "In library" },
     missing: { hue: "re", icon: "x", zh: "任务丢失", en: "Lost" },
-    ignored: { hue: "tx3", icon: "ban", zh: "已忽略", en: "Ignored" },
+    ignored: { hue: "tx3", icon: "ban", zh: "搁置", en: "Parked" },
   };
   function metaOf(st) { return SMETA[st] || SMETA.captured; }
   function statusLabel(s) { var m = metaOf(s); return isZh() ? m.zh : m.en; }
@@ -425,6 +434,8 @@
     });
     var tab = tabState[0];
     function switchTab(id) {
+      // 进「搁置」就把增量基线推平：+N 在点开的这一下消失，不用等下一次重画
+      if (id === "ignored" && ignored) markParkSeen(ignored.length);
       tabState[1](id);
       // 「待入库」只是下载页里的一个筛选，换 tab 就该失效
       filterState[1]("");
@@ -523,7 +534,10 @@
         (opener || openDetail)(sid);
       };
     }
-    var foldState = useState({});
+    var foldState = useState(function () {
+      // 搁置页：两个组都默认展开
+      return {};
+    });
     var fold = foldState[0], setFold = foldState[1];
     // 详情弹窗里「已淘汰」是废条目，默认收起；换一个场景重新折回去
     var rejFoldState = useState(true);
@@ -640,7 +654,9 @@
     }
 
     useEffect(function () { reload(); }, []);
-    useEffect(function () { if (tab === "settings" && !draft) loadRules(); }, [tab, draft]);
+    // 规则要在页面一打开就取回来：有结果页的分辨率徽章按规则里勾选的档位判定，
+    // 等进设置页才加载的话，首屏徽章会先渲染成灰色，来回切一次才变绿。
+    useEffect(function () { if (!draft) loadRules(); }, [draft, loadRules]);
 
     useEffect(function () {
       if (busy !== "bulk:import") { setIjob(null); return undefined; }
@@ -764,7 +780,7 @@
 
     function doIgnore(sid, restore) {
       act({ mode: "ignore", sceneId: sid, restore: restore ? "true" : "" },
-        restore ? tc("已恢复", "Restored") : tc("已忽略", "Ignored"));
+        restore ? tc("已恢复，需手动推送", "Restored, push it yourself") : tc("已搁置", "Parked"));
     }
 
     // qB reports the new state a beat after the call returns, so the button
@@ -876,11 +892,13 @@
     }
 
     function bulkRestore() {
-      if (!window.confirm(tc("把忽略的场景全部放回待处理？", "Put every ignored scene back in Pending?"))) return;
+      if (!window.confirm(tc(
+        "把搁置的场景全部恢复？它们会回到有结果或待处理，且不会被自动推送。",
+        "Restore every parked scene? They go back to Results or Pending and are never auto-pushed."))) return;
       setBusy("ignore:all");
       op({ mode: "ignore", action: "restore_all" }).then(function (r) {
         var n = (r && r.count) || 0;
-        toast(tc("已还原 " + n + " 个", n + " restored"));
+        toast(tc("已恢复 " + n + " 个，需手动推送", n + " restored, push them yourself"));
         return loadCapture();
       }).catch(function (e) { toast(String(e.message || e), true); })
         .then(function () { setBusy(""); });
@@ -924,7 +942,8 @@
         "从已完成里移除这 " + n0 + " 条记录？场景本身已经入库，不受影响。",
         "Forget these " + n0 + " done records? The scenes stay imported."))) return;
       if (kind === "ignore" && !window.confirm(tc(
-        "忽略这 " + n0 + " 个场景？", "Ignore these " + n0 + " scenes?"))) return;
+        "搁置这 " + n0 + " 个场景？它们不会被自动推送。",
+        "Park these " + n0 + " scenes? They will not be auto-pushed."))) return;
 
       setBusy("sel:" + kind);
       var job = null;
@@ -970,7 +989,7 @@
         } else {
           msg = kind === "search" ? tc("已搜索 " + n + " 个", n + " searched")
             : kind === "push" ? tc("已推送 " + n + " 个", n + " pushed")
-              : kind === "ignore" ? tc("已忽略 " + n + " 个", n + " ignored")
+              : kind === "ignore" ? tc("已搁置 " + n + " 个", n + " parked")
                 : kind === "restore" ? tc("已恢复 " + n + " 个", n + " restored")
                   : kind === "forget" ? tc("已移除 " + n + " 条记录", n + " records dropped")
                     : kind === "resume" ? tc("已继续 " + n + " 个", n + " resumed")
@@ -1087,10 +1106,13 @@
     }, [found.length, live.length, done.length, pending.length, self]);
 
     // 停在「已完成」上时随时把基线推平：新入库的当场消化掉，不在离开页面后
-    // 又补出一个「+N」。
+    // 又补出一个「+N」。「搁置」同理。
     useEffect(function () {
       if (tab === "done" && cap) markDoneSeen(done.length);
     }, [tab, done.length, cap]);
+    useEffect(function () {
+      if (tab === "ignored" && cap) markParkSeen(ignored.length);
+    }, [tab, ignored.length, cap]);
 
     // 设置页里的浏览器偏好改动后重画整页（版本号、统计栏都直接读 localStorage）
     var uiTick = useState(0);
@@ -1105,11 +1127,12 @@
       isWsp() ? null : { id: "results", label: tc("有结果", "Results"), n: found.length, hue: "gr", icon: "check" },
       { id: "downloading", label: isWsp() ? tc("Whisparr", "Whisparr") : tc("下载中", "Downloading"), n: live.length, hue: "cy", icon: "download" },
       { id: "done", label: tc("已完成", "Done"), n: done.length, hue: "bl", icon: "folder" },
-      { id: "ignored", label: tc("已忽略", "Ignored"), n: ignored.length, hideCount: true, hue: "tx3", icon: "ban" },
+      { id: "ignored", label: tc("搁置", "Parked"), n: ignored.length, hue: "tx3", icon: "ban" },
       { id: "settings", label: tc("设置", "Settings"), n: 0, hue: "tx3", icon: "info" },
     ].filter(Boolean);
-    // 「已完成」只显示上次看过之后的增量；点开一次就清零
+    // 「已完成」「搁置」只显示上次看过之后的增量；点开一次就清零
     var dinc = doneInc(done.length);
+    var pinc = parkInc(ignored.length);
 
     // 搜索只按「用户记得住的东西」匹配：番号、标题、演员。
     var needle = String(q || "").trim().toLowerCase();
@@ -1294,7 +1317,7 @@
           h("button", {
             className: "sb-btn sb-btn-sm sb-btn-ghost" + dis(),
             onClick: function () { runSel("ignore"); },
-          }, ico("ban"), tc("忽略", "Ignore")),
+          }, ico("ban"), tc("搁置", "Park")),
         ];
       }
       if (tab === "results") {
@@ -1306,7 +1329,7 @@
           h("button", {
             className: "sb-btn sb-btn-sm sb-btn-ghost" + dis(),
             onClick: function () { runSel("ignore"); },
-          }, ico("ban"), tc("忽略", "Ignore")),
+          }, ico("ban"), tc("搁置", "Park")),
         ];
       }
       if (tab === "downloading") {
@@ -1420,6 +1443,31 @@
       return (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
     }
 
+    // 「进入这个 tab 的日子」：同年只写 11-18，跨年带上年份
+    function dayText(ts) {
+      var v = Number(ts) || 0;
+      if (!v) return "";
+      var d = new Date(v * 1000);
+      var now = new Date();
+      var md = ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+      return d.getFullYear() === now.getFullYear() ? md : d.getFullYear() + "/" + md;
+    }
+
+    function fullTime(ts) {
+      var v = Number(ts) || 0;
+      if (!v) return "";
+      var d = new Date(v * 1000);
+      return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" +
+        ("0" + d.getDate()).slice(-2) + " " +
+        ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+    }
+
+    // 日期徽章：时钟 + M-D，title 里给完整时间
+    function timeBadge(ts, zhLabel, enLabel) {
+      if (!ts) return null;
+      return badgeIco("", "clock", dayText(ts), tc(zhLabel + fullTime(ts), enLabel + " " + fullTime(ts)));
+    }
+
     // ─── 通用渲染件 ───────────────────────────────────────────────────────
     function badge(hue, content, title) {
       return h("span", { className: "sb-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
@@ -1428,7 +1476,89 @@
     // 带图标的徽章：图标与文字要作为两个子节点，不能字符串拼（会渲染成 [object Object]）
     function badgeIco(hue, iconName, text, title) {
       return h("span", { className: "sb-badge " + (hue ? "is-h-" + hue : "is-mute"), title: title || "" },
-        ico(iconName), text);
+        ico(iconName), h("span", { className: "sb-badge-t" }, text));
+    }
+
+    // 锁：不加框、不加文字，只在桌面端用 title 说明
+    function lockMark() {
+      return h("span", {
+        className: "sb-lock",
+        title: tc("锁：不会被自动推送", "Hold: auto push off"),
+      }, ico("lock"));
+    }
+
+    function countBadge(hue, iconName, n, zh, en) {
+      return badgeIco(hue, iconName, String(n), tc(zh, en));
+    }
+
+    // 判定计数：数字前置、语言中立，四枚并排也放得下
+    function verdictBadges(s) {
+      var all = s.candidates || [];
+      var pass = all.filter(function (c) { return c.verdict === "pass"; });
+      var unk = all.filter(function (c) { return c.verdict === "unknown"; });
+      var bad = all.filter(function (c) { return c.verdict === "fail"; });
+      var out = [countBadge("gr", "check", pass.length,
+        "通过筛选 " + pass.length + " 个", pass.length + " passed")];
+      if (unk.length) out.push(countBadge("ye", "alert", unk.length,
+        unk.length + " 个待确认", unk.length + " to check"));
+      if (bad.length) out.push(countBadge("", "x", bad.length,
+        "规则淘汰 " + bad.length + " 个", bad.length + " rejected"));
+      if (s.hold) out.push(lockMark());
+      return out;
+    }
+
+    // 待处理卡不再写成句子：数量进徽章，次数与下次时间各占一枚
+    function pendingBadges(s) {
+      var scr = s.screen || {};
+      var cands = (s.candidates || []).length;
+      var out = [];
+      if (cands) out.push(countBadge("", "search", cands,
+        "搜到 " + cands + " 个候选", cands + " candidates"));
+      if (scr.pass) out.push(countBadge("gr", "check", scr.pass,
+        "通过筛选 " + scr.pass + " 个", scr.pass + " passed"));
+      if (scr.unknown) out.push(countBadge("ye", "alert", scr.unknown,
+        scr.unknown + " 个待确认", scr.unknown + " to check"));
+      if (scr.fail) out.push(countBadge("", "x", scr.fail,
+        "规则淘汰 " + scr.fail + " 个", scr.fail + " rejected"));
+      if (s.status === "captured" && !isWsp()) {
+        var autoOn = !!((ctrl && ctrl.control && ctrl.control.autoSearch));
+        out.push(badgeIco("", "search",
+          autoOn ? tc("待自动搜索", "Auto search") : tc("待手动搜索", "Search by hand"),
+          autoOn ? tc("轮到时自动搜索", "searched when its turn comes")
+            : tc("自动搜索已关，需要手动点搜索", "auto search is off, click Search")));
+      }
+      if (s.attempts) out.push(badgeIco("", "refresh",
+        tc("第" + s.attempts + "次", "#" + s.attempts),
+        tc("已试 " + s.attempts + " 次", "tried " + s.attempts + " times")));
+      if (s.nextSearchAt) out.push(badgeIco("", "clock",
+        tc("下次 " + clockText(s.nextSearchAt), "next " + clockText(s.nextSearchAt)),
+        tc("下次自动搜索时间", "next search time")));
+      if (isWsp() && s.status === "captured") out.push(badgeIco("", "download",
+        tc("待加片", "To add"), tc("等下一次自动加片", "waits for the next auto add")));
+      if (s.hold) out.push(lockMark());
+      return out;
+    }
+
+    // 分辨率是挑片的主要依据：和其他徽章同亮度、再压一档粗体；
+    // 命中「设置 → 筛选规则 → 分辨率」里勾选的那几档时，翻成绿色并加一枚 √。
+    // 只看规则，不看工具条那个「全部分辨率」视图筛选——否则整屏都会绿。
+    function resBadge(c) {
+      var picked = (ruleForm && ruleForm.res) || [];
+      var hit = !!c.resolution && picked.indexOf(c.resolution) >= 0;
+      return h("span", {
+        className: "sb-badge sb-badge--res" + (hit ? " is-h-gr" : " is-h-tx2"),
+        title: hit ? tc("命中分辨率筛选", "matches the resolution filter")
+          : tc("分辨率", "Resolution"),
+      }, hit ? ico("check") : null, c.resolution);
+    }
+    // 已完成卡的分辨率：优先用推种时记下的，旧记录按种子标题去候选里找
+    function doneRes(p, s) {
+      if (p.resolution) return p.resolution;
+      var cs = (s && s.candidates) || [];
+      for (var i = 0; i < cs.length; i++) {
+        if (p.name && cs[i].title === p.name && cs[i].resolution) return cs[i].resolution;
+      }
+      return "";
     }
     function iconBtn(name, title, onClick, cls) {
       return h("button", {
@@ -1457,9 +1587,9 @@
 
     // 列表上方的一条：左边一句话（连接状态 / 条数），右边这一屏的批量动作。
     // 窄屏只留左边那句话，按钮搬进工具条的「更多」。
-    function listBar(meta, buttons, wide) {
+    function listBar(meta, buttons, wide, cls) {
       var shown = (buttons || []).filter(Boolean);
-      return h("div", { className: "sb-listbar" + (wide ? " sb-listbar--wide" : "") },
+      return h("div", { className: "sb-listbar" + (wide ? " sb-listbar--wide" : "") + (cls ? " " + cls : "") },
         h("div", { className: "sb-listbar-meta" }, meta),
         shown.length ? h("div", { className: "sb-listbar-btns" }, shown) : null);
     }
@@ -1597,7 +1727,7 @@
     // compact = 卡片与列表行：来源站名太长，会把一行徽章挤到裁切，省略它。
     function releaseBadges(c, compact, hideFree) {
       var out = [];
-      if (c.resolution) out.push(badge("tx3", c.resolution));
+      if (c.resolution) out.push(resBadge(c));
       if (c.size) out.push(badge("", humanSize(c.size)));
       if (c.seeders != null) out.push(badgeIco("", "seed", c.seeders, tc("做种数", "seeders")));
       if (c.indexer && !compact) {
@@ -1728,7 +1858,11 @@
           h("div", { className: "sb-row-title" + (o.lib ? " sb-lib" : ""), title: o.title, onClick: onHit },
             o.title || tc("（无标题）", "(no title)")),
           o.sub ? h("div", { className: "sb-row-sub" }, o.sub) : null,
-          o.release ? h("div", { className: "sb-row-release sb-lib", title: o.release }, o.release) : null),
+          o.release ? h("div", {
+            className: "sb-row-release sb-lib" + (o.releaseIcon ? " sb-row-release--ico" : ""),
+            title: o.release,
+          }, o.releaseIcon ? ico("history") : null,
+            o.releaseIcon ? h("span", { className: "sb-row-release-t" }, o.release) : o.release) : null),
         h("div", { className: "sb-row-state" }, o.state),
         h("div", { className: "sb-row-badges" }, o.badges || []),
         h("div", { className: "sb-row-act" }, (o.actions || []).filter(Boolean)));
@@ -1736,36 +1870,14 @@
 
     function pendingCard(s) {
       var isBusy = busy === "search:" + s.id;
-      var scr = s.screen || {};
-      var cands = s.candidates || [];
-      var bits = [];
-      if (s.status === "no_result") {
-        bits.push(tc("第 " + (s.attempts || 1) + " 次没搜到合格的",
-          "attempt " + (s.attempts || 1) + ", nothing passed"));
-        if (scr.fail) bits.push(tc("淘汰 " + scr.fail, scr.fail + " rejected"));
-        if (s.nextSearchAt) bits.push(tc("下次 " + clockText(s.nextSearchAt), "next " + clockText(s.nextSearchAt)));
-      } else if (s.status === "low_confidence") {
-        bits.push(tc((scr.unknown || 0) + " 个候选无法判定", (scr.unknown || 0) + " need a call"));
-        if (scr.fail) bits.push(tc("淘汰 " + scr.fail, scr.fail + " rejected"));
-      } else {
-        bits.push(isWsp() ? tc("等待交给 Whisparr", "waiting to be sent to Whisparr")
-          : tc("等待自动搜索", "waiting to be searched"));
-      }
+      var marks = pendingBadges(s);
       var body = [
         h("div", {
           className: "sb-tile-title sb-title--btn sb-lib", title: s.title,
           onClick: openOf(s.id),
         }, s.title || tc("（无标题）", "(no title)")),
         sceneLine(s),
-        h("div", { className: "sb-meta sb-screen-line" }, bits.join(" · ")),
-        cands.length
-          ? h("div", { className: "sb-meta" },
-            s.status === "low_confidence"
-              ? tc("搜到 " + cands.length + " 个 · 信息不全，需确认",
-                  cands.length + " found · incomplete, check")
-              : tc("搜到 " + cands.length + " 个，均未通过筛选",
-                  cands.length + " found, none passed"))
-          : null,
+        marks.length ? h("div", { className: "sb-score" }, marks) : null,
       ];
       if (s.error) body.push(h("div", { className: "sb-meta sb-err" }, s.error));
       return tile(s.id, coverOf(s, statusPill(s.status)),
@@ -1780,34 +1892,27 @@
               className: "sb-btn sb-btn-md", disabled: isBusy,
               onClick: function () { doSearch(s.id); },
             }, isBusy ? tc("搜索中…", "Searching…") : tc("立即搜索", "Search")),
-          iconBtn("ban", tc("忽略", "Ignore"), function () { doIgnore(s.id, false); },
+          iconBtn("ban", tc("搁置", "Park"), function () { doIgnore(s.id, false); },
             "is-danger"),
         ]);
     }
 
     function pendingRow(s) {
-      var scr = s.screen || {};
       var isBusy = busy === "search:" + s.id;
-      var extra = [];
-      if (s.status === "no_result" && s.nextSearchAt) {
-        extra.push(tc("下次 " + clockText(s.nextSearchAt), "next " + clockText(s.nextSearchAt)));
-      } else if (s.status === "low_confidence") {
-        extra.push(tc((scr.unknown || 0) + " 个待确认", (scr.unknown || 0) + " to check"));
-      }
       return rowOf({
         key: s.id, code: s.code, title: s.title, lib: true,
         shot: shotOf[s.id] || s.shot || "",
-        sub: libLine(sceneSub(s), extra),
+        sub: libLine(sceneSub(s)),
         onOpen: function () { openDetail(s.id); },
         state: statusPill(s.status),
-        badges: [durBadge(s.duration), badge("", tc("试过 " + (s.attempts || 0) + " 次", (s.attempts || 0) + " tries"))],
+        badges: [durBadge(s.duration)].concat(pendingBadges(s)),
         actions: [
           isWsp()
             ? iconBtn("download", tc("交给 Whisparr", "Send to Whisparr"),
               function () { doPush(s.id, 0); }, "is-acc")
             : iconBtn("search", tc("立即搜索", "Search"), function () { doSearch(s.id); },
               isBusy ? "is-busy" : ""),
-          iconBtn("ban", tc("忽略", "Ignore"), function () { doIgnore(s.id, false); }, "is-danger"),
+          iconBtn("ban", tc("搁置", "Park"), function () { doIgnore(s.id, false); }, "is-danger"),
         ],
       });
     }
@@ -1815,8 +1920,6 @@
     function resultCard(s) {
       var all = s.candidates || [];
       var pass = all.filter(function (c) { return c.verdict === "pass"; });
-      var unk = all.filter(function (c) { return c.verdict === "unknown"; });
-      var bad = all.filter(function (c) { return c.verdict === "fail"; });
       var best = pass.slice().sort(function (a, b) {
         return (b.score || 0) - (a.score || 0) || (b.seeders || 0) - (a.seeders || 0);
       })[0];
@@ -1828,11 +1931,7 @@
           onClick: openOf(s.id),
         }, s.title || tc("（无标题）", "(no title)")),
         sceneLine(s),
-        h("div", { className: "sb-score" },
-          pill("gr", tc(pass.length + " 个通过", pass.length + " passed")),
-          unk.length ? warnPill(tc("待确认 " + unk.length, unk.length + " to check")) : null,
-          s.hold ? warnPill(tc("不自动推送", "Auto push off")) : null,
-          bad.length ? h("span", { className: "sb-meta sb-rej" }, tc("淘汰 " + bad.length, bad.length + " rejected")) : null),
+        h("div", { className: "sb-score" }, verdictBadges(s)),
       ];
       if (best) {
         // 绿块本身就是「最佳」的那个：不再挂文字标签，窄屏标题没地方被它挤
@@ -1853,7 +1952,6 @@
     function resultRow(s) {
       var all = s.candidates || [];
       var pass = all.filter(function (c) { return c.verdict === "pass"; });
-      var unk = all.filter(function (c) { return c.verdict === "unknown"; });
       var best = pass.slice().sort(function (a, b) {
         return (b.score || 0) - (a.score || 0) || (b.seeders || 0) - (a.seeders || 0);
       })[0];
@@ -1865,13 +1963,8 @@
         sub: libLine(sceneSub(s)),
         release: best ? best.title : "",
         onOpen: function () { openDetail(s.id); },
-        state: h("div", null,
-          pill("gr", tc(pass.length + " 通过", pass.length + " passed")),
-          unk.length ? h("div", { className: "sb-meta" },
-            tc(unk.length + " 待确认", unk.length + " to check")) : null),
-        badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat(
-          s.hold ? [pill("ye", tc("不自动推送", "Auto push off"))] : [],
-          [durBadge(s.duration)]),
+        state: h("div", { className: "sb-score sb-score--row" }, verdictBadges(s)),
+        badges: (best ? releaseBadges(best, true, allFree(s)) : []).concat([durBadge(s.duration)]),
         actions: [
           best ? iconBtn("download", tc("推送最佳", "Push best"),
             function () { doPush(s.id, bestIdx); }, "is-acc" + (pushing ? " is-busy" : "")) : null,
@@ -2043,14 +2136,23 @@
 
     function doneCard(p) {
       var s = byId[p.sceneId] || {};
+      var res = doneRes(p, s);
+      var marks = [];
+      // 已完成只看「这片是多少分辨率」，不判命中，所以不上绿、不加 √
+      if (res) marks.push(h("span", {
+        className: "sb-badge sb-badge--res is-h-tx2",
+        title: tc("分辨率", "Resolution"),
+      }, res));
+      if (p.size) marks.push(badge("", humanSize(p.size), tc("文件大小", "Size")));
+      if (p.at) marks.push(timeBadge(p.at, "完成入库：", "Imported: "));
       var body = [
         h("div", {
           className: "sb-tile-title sb-title--btn sb-lib", title: s.title || p.name,
           onClick: openOf(p.sceneId, openDl),
         }, s.title || p.code || p.name || "—"),
         sceneLine(s),
-        h("div", { className: "sb-meta" }, humanSize(p.size)),
       ];
+      if (marks.length) body.push(h("div", { className: "sb-score" }, marks));
       return tile(p.sceneId, coverOf({
         id: p.sceneId, code: p.code || s.code || "", duration: s.duration || 0,
         shot: p.shot || s.shot || "",
@@ -2070,7 +2172,8 @@
         release: p.name || "",
         onOpen: function () { openDl(p.sceneId); },
         state: statusPill("imported"),
-        badges: [durBadge(s.duration)],
+        badges: [durBadge(s.duration), p.at ? timeBadge(p.at, "完成入库：", "Imported: ") : null,
+          s.hold ? lockMark() : null],
         actions: [h("a", {
           className: "sb-icb", href: appUrl("/scenes/" + p.sceneId), target: "_blank",
           rel: "noreferrer", title: tc("打开场景", "Open scene"),
@@ -2079,13 +2182,35 @@
     }
 
     function ignoredCard(s) {
-      return tile(s.id, coverOf(s, statusPill("ignored")), [
+      var last = s.lastChosen || {};
+      var cands = (s.candidates || []).length;
+      // 来源已经不在这张卡上重复：分组标题（已删除下载 / 手动搁置）就是来源
+      var body = [
         h("div", {
           className: "sb-tile-title sb-title--btn sb-lib", title: s.title,
           onClick: openOf(s.id),
         }, s.title || s.code || "—"),
         sceneLine(s),
-      ], [
+      ];
+      var marks = [];
+      if (cands) {
+        marks.push(countBadge("", "search", cands,
+          cands + " 个候选", cands + " candidates"));
+      }
+      var parkedAt = s.parkedAt || s.holdAt || 0;
+      if (parkedAt) marks.push(timeBadge(parkedAt, "进入搁置：", "Parked: "));
+      // 搁置 = 不会自己动，和别的 tab 一样用锁图标说明
+      marks.push(lockMark());
+      if (marks.length) body.push(h("div", { className: "sb-score" }, marks));
+      // 删掉的是哪个种子：历史图标 + 完整标题，桌面/手机都留着这一行，不截断
+      if (last.title) {
+        body.push(h("div", {
+          className: "sb-hist",
+          title: tc("上次删掉：" + last.title, "Last removed: " + last.title),
+        }, ico("history"),
+          h("span", { className: "sb-hist-t" }, last.title)));
+      }
+      return tile(s.id, coverOf(s, statusPill("ignored")), body, [
         h("button", {
           className: "sb-btn sb-btn-md sb-btn-ghost",
           onClick: function () { doIgnore(s.id, true); },
@@ -2094,13 +2219,21 @@
     }
 
     function ignoredRow(s) {
+      var last = s.lastChosen || {};
+      var cands = (s.candidates || []).length;
       return rowOf({
         key: s.id, code: s.code, title: s.title, lib: true,
         shot: shotOf[s.id] || s.shot || "",
         sub: libLine(sceneSub(s)),
+        release: last.title || "",
+        releaseIcon: true,
         onOpen: function () { openDetail(s.id); },
         state: statusPill("ignored"),
-        badges: [durBadge(s.duration)],
+        badges: [cands ? countBadge("", "search", cands,
+            cands + " 个候选", cands + " candidates") : null,
+          timeBadge(s.parkedAt || s.holdAt || 0, "进入搁置：", "Parked: "),
+          lockMark(),
+          durBadge(s.duration)].filter(Boolean),
         actions: [iconBtn("plus", tc("恢复", "Restore"), function () { doIgnore(s.id, true); })],
       });
     }
@@ -2693,7 +2826,7 @@
         }, ico("plus"), tc("恢复", "Restore")) : h("button", {
           className: "sb-btn sb-btn-md sb-btn-ghost",
           onClick: function () { close(); doIgnore(s.id, false); },
-        }, ico("ban"), tc("忽略", "Ignore")),
+        }, ico("ban"), tc("搁置", "Park")),
       ];
 
       // BEST PICK 条：一条最该推送的，理由写全，先给按钮再给列表
@@ -2753,9 +2886,11 @@
               chipRow(s.performers, 7, "sb-tags--perf"),
               h("div", { className: "sb-score" },
                 s.status ? statusPill(s.status) : null,
-                cands.length ? h("span", { className: "sb-meta" },
-                  tc("搜到 " + cands.length + " 个 · " + pass.length + " 个通过",
-                    cands.length + " found · " + pass.length + " passed")) : null,
+                cands.length ? badgeIco("", "search", String(cands.length),
+                  tc("搜到 " + cands.length + " 个候选", cands.length + " candidates")) : null,
+                cands.length ? countBadge("gr", "check", pass.length,
+                  "通过筛选 " + pass.length + " 个", pass.length + " passed") : null,
+                s.hold ? lockMark() : null,
                 s.rating ? h("span", { className: "sb-meta" },
                   "★ " + (s.rating / 20).toFixed(1)) : null),
               chipRow(s.tags, 7),
@@ -3075,7 +3210,7 @@
       body = h("div", { className: "sb-stack" },
         done.length ? listBar(
           h("span", { className: "sb-meta" }, tc(done.length + " 条已入库", done.length + " imported")),
-          [clearBtn]) : null,
+          [clearBtn], false, "sb-listbar--keep") : null,
         buckets.map(function (items, i) {
           return section("day" + i, "bl", "clock", DAY_LABEL[i](), items, doneCard, doneRow);
         }),
@@ -3084,18 +3219,27 @@
           ? emptyBox(tc("没有匹配「" + q + "」的记录", "Nothing matches \"" + q + "\"")) : null);
     } else if (tab === "ignored") {
       var ign = ignored.filter(hit);
-      VIS = ign.map(function (s) { return String(s.id); });
+      var removed = ign.filter(function (s) { return s.src === "removed"; });
+      var manual = ign.filter(function (s) { return s.src !== "removed"; });
+      // 全选只覆盖展开的组，「全部恢复」才是全量入口
+      VIS = (fold["ignored:removed"] ? [] : removed)
+        .concat(fold["ignored:manual"] ? [] : manual)
+        .map(function (s) { return String(s.id); });
       var restoreBtn = h("button", {
         className: "sb-btn sb-btn-sm sb-btn-ghost", key: "rst", disabled: busy === "ignore:all",
         onClick: bulkRestore,
-      }, ico("plus"), tc("全部还原", "Restore all"));
-      if (ignored.length) MEXTRA.push(h("div", { className: "sb-listbar-btns", key: "ign-mob" }, [restoreBtn]));
+      }, ico("plus"), tc("全部恢复", "Restore all"));
+      // 这一页唯一的主操作，窄屏也留在列表条上，不塞进「更多」
       body = h("div", { className: "sb-stack" },
         ignored.length ? listBar(
-          h("span", { className: "sb-meta" }, tc(ignored.length + " 个已忽略", ignored.length + " ignored")),
-          [restoreBtn]) : null,
-        section("ign", "tx3", "ban", tc("已忽略", "Ignored"), ign, ignoredCard, ignoredRow),
-        !ignored.length ? emptyBox(tc("没有忽略的场景", "Nothing ignored")) : null);
+          h("span", { className: "sb-meta" },
+            tc(ignored.length + " 个搁置", ignored.length + " parked")),
+          [restoreBtn], false, "sb-listbar--keep") : null,
+        section("removed", "tx3", "trash",
+          tc("已删除下载", "Removed downloads"), removed, ignoredCard, ignoredRow),
+        section("manual", "tx3", "ban",
+          tc("手动搁置", "Parked by hand"), manual, ignoredCard, ignoredRow),
+        !ignored.length ? emptyBox(tc("没有搁置的场景", "Nothing parked")) : null);
     } else {
       body = settingsPanel();
     }
@@ -3151,9 +3295,12 @@
             t.id === "done"
               ? (dinc > 0 ? h("span", { className: "sb-count is-new" },
                 "+" + (dinc > 99 ? "99" : dinc)) : null)
-              : t.n && !t.hideCount
-                ? h("span", { className: "sb-count" + (t.id === "pending" ? " is-hot" : "") }, t.n)
-                : null);
+              : t.id === "ignored"
+                ? (pinc > 0 ? h("span", { className: "sb-count is-new is-plain" },
+                  "+" + (pinc > 99 ? "99" : pinc)) : null)
+                : t.n && !t.hideCount
+                  ? h("span", { className: "sb-count" + (t.id === "pending" ? " is-hot" : "") }, t.n)
+                  : null);
         }))),
 
       showStatsOn() ? statsRow() : null,

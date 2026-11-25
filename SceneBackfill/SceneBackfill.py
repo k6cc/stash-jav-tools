@@ -33,7 +33,7 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 
 PLUGIN_ID = "SceneBackfill"
-PLUGIN_VERSION = "1.0.3"
+PLUGIN_VERSION = "1.1.0"
 VIDEO_EXT = (".mp4", ".mkv", ".wmv", ".avi", ".ts", ".m2ts", ".mov", ".flv", ".m4v")
 # Video containers plus disc images: the format rule is release-level, so ISO
 # has to be visible to it even though it is never selected as a video file.
@@ -2541,6 +2541,22 @@ query($n: Int) {
 DURATION_PER_PASS = 40
 DURATION_BATCH = 20
 
+# Statuses that still belong to a task the plugin is driving. A library scan
+# that links the file first must not erase their record halfway through.
+INFLIGHT_STATUSES = ("pushed", "downloaded", "importing")
+# Statuses a manual ignore can go back to; anything else restores as captured.
+RESTORE_STATUSES = ("captured", "no_result", "low_confidence", "matched")
+# Records checked per capture pass for "file arrived" / "scene deleted".
+PRUNE_BATCH = 50
+
+SCENE_FILES_QUERY = """
+query($ids: [ID!]!) {
+  findScenes(ids: $ids, filter: {per_page: 100}) {
+    scenes { id files { id } }
+  }
+}
+"""
+
 
 def _stash_boxes(ctx):
     """endpoint -> apikey, from Stash's own config (the plugin has no such setting)."""
@@ -2716,25 +2732,47 @@ def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
     for sid, sec in fetch_durations(ctx, want, st, dur_budget).items():
         st["scenes"][sid]["duration"] = sec
 
-    # Forget records whose scene was deleted: they used to keep being searched
-    # and re-pushed long after the user removed the empty scene. Only do this
-    # when the whole empty-scene list fit in one query -- with a truncated list
-    # an absent id proves nothing. Tasks already pushed are left alone so their
-    # progress rows do not vanish on their own.
+    # Housekeeping: a record is dead once the scene has a file (filled by the
+    # plugin, another plugin or a manual scan) or the scene is gone from Stash.
+    # Records for a task the plugin is still driving only go when the scene
+    # itself disappears -- a scan that grabs the file first must not erase the
+    # import record. Imported records are the Done list: history, never swept.
+    #
+    # The empty-scene list is capped, so absence from it proves nothing on a
+    # big library. Instead verify a rotating slice per pass with one batched
+    # query; the oldest checked go first.
     seen = {sid for sid, _s, _rec, _status in keep}
-    if (node.get("count") or 0) <= limit:
-        pruned = 0
-        for sid in list(st["scenes"]):
-            rec = st["scenes"][sid]
-            if sid in seen or pruned >= 50:
-                continue
-            if rec.get("status") not in ("captured", "no_result", "low_confidence",
-                                         "matched"):
-                continue
-            if _scene_exists(ctx, sid):
-                continue
-            st["scenes"].pop(sid, None)
-            pruned += 1
+    pool = [(int(rec.get("chkAt") or 0), sid)
+            for sid, rec in st["scenes"].items()
+            if sid not in seen and rec.get("status") != "imported"]
+    pool.sort()
+    pool = pool[:PRUNE_BATCH]
+    if pool:
+        ids = [sid for _at, sid in pool]
+        have = None
+        try:
+            got = ctx.gql(SCENE_FILES_QUERY, {"ids": ids})
+            rows = (got.get("findScenes") or {}).get("scenes") or []
+            have = {str(r.get("id")): bool(r.get("files")) for r in rows}
+        except Exception:
+            have = None      # a query hiccup must not prune anything
+        if have is not None:
+            now = int(time.time())
+            for _at, sid in pool:
+                rec = st["scenes"].get(sid) or {}
+                if sid not in have:
+                    # Stash no longer knows this scene
+                    st["scenes"].pop(sid, None)
+                    continue
+                if not have[sid]:
+                    rec["chkAt"] = now
+                    continue
+                if rec.get("status") in INFLIGHT_STATUSES:
+                    # File linked by something else while we still hold the
+                    # task: keep the record so the import/merge can finish.
+                    rec["chkAt"] = now
+                    continue
+                st["scenes"].pop(sid, None)
 
     scenes = []
     for sid, s, rec, status in keep:
@@ -2762,6 +2800,10 @@ def capture_scenes(ctx, st, limit=300, dur_budget=DURATION_PER_PASS):
             "candidates": rec.get("candidates") or [],
             "chosen": rec.get("chosen") or None,
             "hold": bool(rec.get("holdAt")),
+            # 进入「搁置」的时间：新记录写 parkedAt，老记录退回 holdAt
+            "parkedAt": int(rec.get("parkedAt") or rec.get("holdAt") or 0),
+            "src": rec.get("src") or "",
+            "lastChosen": rec.get("lastChosen") or None,
             "error": rec.get("error") or "",
         })
     return node.get("count") or 0, scenes
@@ -2777,13 +2819,59 @@ def _id_list(v):
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
+def _shelve(rec):
+    """Park a scene whose torrent the user removed by hand.
+
+    It leaves both queues -- auto search only walks captured / no_result /
+    low_confidence, auto push only walks matched -- and keeps holdAt so a
+    later restore still will not push it on its own.
+    """
+    chosen = rec.get("chosen") or {}
+    title = str(chosen.get("title") or "").strip()
+    if title:
+        rec["lastChosen"] = {
+            "title": title,
+            "size": int(chosen.get("size") or 0),
+            "indexer": chosen.get("indexer") or "",
+            "at": int(time.time()),
+        }
+    rec.pop("chosen", None)
+    rec.pop("pushedAt", None)
+    rec["status"] = "ignored"
+    rec["src"] = "removed"
+    rec["holdAt"] = int(time.time())
+    rec["parkedAt"] = int(time.time())
+
+
+def _park(rec):
+    """Manual ignore: remember the status to come back to."""
+    prev = rec.get("status")
+    if prev in RESTORE_STATUSES:
+        rec["prevStatus"] = prev
+    rec["status"] = "ignored"
+    rec["src"] = "manual"
+    rec["parkedAt"] = int(time.time())
+
+
+def _unpark(rec):
+    """Restore a parked scene: back to where it was, but never auto-pushed."""
+    prev = rec.get("prevStatus")
+    if rec.get("src") == "removed" or prev not in RESTORE_STATUSES:
+        rec["status"] = "matched" if rec.get("candidates") else "captured"
+    else:
+        rec["status"] = prev
+    rec.pop("prevStatus", None)
+    rec["src"] = "restored"
+    rec["holdAt"] = int(time.time())
+
+
 def do_ignore(ctx):
     st = load_state(ctx)
     if str(ctx.arg("action", "") or "").strip().lower() == "restore_all":
         n = 0
         for rec in st["scenes"].values():
             if rec.get("status") == "ignored":
-                rec["status"] = "captured"
+                _unpark(rec)
                 n += 1
         if n:
             save_state(ctx, st)
@@ -2796,7 +2884,14 @@ def do_ignore(ctx):
             rec = st["scenes"].get(sid)
             if not rec:
                 continue
-            rec["status"] = "captured" if restore else "ignored"
+            if restore:
+                if rec.get("status") != "ignored":
+                    continue
+                _unpark(rec)
+            else:
+                if rec.get("status") == "ignored":
+                    continue
+                _park(rec)
             n += 1
         if n:
             save_state(ctx, st)
@@ -2804,9 +2899,12 @@ def do_ignore(ctx):
     sid = str(ctx.arg("sceneId"))
     restore = str(ctx.arg("restore", "") or "").strip().lower() in ("1", "true", "yes")
     rec = st["scenes"].setdefault(sid, {})
-    rec["status"] = "captured" if restore else "ignored"
+    if restore and rec.get("status") == "ignored":
+        _unpark(rec)
+    elif not restore:
+        _park(rec)
     save_state(ctx, st)
-    return {"ok": True, "sceneId": sid, "status": rec["status"]}
+    return {"ok": True, "sceneId": sid, "status": rec.get("status")}
 
 
 def do_done(ctx):
@@ -3328,6 +3426,8 @@ def push_scene(ctx, st, sid, idx, file_index=""):
         "title": cand["title"],
         "indexer": cand.get("indexer") or "",
         "size": picked_size or cand.get("size") or 0,
+        # 已完成页要显示分辨率徽章，推种时就把候选的分辨率记下来
+        "resolution": cand.get("resolution") or "",
         "magnet": bool(magnet and not torrent_bytes),
         "picked": picked,
         "pickedNote": note,
@@ -3442,6 +3542,7 @@ def collect_progress(ctx, st):
                 "sceneId": sid, "code": rec.get("code") or "", "hash": h,
                 "name": chosen.get("title") or "", "state": "done",
                 "progress": 1, "size": chosen.get("size") or 0,
+                "resolution": chosen.get("resolution") or "",
                 "downloaded": chosen.get("size") or 0, "dlspeed": 0, "eta": 0,
                 "seeders": 0, "ready": False, "status": status,
                 # 已完成页按天分组要用它；没有它只能全堆在一组里。
@@ -3516,14 +3617,11 @@ def do_torrent(ctx):
         qb.start(h)
     elif action == "remove":
         # Keep the torrent's own data: this only drops it from qB's list so the
-        # slot is free for another candidate. holdAt keeps auto-push from
-        # putting the same release straight back.
+        # slot is free for another candidate. The scene goes to 搁置 instead of
+        # back to 有结果, so the release cannot return on its own.
         qb.delete(h, delete_files=False)
         _drop_tag(qb, sid)
-        rec.pop("chosen", None)
-        rec.pop("pushedAt", None)
-        rec["status"] = "matched" if rec.get("candidates") else "captured"
-        rec["holdAt"] = int(time.time())
+        _shelve(rec)
         save_state(ctx, st)
     else:
         raise RuntimeError(f"unknown action: {action}")
@@ -3557,10 +3655,7 @@ def _torrent_bulk(ctx, st, action, ids=None):
         qb.delete(hashes, delete_files=False)
         for _sid, _h, rec in rows:
             _drop_tag(qb, _sid)
-            rec.pop("chosen", None)
-            rec.pop("pushedAt", None)
-            rec["status"] = "matched" if rec.get("candidates") else "captured"
-            rec["holdAt"] = int(time.time())
+            _shelve(rec)
         save_state(ctx, st)
         return {"ok": True, "action": action, "count": len(hashes)}
     if action == "remove_missing":
@@ -4304,6 +4399,7 @@ def collect_progress_whisparr(ctx, st):
                 "sceneId": sid, "code": rec.get("code") or "", "hash": h,
                 "name": chosen.get("title") or "", "state": "done",
                 "progress": 1, "size": chosen.get("size") or 0,
+                "resolution": chosen.get("resolution") or "",
                 "downloaded": chosen.get("size") or 0, "dlspeed": 0, "eta": 0,
                 "seeders": 0, "ready": False, "status": status,
                 "at": int(rec.get("importedAt") or 0),
@@ -4600,11 +4696,8 @@ def _torrent_whisparr(ctx, st):
                     W.remove(mid)
                 except Exception:
                     pass
-            rec.pop("chosen", None)
-            rec.pop("pushedAt", None)
             rec.pop("error", None)
-            rec["status"] = "captured"
-            rec["holdAt"] = int(time.time())
+            _shelve(rec)
         if targets:
             save_state(ctx, st)
         return {"ok": True, "action": action, "count": len(targets)}

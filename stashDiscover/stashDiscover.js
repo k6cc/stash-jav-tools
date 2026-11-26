@@ -1111,13 +1111,593 @@
     return localDateStr(new Date(Date.now() + previewDays * 86400000));
   }
 
-  // 窗口下界（推给源的 date 条件）。比客户端窗口多留一天：源只认 GREATER_THAN
-  // （严格大于），正好落在 cutoff 当天的场景会被源剔掉，而客户端窗口
-  //（rd < cutoff 才丢）本该保留它们。多取一天由客户端自己裁。
+  // ─── 发行时间范围（K2 · 演员/工作室 tab 工具栏与发现页共用）───────────────
+  // key：""（用设置里的近期窗口，由调用方决定）| "7" | "30" | "365" | "all" |
+  //      "since"（自 since 那天起）。drCutoff 返回最早保留的发行日（含当天）：
+  //      null = 不限，undefined = 用默认（设置里的近期窗口）。
+  var DR_DAYS = { "7": 7, "30": 30, "365": 365 };
+  var DR_MIN_DATE = "1900-01-01";
+  function drValidDate(s) {
+    s = String(s || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    var d = new Date(s + "T00:00:00");
+    return !isNaN(d.getTime()) && localDateStr(d) === s;
+  }
+  function drCutoff(key, since) {
+    if (key === "all") return null;
+    if (key === "since") return drValidDate(since) ? since : undefined;
+    return DR_DAYS[key] ? recentCutoffDate(DR_DAYS[key]) : undefined;
+  }
+  // stash-box 的日期条件只有 GREATER_THAN（严格大于）：起始日减一天，
+  // 起始日当天才留得下。客户端窗口仍按起始日本身裁（rd < cut 才丢），
+  // 两边不重复补这一天。
+  function drDayBefore(dateStr) {
+    var d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() - 1);
+    return localDateStr(d);
+  }
+  function drDefaultSince() {
+    return recentCutoffDate(30);
+  }
+  // 上下两个三角直接用原生下拉的箭头几何（Stash 的 select 背景图就是这对 polygon）。
+  // viewBox 裁到 polygon 的外框再放大，否则 4.95×10 的画布里三角只占 43% 宽，看起来很小。
+  var DR_CARET =
+    '<svg viewBox="1.25 3.0 2.5 4.0" fill="currentColor" aria-hidden="true">' +
+    '<polygon points="1.41 4.67 2.48 3.18 3.54 4.67"/>' +
+    '<polygon points="3.54 5.33 2.48 6.82 1.41 5.33"/></svg>';
+  var DR_CHEV_L =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"' +
+    ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4.5l-7.5 7.5 7.5 7.5"/></svg>';
+  var DR_CHEV_R =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"' +
+    ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4.5l7.5 7.5-7.5 7.5"/></svg>';
+  // 原生日历按钮的图标：直接从演员编辑弹窗的 DateInput 按钮里抄出来的 FA regular calendar
+  // （`data-prefix="far" data-icon="calendar"`，448×512），路径与原生逐字一致
+  var DR_CAL =
+    '<svg viewBox="0 0 448 512" fill="currentColor" aria-hidden="true">' +
+    '<path d="M120 0c13.3 0 24 10.7 24 24l0 40 160 0 0-40c0-13.3 10.7-24 24-24s24 10.7 24 24l0 40 32 0c35.3 0 64 28.7 64 64l0 288c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 128C0 92.7 28.7 64 64 64l32 0 0-40c0-13.3 10.7-24 24-24zm0 112l-56 0c-8.8 0-16 7.2-16 16l0 48 352 0 0-48c0-8.8-7.2-16-16-16l-264 0zM48 224l0 192c0 8.8 7.2 16 16 16l320 0c8.8 0 16-7.2 16-16l0-192-352 0z"/></svg>';
+  // 「发行时间」下拉。选「自某日起…」时整块换成 [▾][日期框]：原来的展开箭头
+  // 挪到日期框左侧、并接管「换范围」（原生下拉收起来），日期框右侧仍是它自带的
+  // 日历图标（用户 2026-11-26）。
+  //   opts.value / opts.since    当前选择
+  //   opts.defaultLabel          有默认项时它的文案（如「近 180 天」），无则不列
+  //   opts.defaultSince          选「自某日起…」时预填的日期（缺省 = 近 30 天）
+  //   opts.disabledWhy(key)      返回原因 → 该项不可选，原因放进 title
+  //   opts.minDate               日期框能选的最早一天
+  //   opts.onChange(key, since)  选择变了（选「自某日起…」时立刻按日期框里的日子生效）
+  //   opts.variant               "native"（tab，原生 form-control）| "dp"（发现页）
+  function drMount(opts) {
+    var dp = opts.variant === "dp";
+    var wrap = document.createElement("div");
+    wrap.className = "ssd-range" + (dp ? " ssd-range-dp" : "");
+    var sel = document.createElement("select");
+    sel.className = (dp ? "" : "btn-secondary form-control ") + "ssd-range-sel";
+    sel.title = tc("发行时间", "Released");
+    sel.setAttribute("aria-label", tc("发行时间", "Released"));
+    var list = [];
+    if (opts.defaultLabel) list.push(["", opts.defaultLabel]);
+    list.push(["7", tc("近一周", "Past week")], ["30", tc("近一个月", "Past month")],
+      ["365", tc("近一年", "Past year")], ["all", tc("不限时间", "All time")],
+      ["since", tc("自某日起…", "Since a date…")]);
+    list.forEach(function (o) {
+      var op = document.createElement("option");
+      op.value = o[0];
+      op.textContent = o[1];
+      var why = opts.disabledWhy ? opts.disabledWhy(o[0]) : "";
+      if (why) {
+        op.disabled = true;
+        op.title = why;
+      }
+      sel.appendChild(op);
+    });
+    sel.value = opts.value || "";
+    if (sel.selectedIndex < 0) sel.value = list[0][0];
+    wrap.appendChild(sel);
+    // 选「自某日起…」时预填的日期：宿主给的「当前窗口起点」优先（这样刚切过去
+    // 窗口没变，不必重查源站），宿主没给才退回近 30 天
+    var sinceNow = drValidDate(opts.since) ? opts.since
+      : (drValidDate(opts.defaultSince) ? opts.defaultSince : drDefaultSince());
+    if (opts.minDate && sinceNow < opts.minDate) sinceNow = opts.minDate;
+    var pick = function (k) {
+      opts.onChange(k, k === "since" ? sinceNow : "");
+    };
+
+    // 自某日起：原生下拉收起，箭头变成独立按钮，点它弹出与下拉同一份选项
+    var menu = null, menuBtn = null;
+    var docOff = null, keyOff = null;
+    function closeMenu(refocus) {
+      if (menu) { menu.remove(); menu = null; }
+      if (docOff) { document.removeEventListener("pointerdown", docOff, true); docOff = null; }
+      if (keyOff) { document.removeEventListener("keydown", keyOff, true); keyOff = null; }
+      if (menuBtn) { menuBtn.setAttribute("aria-expanded", "false"); menuBtn.classList.remove("on"); }
+      if (refocus && menuBtn) menuBtn.focus();
+    }
+    function placeMenu() {
+      if (!menu) return;
+      menu.classList.remove("is-above");
+      menu.style.left = "";
+      menu.style.maxHeight = "";
+      var vv = window.visualViewport;
+      var vw = Math.round((vv && vv.width) || document.documentElement.clientWidth || window.innerWidth);
+      var vh = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight);
+      var vt = Math.round((vv && vv.offsetTop) || 0);
+      var vleft = Math.round((vv && vv.offsetLeft) || 0);
+      var gutter = 8;
+      var r = menu.getBoundingClientRect();
+      var dx = 0;
+      if (r.right > vleft + vw - gutter) dx = (vleft + vw - gutter) - r.right;
+      if (r.left + dx < vleft + gutter) dx = (vleft + gutter) - r.left;
+      if (dx) menu.style.left = (menu.offsetLeft + dx) + "px";
+      var r2 = menu.getBoundingClientRect();
+      var host = wrap.getBoundingClientRect();
+      var below = vt + vh - gutter - r2.top;
+      if (r2.bottom > vt + vh - gutter && host.top - vt - gutter - 4 > below) {
+        menu.classList.add("is-above");
+      }
+      menu.style.maxHeight = Math.max(120, Math.round(menu.classList.contains("is-above")
+        ? host.top - vt - gutter - 4 : below)) + "px";
+    }
+    function openMenu() {
+      if (menu) { closeMenu(true); return; }
+      closeCal();
+      menu = document.createElement("div");
+      // 原生 tab 借 bootstrap 的 .dropdown-menu 拿主题底色/描边/阴影；
+      // 发现页用 --sx-* 自己画（见 CSS）
+      menu.className = "ssd-range-menu" + (dp ? "" : " dropdown-menu show");
+      menu.setAttribute("role", "menu");
+      list.forEach(function (o) {
+        var item = document.createElement("button");
+        item.type = "button";
+        item.className = "ssd-range-item" + (dp ? "" : " dropdown-item") + (o[0] === sel.value ? " on" : "");
+        item.textContent = o[1];
+        item.setAttribute("role", "menuitemradio");
+        item.setAttribute("aria-checked", o[0] === sel.value ? "true" : "false");
+        var why = opts.disabledWhy ? opts.disabledWhy(o[0]) : "";
+        if (why) { item.disabled = true; item.title = why; }
+        item.addEventListener("click", function () {
+          if (item.disabled) return;
+          closeMenu(true);
+          if (o[0] === sel.value) return;
+          sel.value = o[0];
+          pick(o[0]);
+        });
+        menu.appendChild(item);
+      });
+      wrap.appendChild(menu);
+      if (menuBtn) { menuBtn.setAttribute("aria-expanded", "true"); menuBtn.classList.add("on"); }
+      placeMenu();
+      // 点面板外 / Esc 收回（同其它下拉）
+      docOff = function (e) {
+        if (menu && menu.contains(e.target)) return;
+        if (menuBtn && menuBtn.contains(e.target)) return;
+        closeMenu();
+      };
+      keyOff = function (e) {
+        if (e.key === "Escape" || e.key === "Esc") { e.stopPropagation(); closeMenu(true); }
+      };
+      document.addEventListener("pointerdown", docOff, true);
+      document.addEventListener("keydown", keyOff, true);
+    }
+
+    // 自绘日历：原生 <input type=date> 的日历弹层跟浏览器 UI 语言走，英文界面下
+    // 仍是中文（用户 2026-11-26）。这里把日期框换成文本输入 + 自绘月历，文案全走 tc
+    var cal = null, calBtn = null, calMonth = null;
+    var calDocOff = null, calKeyOff = null;
+    var CAL_EN_MONTHS = ["January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"];
+    var CAL_EN_WD = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    var CAL_ZH_WD = ["日", "一", "二", "三", "四", "五", "六"];
+    function closeCal(refocus) {
+      closeCalMenu();
+      if (cal) { cal.remove(); cal = null; }
+      if (calDocOff) { document.removeEventListener("pointerdown", calDocOff, true); calDocOff = null; }
+      if (calKeyOff) { document.removeEventListener("keydown", calKeyOff, true); calKeyOff = null; }
+      if (calBtn) {
+        calBtn.setAttribute("aria-expanded", "false");
+        calBtn.classList.remove("on");
+      }
+      if (refocus && calBtn) calBtn.focus();
+    }
+    function placeCal() {
+      if (!cal) return;
+      cal.classList.remove("is-above");
+      cal.style.left = "";
+      cal.style.maxHeight = "";
+      var vv = window.visualViewport;
+      var vw = Math.round((vv && vv.width) || document.documentElement.clientWidth || window.innerWidth);
+      var vh = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight);
+      var vt = Math.round((vv && vv.offsetTop) || 0);
+      var vleft = Math.round((vv && vv.offsetLeft) || 0);
+      var gutter = 8;
+      var r = cal.getBoundingClientRect();
+      var dx = 0;
+      if (r.right > vleft + vw - gutter) dx = (vleft + vw - gutter) - r.right;
+      if (r.left + dx < vleft + gutter) dx = (vleft + gutter) - r.left;
+      if (dx) cal.style.left = (cal.offsetLeft + dx) + "px";
+      var r2 = cal.getBoundingClientRect();
+      var host = wrap.getBoundingClientRect();
+      var below = vt + vh - gutter - r2.top;
+      var above = host.top - vt - gutter - 4;
+      if (r2.height > below && above > below) cal.classList.add("is-above");
+      var lim = Math.max(140, Math.round(cal.classList.contains("is-above") ? above : below));
+      cal.style.maxHeight = lim + "px";
+      // 只有真被限高时才允许内部滚动；否则 overflow 必须可见，
+      // 不然卡片里的月份/年份下拉会被裁掉
+      cal.classList.toggle("is-scroll", lim < r2.height - 1);
+    }
+    // 月份/年份下拉：照原生 react-datepicker 的做法，点头部中间的月份或年份展开一个
+    // 可滚动的列表（原生也是这么点的，用户 2026-11-27）。挂进卡片里，位置由原生的
+    // __month/year-dropdown 规则给（相对卡片居中、顶边贴着月份/年份文字的下沿）。
+    var calMenu = null;
+    function closeCalMenu() {
+      if (calMenu) { calMenu.remove(); calMenu = null; }
+      if (cal) {
+        var sels = cal.querySelectorAll(".ssd-range-cal-sel");
+        for (var i = 0; i < sels.length; i++) sels[i].setAttribute("aria-expanded", "false");
+      }
+    }
+    function openCalMenu(kind, anchor) {
+      var same = !!(calMenu && calMenu.ssdKind === kind);
+      closeCalMenu();
+      if (same) return;
+      var box = document.createElement("div");
+      // 类名沿用原生：月份是 __month-dropdown、年份是 __year-dropdown，配色直接吃主题
+      box.className = (kind === "m" ? "react-datepicker__month-dropdown" : "react-datepicker__year-dropdown") +
+        " ssd-range-cal-menu";
+      box.ssdKind = kind;
+      box.setAttribute("role", "listbox");
+      var items = [];
+      var m;
+      if (kind === "m") {
+        for (m = 0; m < 12; m++) items.push({ v: m, t: isZh() ? (m + 1) + " 月" : CAL_EN_MONTHS[m] });
+      } else {
+        var maxY = new Date().getFullYear();
+        var minY = parseInt(String(opts.minDate || DR_MIN_DATE).slice(0, 4), 10) || 1900;
+        for (var y = maxY; y >= minY; y--) items.push({ v: y, t: String(y) });
+      }
+      var cur = kind === "m" ? calMonth.getMonth() : calMonth.getFullYear();
+      items.forEach(function (it) {
+        var o = document.createElement("div");
+        // 选中项也照原生的写法：加 __month-option--selected_month / __year-option--selected_year，
+        // 前面挂一个 __*-option--selected 的 ✓ span
+        var on = it.v === cur;
+        o.className = (kind === "m" ? "react-datepicker__month-option" : "react-datepicker__year-option") +
+          " ssd-range-cal-opt" + (on ? " on" : "");
+        if (on) {
+          o.classList.add(kind === "m"
+            ? "react-datepicker__month-option--selected_month"
+            : "react-datepicker__year-option--selected_year");
+          var tick = document.createElement("span");
+          tick.className = kind === "m"
+            ? "react-datepicker__month-option--selected"
+            : "react-datepicker__year-option--selected";
+          tick.textContent = "✓";
+          o.appendChild(tick);
+        }
+        o.appendChild(document.createTextNode(it.t));
+        o.setAttribute("role", "option");
+        o.setAttribute("aria-selected", on ? "true" : "false");
+        o.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (kind === "m") calMonth = new Date(calMonth.getFullYear(), it.v, 1);
+          else calMonth = new Date(it.v, calMonth.getMonth(), 1);
+          closeCalMenu();
+          buildCal();
+          placeCal();
+        });
+        box.appendChild(o);
+      });
+      // 挂在卡片内部：主题只对「div.react-datepicker 下的 __month/__year-dropdown」上色
+      cal.appendChild(box);
+      calMenu = box;
+      anchor.setAttribute("aria-expanded", "true");
+      // 位置交给原生规则：__month/year-dropdown 是 position:absolute + width:50% +
+      // left:25% + top:30px，也就是「相对日历卡水平居中、顶边刚好压在月份/年份文字下方」。
+      // 以前这里用内联 left/top 贴着读值左对齐，反而不像原生（用户 2026-11-27）。
+      // 打开时把当前项滚到中间（年份列表很长）
+      var on = box.querySelector(".ssd-range-cal-opt.on");
+      if (on) box.scrollTop = Math.max(0, on.offsetTop - Math.round(box.clientHeight / 2));
+    }
+    /* 自绘月历：DOM 结构、类名、配色全部沿用 Stash 原生的 react-datepicker
+       （div.react-datepicker > __month-container > __header + __month > __week > __day），
+       这样 Stash 自带样式和第三方主题对原生日历的覆盖都会自动生效。
+       序列：__day-names 的 Su/Mo/Tu/We/Th/Fr/Sa，日格 24×24、margin 2.324、选中 #216ba5。 */
+    function buildCal() {
+      closeCalMenu();
+      if (cal) cal.remove();
+      cal = document.createElement("div");
+      cal.className = "ssd-range-cal-pop react-datepicker";
+      cal.setAttribute("role", "dialog");
+      cal.setAttribute("aria-label", tc("选择起始日期", "Pick a start date"));
+
+      function navBtn(dir) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "react-datepicker__navigation react-datepicker__navigation--" + dir + " ssd-range-cal-nav is-" + dir;
+        var ico = document.createElement("span");
+        ico.className = "react-datepicker__navigation-icon react-datepicker__navigation-icon--" + dir;
+        ico.textContent = dir === "previous" ? tc("上个月", "Previous month") : tc("下个月", "Next month");
+        b.appendChild(ico);
+        var label = dir === "previous" ? tc("上个月", "Previous month") : tc("下个月", "Next month");
+        b.title = label;
+        b.setAttribute("aria-label", label);
+        b.addEventListener("click", function () {
+          calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + (dir === "previous" ? -1 : 1), 1);
+          buildCal();
+          placeCal();
+        });
+        return b;
+      }
+      cal.appendChild(navBtn("previous"));
+      cal.appendChild(navBtn("next"));
+
+      // 头部中间的月份/年份：原生是 __month-read-view / __year-read-view（加粗、居中、无下箭头）
+      var mBox = document.createElement("div");
+      mBox.className = "react-datepicker__month-dropdown-container react-datepicker__month-dropdown-container--scroll";
+      var mBtn = document.createElement("div");
+      mBtn.className = "react-datepicker__month-read-view ssd-range-cal-sel";
+      mBtn.setAttribute("role", "button");
+      mBtn.tabIndex = 0;
+      mBtn.title = tc("选择月份", "Pick a month");
+      mBtn.setAttribute("aria-haspopup", "listbox");
+      mBtn.setAttribute("aria-expanded", "false");
+      var mTxt = document.createElement("span");
+      mTxt.className = "react-datepicker__month-read-view--selected-month";
+      mTxt.textContent = isZh() ? (calMonth.getMonth() + 1) + " 月" : CAL_EN_MONTHS[calMonth.getMonth()];
+      mBtn.appendChild(mTxt);
+      mBox.appendChild(mBtn);
+
+      var yBox = document.createElement("div");
+      yBox.className = "react-datepicker__year-dropdown-container react-datepicker__year-dropdown-container--scroll";
+      var yBtn = document.createElement("div");
+      yBtn.className = "react-datepicker__year-read-view ssd-range-cal-sel";
+      yBtn.setAttribute("role", "button");
+      yBtn.tabIndex = 0;
+      yBtn.title = tc("选择年份", "Pick a year");
+      yBtn.setAttribute("aria-haspopup", "listbox");
+      yBtn.setAttribute("aria-expanded", "false");
+      var yTxt = document.createElement("span");
+      yTxt.className = "react-datepicker__year-read-view--selected-year";
+      yTxt.textContent = String(calMonth.getFullYear());
+      yBtn.appendChild(yTxt);
+      yBox.appendChild(yBtn);
+
+      var dd = document.createElement("div");
+      dd.className = "react-datepicker__header__dropdown react-datepicker__header__dropdown--scroll";
+      dd.appendChild(mBox);
+      dd.appendChild(yBox);
+
+      var head = document.createElement("div");
+      head.className = "react-datepicker__header";
+      head.appendChild(dd);
+      var dn = document.createElement("div");
+      dn.className = "react-datepicker__day-names";
+      (isZh() ? CAL_ZH_WD : CAL_EN_WD).forEach(function (w) {
+        var c = document.createElement("div");
+        c.className = "react-datepicker__day-name";
+        c.textContent = w;
+        dn.appendChild(c);
+      });
+      head.appendChild(dn);
+
+      var mon = document.createElement("div");
+      mon.className = "react-datepicker__month";
+      mon.setAttribute("role", "listbox");
+      mon.setAttribute("aria-label", tc("日期", "Date"));
+
+      var y0 = calMonth.getFullYear();
+      var m0 = calMonth.getMonth();
+      var daysInMonth = new Date(y0, m0 + 1, 0).getDate();
+      var lead = new Date(y0, m0, 1).getDay();
+      var prevDays = new Date(y0, m0, 0).getDate();
+      var maxD = localDateStr(new Date());
+      var minD = opts.minDate || DR_MIN_DATE;
+      var cells = [];
+      var k;
+      for (k = lead - 1; k >= 0; k--) cells.push({ d: prevDays - k, out: true });
+      for (k = 1; k <= daysInMonth; k++) cells.push({ d: k, out: false });
+      var nx = 1;
+      while (cells.length % 7) cells.push({ d: nx++, out: true });
+
+      for (var wi = 0; wi < cells.length; wi += 7) {
+        var wk = document.createElement("div");
+        wk.className = "react-datepicker__week";
+        for (var ci = 0; ci < 7; ci++) {
+          var cell = cells[wi + ci];
+          var day;
+          if (cell.out) {
+            // 前后补位的日子：原生也是同一份白字、不属于本月，这里只显示不可点
+            day = document.createElement("div");
+            day.className = "react-datepicker__day react-datepicker__day--outside-month ssd-range-cal-day";
+            day.textContent = String(cell.d);
+          } else {
+            var dv = localDateStr(new Date(y0, m0, cell.d));
+            var cls = "react-datepicker__day ssd-range-cal-day";
+            if (ci === 0 || ci === 6) cls += " react-datepicker__day--weekend";
+            if (dv === applied) cls += " react-datepicker__day--selected on";
+            if (dv === maxD) cls += " react-datepicker__day--today";
+            if (dv < minD || dv > maxD) cls += " react-datepicker__day--disabled";
+            day = document.createElement("div");
+            day.className = cls;
+            day.textContent = String(cell.d);
+            day.setAttribute("role", "button");
+            day.ssdDate = dv;
+            if (dv >= minD && dv <= maxD) {
+              day.tabIndex = 0;
+              day.addEventListener("click", function () {
+                var v = this.ssdDate;
+                closeCal();
+                date.value = v;
+                applied = v;
+                opts.onChange("since", v);
+              });
+            }
+          }
+          wk.appendChild(day);
+        }
+        mon.appendChild(wk);
+      }
+
+      var mc = document.createElement("div");
+      mc.className = "react-datepicker__month-container";
+      mc.appendChild(head);
+      mc.appendChild(mon);
+      cal.appendChild(mc);
+
+      mBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openCalMenu("m", mBtn);
+      });
+      yBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openCalMenu("y", yBtn);
+      });
+      // 翻月会重建：重建完直接挂回去（openCal 里那次 append 只是首次的兜底）
+      wrap.appendChild(cal);
+    }
+    function openCal() {
+      if (cal) { closeCal(true); return; }
+      closeMenu();
+      var seed = drValidDate(date.value) ? date.value : sinceNow;
+      calMonth = new Date(seed + "T00:00:00");
+      calMonth.setDate(1);
+      buildCal();
+      wrap.appendChild(cal);
+      if (calBtn) {
+        calBtn.setAttribute("aria-expanded", "true");
+        calBtn.classList.add("on");
+      }
+      placeCal();
+      calDocOff = function (e) {
+        if (cal && cal.contains(e.target)) return;
+        if (calMenu && calMenu.contains(e.target)) return;
+        if (calBtn && calBtn.contains(e.target)) return;
+        closeCal();
+      };
+      calKeyOff = function (e) {
+        if (e.key === "Escape" || e.key === "Esc") {
+          e.stopPropagation();
+          if (calMenu) { closeCalMenu(); return; }
+          closeCal(true);
+        }
+      };
+      document.addEventListener("pointerdown", calDocOff, true);
+      document.addEventListener("keydown", calKeyOff, true);
+    }
+
+    if (sel.value === "since") {
+      // 原生下拉收起来：[▾][日期框][日历] 连成一组（一个 btn-group 的观感）
+      sel.classList.add("is-hidden");
+      var since = document.createElement("div");
+      since.className = "ssd-range-since";
+      menuBtn = document.createElement("button");
+      menuBtn.type = "button";
+      menuBtn.className = (dp ? "" : "btn btn-secondary ") + "ssd-range-open";
+      menuBtn.innerHTML = DR_CARET;
+      menuBtn.title = tc("换发行时间范围", "Change the release range");
+      menuBtn.setAttribute("aria-haspopup", "menu");
+      menuBtn.setAttribute("aria-expanded", "false");
+      menuBtn.setAttribute("aria-label", tc("换发行时间范围", "Change the release range"));
+      menuBtn.addEventListener("click", openMenu);
+
+      var date = document.createElement("input");
+      date.type = "text";
+      date.inputMode = "numeric";
+      date.autocomplete = "off";
+      date.spellcheck = false;
+      // 与旁边的下拉同一套原生类：Stash 没改 .form-control 的白底，只有
+      // .btn-secondary.form-control（每页数量那个下拉）是深色
+      date.className = (dp ? "" : "btn-secondary form-control ") + "ssd-range-date";
+      date.value = sinceNow;
+      date.maxLength = 10;
+      date.placeholder = "YYYY-MM-DD";
+      date.title = tc("从这天起（含当天）", "From this day on, inclusive");
+      date.setAttribute("aria-label", tc("起始日期", "Start date"));
+      // 打字时逐段补横线，停手 700ms 再生效；失焦或回车立即生效；同一天不重复生效
+      var commitTimer = 0;
+      var applied = sinceNow;
+      var commit = function () {
+        clearTimeout(commitTimer);
+        var v = date.value;
+        if (!drValidDate(v) || v < DR_MIN_DATE) return;
+        if (opts.minDate && v < opts.minDate) v = opts.minDate;
+        var maxD = localDateStr(new Date());
+        if (v > maxD) v = maxD;
+        if (v === applied) return;
+        applied = v;
+        opts.onChange("since", v);
+      };
+      date.addEventListener("input", function () {
+        var digits = String(date.value || "").replace(/\D/g, "").slice(0, 8);
+        var out = digits;
+        if (digits.length > 6) out = digits.slice(0, 4) + "-" + digits.slice(4, 6) + "-" + digits.slice(6);
+        else if (digits.length > 4) out = digits.slice(0, 4) + "-" + digits.slice(4);
+        if (out !== date.value) date.value = out;
+        clearTimeout(commitTimer);
+        commitTimer = setTimeout(commit, 700);
+      });
+      date.addEventListener("change", function () {
+        clearTimeout(commitTimer);
+        commitTimer = setTimeout(commit, 700);
+      });
+      date.addEventListener("blur", commit);
+      date.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") commit();
+      });
+
+      calBtn = document.createElement("button");
+      calBtn.type = "button";
+      calBtn.className = (dp ? "" : "btn btn-secondary ") + "ssd-range-cal";
+      calBtn.innerHTML = DR_CAL;
+      calBtn.title = tc("选择日期", "Pick a date");
+      calBtn.setAttribute("aria-haspopup", "dialog");
+      calBtn.setAttribute("aria-expanded", "false");
+      calBtn.setAttribute("aria-label", tc("选择日期", "Pick a date"));
+      calBtn.addEventListener("click", openCal);
+
+      since.appendChild(menuBtn);
+      since.appendChild(date);
+      since.appendChild(calBtn);
+      wrap.appendChild(since);
+    }
+    sel.addEventListener("change", function () { pick(sel.value); });
+    return wrap;
+  }
+
+  // 本地窗口的起始日：「不限时间（本次）」最优先，其次工具栏的「发行时间」，
+  // 再其次设置里的近期窗口
+  function tabRecentCut() {
+    if (_state.windowRelaxed) return null;
+    return tabWindowStart();
+  }
+  // 工具栏「发行时间」当前对应的窗口起点（未选/非法时 = 设置里的近期窗口）。
+  // 「自某日起…」预填的日期就用它：切过去等于窗口没变，不重查源站
+  function tabWindowStart() {
+    var c = drCutoff(_state.rangeKey, _state.rangeSince);
+    return c === undefined ? recentCutoffDate(_state.recentDays) : c;
+  }
+  // 按热度排时不问 TPDB：它没有热度数据，REST 适配层还会忽略排序、把日期条件
+  // 当成起始日按日期返回，混进来只会按日期插队
+  function tabSortSkips(box) {
+    return _state.sortField === "POPULARITY" && isTPDBBox(box);
+  }
+  // 当前排序下略过的源的名字（工具栏下的提示与空态说明用）
+  function tabSkippedNames() {
+    return (_state.queryBoxes || []).filter(tabSortSkips).map(sourceLabel).join(", ");
+  }
+  // 当前源里试过「按热度排」被拒（不认 POPULARITY）的源名字：用来解释
+  // 「为什么现在是按日期」（C 方案）
+  function tabNoPopNames() {
+    return (_state.queryBoxes || []).filter(function (b) {
+      return _state.popUnsupported[b.endpoint];
+    }).map(sourceLabel).join(", ");
+  }
+  // 窗口下界（推给源的 date 条件）。源只认 GREATER_THAN（严格大于），正好落在
+  // 起始日当天的场景会被源剔掉，而客户端窗口（rd < cut 才丢）本该保留它们：
+  // 推给源时把起始日往前挪一天，客户端再自己裁。
   function windowLowerBound() {
-    var days = _state.recentDays;
-    if (!days || days <= 0) return null;
-    return recentCutoffDate(days + 1);
+    var cut = tabRecentCut();
+    return cut ? drDayBefore(cut) : null;
   }
 
   // ─── State ────────────────────────────────────────────────────────────────
@@ -1172,6 +1752,10 @@
     sortField: "DATE",         // DATE | TITLE | DURATION | PERFORMERS（演员数，源端无对应枚举 → 按 DATE 取回后本地排）
                                // | POPULARITY（stash-box 上匹配过该场景的用户数，源端排序，本地没有这个字段）
     popUnsupported: {},        // endpoint -> true：该源不认 POPULARITY（stash-box 0.9 之前），菜单里不再出现热度
+    // 工具栏「发行时间」（K2）：覆盖设置里的近期窗口，见 tabRecentCut。
+    // 与「不限时间（本次）」一样是会话内的观看辅助，换演员即复位
+    rangeKey: "",              // "" | 7 | 30 | 365 | all | since
+    rangeSince: "",
     zoom: 1,                   // card size 0-3 (native SceneCardGrid zoomWidths)
     displayMode: "grid",       // grid | list — seeded from localStorage below
     refocusSearch: false,      // restore search-input focus after re-render
@@ -1190,9 +1774,21 @@
     allLoaded: false,          // all box pages exhausted
     loadingPage: false,        // currently fetching more pages
     searchQuery: "",           // client-side filter text
+    // 标签筛选：与 searchQuery 同口径（只筛已拉到的缓存，换演员即复位）。
+    // tagUi 记面板的开合/搜索词/滚动位置：工具栏每次整块重绘，靠它把面板原样恢复
+    tagRules: null,            // tfNewRules() 的实例，见标签筛选模块
+    tagUi: null,               // tfNewUi() 的实例
+    // 带标签问源站（K4）：这一轮是拿什么规则问的（""＝没带标签问），和「不带标签时
+    // 那一批场景」（面板继续列标签用，否则每选一个标签列表就跟着缩）
+    tagLoadSig: "",
+    tagUniverse: [],
+    boxTagMissing: {},         // endpoint -> [源上缺的「必须有」标签名]，跳过该源的原因
     // 临时查看已忽略（用户 2026-10-30）：只改这一屏看不看，不动忽略记录。
     // 与「不限时间（本次）」同口径 —— 都是 session 内的观看辅助，换人/刷新即复位
     showIgnored: false,
+    // K7：按标题认出来「已在库中」的片默认跟已入库一样藏起来；这个是「本次显示」
+    // （用来核对认得对不对），换人/刷新即复位
+    showInLib: false,
     localPerformerMaps: {},    // endpoint(lower) -> box performer id(lower) -> {id,name,image_path}
   };
 
@@ -1272,11 +1868,15 @@
   // 演员传 {performers:{value:[id],...}}，工作室传 {studios:{value:[id],...}}
   function loadLocalSceneKeys(sceneFilter) {
     var keys = {};
+    // K7：顺手带上本地场景本身（id/标题/日期/时长），按标题认「已在库中」要用。
+    // 不可枚举 —— 所有把 keys 当字典遍历的地方看不见它
+    var list = [];
+    Object.defineProperty(keys, "__scenes", { value: list, enumerable: false });
     var page = 1, perPage = 200;
 
     function fetchPage() {
       return callGQL(
-        "query($f:FindFilterType!,$sf:SceneFilterType!){findScenes(filter:$f,scene_filter:$sf){count scenes{id code title files{duration} stash_ids{endpoint stash_id}}}}",
+        "query($f:FindFilterType!,$sf:SceneFilterType!){findScenes(filter:$f,scene_filter:$sf){count scenes{id code title date files{duration} stash_ids{endpoint stash_id}}}}",
         {
           f: { page: page, per_page: perPage },
           sf: sceneFilter
@@ -1298,11 +1898,12 @@
           (s.files || []).forEach(function (f) {
             if (!dur && f && Number(f.duration) > 0) dur = Number(f.duration);
           });
-          if (s.title) {
-            var tk = "t:" + normTitle(s.title);
-            // 0 = 本地这条没有文件，时长未知（判定时退化成只比标题）
-            (keys[tk] || (keys[tk] = [])).push(dur);
-          }
+          list.push({
+            id: String(s.id),
+            title: s.title || "",
+            date: s.date || "",
+            duration: dur,
+          });
         });
         if (page * perPage < result.count) {
           page++;
@@ -1372,35 +1973,45 @@
     // 的总数。留给客户端过滤的话，源上按日期排的 1500 多条得翻十几页才凑满一屏。
     var lo = windowLowerBound();
     if (lo) input.date = { value: lo, modifier: "GREATER_THAN" };
-    return _boxRateLimiter.submit(function () {
-      // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
-      return callBoxSceneList(box, input, BOX_PAGE_TIMEOUT_MS);
-    }).then(function (result) {
-      if (!result || !result.scenes) {
-        return { scenes: [], count: 0, perPage: boxPerPage, hasMore: false, sig: "" };
+    // 带标签问源站（K4）：crit 在进限流器之前算好（查标签 id 也是请求，但走
+    // 独立的 searchTag，不吃场景查询的并发通道）
+    return tagCriterion(box).then(function (tagq) {
+      if (tagq.skip) {
+        return { scenes: [], count: 0, perPage: boxPerPage, hasMore: false, sig: "", tagSkip: tagq.missing || [] };
       }
-      var items = result.scenes.map(function (sc) {
+      if (tagq.crit) input.tags = tagq.crit;
+      return _boxRateLimiter.submit(function () {
+        // TPDB 的 queryScenes 恒返回空（服务端故障），内部自动改走 REST
+        return callBoxSceneList(box, input, BOX_PAGE_TIMEOUT_MS);
+      }).then(function (result) {
+        if (!result || !result.scenes) {
+          return { scenes: [], count: 0, perPage: boxPerPage, hasMore: false, sig: "" };
+        }
+        // 顺手把场景里的标签 id 记进词典：下次同一个标签不必再 searchTag
+        if (!isTPDBBox(box)) tagIdsRemember(box.endpoint, result.scenes);
+        var items = result.scenes.map(function (sc) {
+          return {
+            box: box,
+            boxName: brandNameForEndpoint(box.endpoint, box.name || box.endpoint),
+            endpoint: box.endpoint,
+            scene: sc,
+            images: (sc.images || []).map(function (img) { return { url: img.url, type: "image" }; }),
+          };
+        });
+        var len = items.length;
         return {
-          box: box,
-          boxName: brandNameForEndpoint(box.endpoint, box.name || box.endpoint),
-          endpoint: box.endpoint,
-          scene: sc,
-          images: (sc.images || []).map(function (img) { return { url: img.url, type: "image" }; }),
+          scenes: items,
+          count: result.count || 0,
+          perPage: boxPerPage,
+          // queryScenes 不返回 hasMore，只有 TPDB 的 meta 有真值 —— 其余留 null，
+          // 交给调用方用 count 判，别再拿「本页有没有回满」猜。
+          hasMore: result.hasMore == null ? null : !!result.hasMore,
+          // 整页指纹：源无视 page 参数时每页都一样，用来判死循环
+          sig: len ? (items[0].scene.id + "|" + items[len - 1].scene.id + "|" + len) : "",
+          truncated: !!result.truncated,
+          skipped: result.skipped || [],
         };
       });
-      var len = items.length;
-      return {
-        scenes: items,
-        count: result.count || 0,
-        perPage: boxPerPage,
-        // queryScenes 不返回 hasMore，只有 TPDB 的 meta 有真值 —— 其余留 null，
-        // 交给调用方用 count 判，别再拿「本页有没有回满」猜。
-        hasMore: result.hasMore == null ? null : !!result.hasMore,
-        // 整页指纹：源无视 page 参数时每页都一样，用来判死循环
-        sig: len ? (items[0].scene.id + "|" + items[len - 1].scene.id + "|" + len) : "",
-        truncated: !!result.truncated,
-        skipped: result.skipped || [],
-      };
     });
   }
 
@@ -1447,7 +2058,7 @@
   // page is not date-ordered, so the boundary says nothing about the next page.
   function boxPageOutOfWindow(scenes) {
     if (serverSortField() !== "DATE") return false;
-    var recentCut = recentCutoffDate(_state.recentDays);
+    var recentCut = tabRecentCut();
     var previewCut = previewCutoffDate(_state.previewDays);
     for (var i = scenes.length - 1; i >= 0; i--) {
       var rd = scenes[i].scene.release_date;
@@ -1481,10 +2092,26 @@
     // be retried on every recursive call.  The next load (retry button / window
     // change / tab re-entry) clears the flag and queries it again.
     var activeBoxes = _state.queryBoxes.filter(function (b) {
+      // 按热度排时跳过 TPDB：它没有热度数据，REST 适配层还会忽略排序
+      if (tabSortSkips(b)) return false;
       return !_state.boxExhausted[b.endpoint] && !_state.boxFailed[b.endpoint];
     });
 
     if (activeBoxes.length === 0) {
+      // 这个演员只有 TPDB 编号：热度排不了，所有源都被跳过 → 自动改回按日期，
+      // 否则这张表永远空着，看不出是被排序挡的（灰块里会写原因）
+      // 这个演员只有 TPDB 编号：热度排不了，所有源都被跳过 → 一页都还没取时
+      // 自动改回按日期，否则这张表永远空着，看不出是被排序挡的（灰块写原因）。
+      // 已经取过页（说明别的源给过结果、只是都被过滤/到底了）就不再翻：
+      // 那等于把排好的热度序整表作废。
+      if (_state.sortField === "POPULARITY" && _state.boxFetchedTotal === 0 &&
+          (_state.queryBoxes || []).some(tabSortSkips)) {
+        _state.sortField = "DATE";
+        _state.sortDir = "DESC";
+        resetBoxCache();
+        _state.loadingPage = false;
+        return ensureMissingLoaded(needed);
+      }
       _state.allLoaded = true;
       _state.loadingPage = false;
       return Promise.resolve(_state.cachedMissing);
@@ -1498,6 +2125,13 @@
         _state.boxCursors[b.endpoint] = pageNum + 1;
         delete _state.boxFailed[b.endpoint];
         _state.boxStatus[b.endpoint] = { ok: true };
+        // K4：源上没有这个「必须有」的标签 → 这个源这一轮什么都给不了。
+        // 记下来画提示（静默跳过看起来就像「这个演员没片」）
+        if (result.tagSkip && result.tagSkip.length) {
+          _state.boxTagMissing[b.endpoint] = result.tagSkip.slice();
+          _state.boxExhausted[b.endpoint] = true;
+          return result.scenes;
+        }
         var fetched = (_state.boxFetched[b.endpoint] || 0) + result.scenes.length;
         _state.boxFetched[b.endpoint] = fetched;
         if (result.truncated) _state.boxTruncated[b.endpoint] = true;
@@ -1552,26 +2186,40 @@
         _state.loadingPage = false;
         _state.sortField = "DATE";
         resetBoxCache();
-        SSD.toast(tc("这个源不支持按热度排序，已改回按日期",
-                     "This source can't sort by popularity; back to date"));
+        // C 方案（用户 2026-11-26）：不弹 toast，改由工具栏下常驻一块灰色提示
+        // 「StashDB 版本较旧 · 已按日期」，提示按 popUnsupported 在渲染时画
         return ensureMissingLoaded(needed);
       }
       var newItems = [];
-      pageResults.forEach(function (list) { newItems = newItems.concat(list); });
+      // 按热度排时结果没有日期序，多源直接 concat 会让第一个源的整页占满前几屏
+      // （另一个源的更热条目排在它后面）。按「名次轮转」交错：第 1 名、第 1 名、
+      // 第 2 名、第 2 名… 与人工看榜的顺序一致
+      if (_state.sortField === "POPULARITY" && pageResults.length > 1) {
+        var maxLen = 0;
+        pageResults.forEach(function (l) { if (l.length > maxLen) maxLen = l.length; });
+        for (var i = 0; i < maxLen; i++) {
+          for (var j = 0; j < pageResults.length; j++) {
+            if (pageResults[j][i]) newItems.push(pageResults[j][i]);
+          }
+        }
+      } else {
+        pageResults.forEach(function (list) { newItems = newItems.concat(list); });
+      }
 
       // Filter owned + window. Scenes dropped by the window are counted so the
       // empty panel can offer "unlimited time range (this session)" instead of
       // pretending there is nothing left on the source.
-      var recentCut = recentCutoffDate(_state.recentDays);
+      // 按热度排时窗口由源端过滤，本地数不到被滤掉几个（droppedNow 恒 0）
+      var recentCut = tabRecentCut();
       var previewCut = previewCutoffDate(_state.previewDays);
       var droppedNow = 0;
       var metaNow = 0;
       var filtered = newItems.filter(function (item) {
         var m = localMatch(item);
-        if (m !== MATCH_NONE) {
-          if (m === MATCH_META) metaNow++;
-          return false;
-        }
+        if (m === MATCH_ID || m === MATCH_CODE) return false;
+        // K7：按标题认出来的「已在库中」留在缓存里（列表默认不显示，但
+        // 「显示」能把它们放出来核对，卡片上带「在库中」+「加编号」）
+        if (m === MATCH_META) metaNow++;
         var rd = item.scene.release_date;
         if (!rd) return true;
         if (recentCut && rd < recentCut) { droppedNow++; return false; }
@@ -1619,6 +2267,7 @@
       }
 
       var anyActive = _state.queryBoxes.some(function (b) {
+        if (tabSortSkips(b)) return false;
         return !_state.boxExhausted[b.endpoint] && !_state.boxFailed[b.endpoint];
       });
       if (!anyActive) _state.allLoaded = true;
@@ -1670,28 +2319,77 @@
     });
   }
 
-  // ── 「在库中」判定 ──────────────────────────────────────────────────────
+  // ── 「在库中」判定（K7 升级）────────────────────────────────────────────
   // 编号（stash_ids / 番号）对不上但片子其实已经在库里的情况：本地那份是从别处
-  // 抓的，没写过源端 id。按标题认，标题一致再拿时长核一下（防同系列不同集）。
+  // 抓的（甚至没写过源端 id）。按标题认，规则比「标题全等 + 时长 ±60s」宽一档：
+  //   1. 两边标题先把演员名去掉（「Jane Doe」这种只写名字的标题，否则会整词
+  //      出现在这位演员每一部的标题里，等于全命中）
+  //   2. 归一化（小写、& → and、标点全部折成空格）
+  //   3. 完全相同 → 命中；几乎相同（一个标题整词包含另一个，或词重合 ≥60%）
+  //      要求时长差 ≤90s 或发行日差 ≤14 天；含数字的词不同（Part 2 / Part 3、
+  //      E10 / E11）一律不算
+  //   4. 去掉名字后什么都不剩（纯演员名标题）→ 要时长和日期**都**接近才算
   // 只在演员/工作室详情页的 tab 里做：那里的本地场景本来就按演员/工作室过滤过，
-  // 查询顺手多带 title/duration，不是全库扫描。发现页不做（那边的「在库中」
-  // 是演员级的编号判断，场景层面本来就不判）。
-  // 60s 是同一部片不同 release 的片头/片尾差异；本地没有文件（取不到时长）
-  // 或源没给时长时，只认标题全等。
-  var TITLE_DUR_TOL = 60;
-
-  function normTitle(t) {
-    return String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  // 查询顺手多带 title/date/duration，不是全库扫描。发现页不做场景级判定。
+  function lmNorm(t) {
+    return String(t || "").toLowerCase().replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  }
+  function lmNoNames(t, names) {
+    var s = " " + t + " ";
+    (names || []).forEach(function (n) {
+      n = lmNorm(n);
+      if (n) s = s.split(" " + n + " ").join(" ");
+    });
+    return s.replace(/ +/g, " ").trim();
+  }
+  // "exact" / "near" / "weak"（两边去掉名字后都空、原文相同）/ ""
+  function lmTitleHow(a, b, names) {
+    var x0 = lmNorm(a), y0 = lmNorm(b);
+    if (!x0 || !y0) return "";
+    var x = lmNoNames(x0, names), y = lmNoNames(y0, names);
+    if (!x || !y) return !x && !y && x0 === y0 ? "weak" : "";
+    if (x === y) return "exact";
+    var wx = x.split(" "), wy = y.split(" ");
+    var inX = {}, inY = {};
+    wx.forEach(function (w) { inX[w] = 1; });
+    wy.forEach(function (w) { inY[w] = 1; });
+    var differ = Object.keys(inX).filter(function (w) { return !inY[w]; })
+      .concat(Object.keys(inY).filter(function (w) { return !inX[w]; }));
+    if (differ.some(function (w) { return /\d/.test(w); })) return "";  // Part 2 / Part 3
+    if (Math.min(x.length, y.length) >= 8 &&
+        ((" " + x + " ").indexOf(" " + y + " ") >= 0 || (" " + y + " ").indexOf(" " + x + " ") >= 0)) return "near";
+    var all = Object.keys(Object.assign({}, inX, inY)).length;
+    var both = Object.keys(inX).filter(function (w) { return inY[w]; }).length;
+    return all >= 3 && both / all >= 0.6 ? "near" : "";
+  }
+  function lmDays(a, b) {
+    var x = Date.parse(String(a || "").slice(0, 10)), y = Date.parse(String(b || "").slice(0, 10));
+    return isNaN(x) || isNaN(y) ? Infinity : Math.abs(x - y) / 86400000;
+  }
+  // 本地场景列表里最匹配的一条（找不到返回 null）
+  function lmByTitle(sc, local) {
+    if (!sc || !sc.title || !local || !local.length) return null;
+    var near = null;
+    var names = (sc.performers || []).map(function (p) {
+      return ((p && p.performer) || p || {}).name;
+    }).filter(Boolean);
+    for (var i = 0; i < local.length; i++) {
+      var l = local[i], how = lmTitleHow(sc.title, l.title, names);
+      if (!how) continue;
+      var durOk = !!(sc.duration && l.duration && Math.abs(sc.duration - l.duration) <= 90);
+      var dayOk = lmDays(sc.release_date, l.date) <= 14;
+      if (how === "exact") return l;
+      if (near) continue;
+      if (how === "near" && (durOk || dayOk)) near = l;
+      else if (how === "weak" && durOk && dayOk) near = l;  // 纯演员名标题：时长和日期都要接近
+    }
+    return near;
   }
 
+  // 兼容旧入口：返回库里那条的 id（找不到返回 ""）
   function titleInLibrary(sc, keys) {
-    if (!sc || !sc.title) return false;
-    var durs = (keys || _state.localSceneKeys)["t:" + normTitle(sc.title)];
-    if (!durs || !durs.length) return false;
-    var d = Number(sc.duration) || 0;
-    var known = durs.filter(function (x) { return x > 0; });
-    if (!d || !known.length) return true;
-    return known.some(function (ld) { return Math.abs(ld - d) <= TITLE_DUR_TOL; });
+    var l = lmByTitle(sc, (keys || _state.localSceneKeys).__scenes || []);
+    return l ? l.id : "";
   }
 
   var MATCH_NONE = 0, MATCH_ID = 1, MATCH_CODE = 2, MATCH_META = 3;
@@ -1707,12 +2405,151 @@
     if (sc.code && codeDedupeOn() && owned["code:" + String(sc.code).trim().toLowerCase()]) {
       return MATCH_CODE;
     }
-    if (titleInLibrary(sc, owned)) return MATCH_META;
+    var lid = titleInLibrary(sc, owned);
+    if (lid) {
+      // K7：记住库里那条的 id，卡片/行上的「在库中」要能点开它
+      item.inLib = { id: lid, how: "title" };
+      return MATCH_META;
+    }
     return MATCH_NONE;
   }
 
   function isSceneOwned(item, keys) {
     return localMatch(item, keys) !== MATCH_NONE;
+  }
+
+  // ── 「在库中」的交互（K7）────────────────────────────────────────────────
+  // 卡片 / 行上的「在库中」是个链接：点开库里那条。已知 id 时直接去；不知道时
+  // 先按这个源的编号找，再按番号找。「加编号」把这个源的编号写到库里那条上
+  // （其它源的编号留着），下次按编号就认得，这张卡不再出现。
+  function openLocalCopy(item, label) {
+    if (item.inLib && item.inLib.id) {
+      window.location.assign(appUrl("/scenes/" + encodeURIComponent(item.inLib.id)));
+      return Promise.resolve(item.inLib.id);
+    }
+    var sc = item.scene || {};
+    var ep = item.endpoint || (item.box && item.box.endpoint);
+    if (!ep) return Promise.resolve("");
+    var q = "query($sf:SceneFilterType){findScenes(filter:{per_page:1},scene_filter:$sf){scenes{id}}}";
+    var first = function (d) {
+      var x = ((d || {}).findScenes || {}).scenes || [];
+      return x.length ? String(x[0].id) : "";
+    };
+    return callGQL(q, { sf: { stash_id_endpoint: { endpoint: ep, stash_id: String(sc.id), modifier: "EQUALS" } } })
+      .then(first)
+      .then(function (id) {
+        if (id || !sc.code) return id;
+        return callGQL(q, { sf: { code: { value: String(sc.code), modifier: "EQUALS" } } }).then(first);
+      })
+      .then(function (id) {
+        if (id) {
+          window.location.assign(appUrl("/scenes/" + encodeURIComponent(id)));
+          return id;
+        }
+        if (label) label.title = tc("库里没找到这部片", "Couldn't find it in your library");
+        return "";
+      }, function (e) {
+        console.warn("[SSD] open copy", (e && e.message) || e);
+        return "";
+      });
+  }
+  // 「在库中」标签当按钮用：点它开库里那条，不冒泡去开场景弹窗
+  function ownedLabelClick(label, item) {
+    label.classList.add("ssd-owned-link");
+    label.setAttribute("role", "link");
+    label.tabIndex = 0;
+    var go = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openLocalCopy(item, label);
+    };
+    label.addEventListener("click", go);
+    label.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") go(e);
+    });
+  }
+  // 写编号：库里那条已有别的源编号，这里只补这一条的（每源一个）
+  function libraryAddId(item) {
+    var lid = item.inLib && item.inLib.id;
+    if (!lid) return Promise.reject(new Error("no scene"));
+    var ep = String(item.endpoint || (item.box && item.box.endpoint) || "").toLowerCase();
+    if (!ep) return Promise.reject(new Error("no endpoint"));
+    return callGQL("query($id:ID!){findScene(id:$id){id stash_ids{endpoint stash_id}}}", { id: lid }).then(function (d) {
+      var sc = d && d.findScene;
+      if (!sc) throw new Error("scene " + lid + " not found");
+      var ids = (sc.stash_ids || []).map(function (x) { return { endpoint: x.endpoint, stash_id: x.stash_id }; });
+      var had = ids.some(function (x) {
+        return String(x.endpoint).toLowerCase() === ep && String(x.stash_id) === String(item.scene.id);
+      });
+      if (!had) {
+        ids = ids.filter(function (x) { return String(x.endpoint).toLowerCase() !== ep; });  // 每源只留一个
+        ids.push({ endpoint: item.endpoint || (item.box && item.box.endpoint), stash_id: String(item.scene.id) });
+      }
+      return callGQL("mutation($input:SceneUpdateInput!){sceneUpdate(input:$input){id}}", { input: { id: lid, stash_ids: ids } });
+    }).then(function () {
+      if (_state.localSceneKeys) {
+        _state.localSceneKeys[ep + ":" + String(item.scene.id).toLowerCase()] = true;
+      }
+    });
+  }
+  // 卡片：左上角「在库中」（可点开）＋ 详情行下面「加编号」按钮（TPDB 不给：
+  // 它的 REST 编号不是 stash-box 用的那个）
+  function decorateInLibCard(card, item) {
+    if (!item.inLib) return;
+    var vs = card.querySelector(".video-section");
+    if (vs && !card.querySelector(".ssd-overlay-owned")) {
+      var lab = document.createElement("span");
+      lab.className = "ssd-overlay-owned";
+      lab.textContent = tc("在库中", "In library");
+      lab.title = tc("库里有这部片（按标题认出来的，没有这个源的编号）。点开它",
+        "In your library (same title, without this source's ID). Click to open it");
+      lab.setAttribute("data-local-scene", item.inLib.id || "");
+      ownedLabelClick(lab, item);
+      vs.insertBefore(lab, vs.firstChild);
+    }
+    var det = card.querySelector(".scene-card__details");
+    if (!det || !item.endpoint || isTPDBBox({ endpoint: item.endpoint })) return;
+    if (card.querySelector(".ssd-inlib-add")) return;
+    var addId = document.createElement("button");
+    addId.type = "button";
+    addId.className = "btn btn-secondary btn-sm ssd-inlib-add";
+    var boxLabel = item.boxName || "stash-box";
+    addId.textContent = tc("把 " + boxLabel + " 编号加到库里的片", "Add " + boxLabel + " ID to your copy");
+    addId.title = tc("下次按编号直接认出来，这张卡就不再出现", "Next time it is matched by ID and this card goes away");
+    addId.addEventListener("click", function (e) {
+      e.stopPropagation();
+      addId.disabled = true;
+      addId.textContent = tc("正在加…", "Adding…");
+      libraryAddId(item).then(function () {
+        addId.textContent = tc("已加上 ✓", "ID added ✓");
+        card.classList.add("ssd-inlib-done");
+      }, function (err) {
+        addId.disabled = false;
+        addId.textContent = tc("失败，再试", "Failed, try again");
+        console.warn("[SSD] add ID", (err && err.message) || err);
+      });
+    });
+    det.parentNode.insertBefore(addId, det.nextSibling);
+  }
+  // 列表行：标题下那行徽章最前面加「在库中」（同样可点开）
+  function decorateInLibRow(tr, item) {
+    if (!item.inLib) return;
+    var td = tr.querySelector(".title-data");
+    if (!td || td.querySelector(".ssd-row-owned")) return;
+    var line = td.querySelector(".ssd-row-badges");
+    if (!line) {
+      line = document.createElement("div");
+      line.className = "ssd-row-badges";
+      td.appendChild(line);
+    }
+    var lab = document.createElement("span");
+    lab.className = "ssd-row-owned";
+    lab.textContent = tc("在库中", "In library");
+    lab.title = tc("库里有这部片（按标题认出来的，没有这个源的编号）。点开它",
+      "In your library (same title, without this source's ID). Click to open it");
+    lab.setAttribute("data-local-scene", item.inLib.id || "");
+    ownedLabelClick(lab, item);
+    line.insertBefore(lab, line.firstChild);
   }
 
   // ─── 发现 tab 的会话内快照（10 分钟）──────────────────────────────────────
@@ -1824,6 +2661,7 @@
     _state.preferredFallback = false;
     _state.preferredBoxLabel = "";
     _state.showIgnored = false;
+    _state.showInLib = false;
     _state.loadingPage = false;
     _tabSel.on = false;
     _tabSel.keys = {};
@@ -1952,7 +2790,12 @@
       // （一个源请求都不发）。变了 → 当作没恢复，从头扫。
       if (restored && tabSnapshotValid(queryBoxes)) {
         return Promise.all(mapPromises).then(function () {
-          var keep = _state.cachedMissing.filter(function (it) { return !isSceneOwned(it, localKeys); });
+          // K7：按标题认出来的「已在库中」不是已入库，缓存里要留着（列表负责隐藏）；
+          // 只有编号/番号命中的才是真的不用再显示
+          var keep = _state.cachedMissing.filter(function (it) {
+            if (it.inLib) return true;
+            return !isSceneOwned(it, localKeys);
+          });
           _state.cachedMissing = keep;
           var maxPage = Math.max(1, Math.ceil(keep.length / _state.perPage));
           if (_state.currentPage > maxPage) _state.currentPage = 1;
@@ -2017,9 +2860,10 @@
   // Change page (fetches more if needed)
   function goToPage(pageNum) {
     _pendingListTop = true;
-    var isSearching = (_state.searchQuery || "").trim().length > 0;
+    // 搜索或标签筛选生效时都只在本地缓存里翻页（标签也是本地过滤，不回源）
+    var isSearching = isTabFiltering();
     if (isSearching) {
-      // Search mode: only paginate over already-loaded filtered results
+      // Filtering mode: only paginate over already-loaded filtered results
       var filtered = getFilteredMissing();
       var maxPage = Math.max(1, Math.ceil(filtered.length / _state.perPage));
       if (pageNum < 1) pageNum = 1;
@@ -2089,6 +2933,7 @@
     _state.boxTruncated = {};
     _state.boxSkipped = {};
     _state.boxByName = {};
+    _state.boxTagMissing = {};
     _state.boxPageSize = 100;
     _state.boxFetchedTotal = 0;
     _state.boxTotalCount = 0;
@@ -2134,6 +2979,11 @@
 
   function changeSort(dir) { applySort(_state.sortField, dir); }
   function changeSortField(field) {
+    // 热度只有「最多人匹配在前」一种方向：换到热度时强制 DESC（方向按钮也就此禁用）
+    if (field === "POPULARITY" && field !== _state.sortField) {
+      applySort(field, "DESC");
+      return;
+    }
     // 选「演员数」的动机基本都是找单人场景 → 换到这个字段时默认少→多；
     // 想看群像点一次方向按钮即可（方向按钮会跟着显示 ↑）
     var dir = field === "PERFORMERS" && field !== _state.sortField ? "ASC" : _state.sortDir;
@@ -2632,6 +3482,41 @@
     loadMissingScenes(true);
   }
 
+  // 「发行时间」换了（K2）：窗口变了，快照/缓存里的条目是按旧窗口扫的 →
+  // 作废缓存按新窗口重扫一遍。与 applySort 同一套等待/错误处理。
+  function setTabRange(key, since) {
+    var k = key === "since" ? "since" : (key || "");
+    var s = k === "since" ? (since || "") : "";
+    if (k === _state.rangeKey && s === _state.rangeSince) return;
+    // 窗口没变就不用重扫（用户 2026-11-26）：从「默认（近 N 天）」切到
+    // 「自某日起…」时预填的就是这条窗口的起点，条的还是同一批片
+    var oldCut = _state.windowRelaxed ? null : tabWindowStart();
+    _state.rangeKey = k;
+    _state.rangeSince = s;
+    _state.currentPage = 1;
+    if (!_state.windowRelaxed && tabWindowStart() === oldCut) {
+      renderTabContent();
+      return;
+    }
+    resetBoxCache();
+    _state.loading = true;
+    _state.viewState = "loading";
+    renderTabContent();
+
+    ensureMissingLoaded(_state.perPage).then(function () {
+      _state.loading = false;
+      _state.viewState = computeResultViewState();
+      renderTabContent();
+    }).catch(function (e) {
+      console.error("[SSD] range query failed:", e);
+      _state.loading = false;
+      _state.loadError = e.message || String(e);
+      _state.errorKind = (e && e.ssdKind) || "";
+      _state.viewState = _state.errorKind || "fatal";
+      renderTabContent();
+    });
+  }
+
   // 「临时查看已忽略（本次）」：同 setWindowRelaxed，是观看辅助 —— 不写忽略记录、
   // 不改库，只把这一屏的隐藏效果暂时关掉（用户 2026-10-30）。
   // 不重扫源站：卡片本来就在 cachedMissing 里，只是被过滤器挡住了。
@@ -2678,8 +3563,8 @@
       }
       return tc("源上没有待发现的场景", "Nothing left to discover on the source");
     }
-    // 搜索还在生效时，抬头说「都被忽略」不准确 —— 挡住结果的是搜索，不是忽略
-    if (vs === "ignored-hidden" && (_state.searchQuery || "").trim()) {
+    // 搜索/标签还在生效时，抬头说「都被忽略」不准确 —— 挡住结果的是筛选，不是忽略
+    if (vs === "ignored-hidden" && isTabFiltering()) {
       return tc("没有匹配的场景", "No matching scenes");
     }
     var pair = PANEL_TITLES[vs] || PANEL_TITLES.loading;
@@ -2868,9 +3753,30 @@
         lines.push(tc(byMeta + " 个场景没有源编号，按标题判断已在库中。",
           byMeta + " scene(s) have no source ID but look already in your library by title."));
       }
+      // 工具栏「发行时间」收窄了窗口（K2）：空屏时也要说清是被它收掉的
+      var emptyRk = _state.rangeKey;
+      var winCut = tabRecentCut();
+      if (emptyRk === "all") {
+        lines.push(tc("当前不限发行时间。", "Release time is unrestricted."));
+      } else if (emptyRk === "since") {
+        lines.push(tc("当前只查 " + _state.rangeSince + " 及之后发行的场景。",
+          "Only scenes released on or after " + _state.rangeSince + " are queried."));
+      } else if (DR_DAYS[emptyRk]) {
+        lines.push(tc("当前只查近 " + DR_DAYS[emptyRk] + " 天发行的场景。",
+          "Only scenes released in the past " + DR_DAYS[emptyRk] + " days are queried."));
+      } else if (winCut) {
+        // 设置里的默认窗口也会收窄：原来这里什么都不说，图6 那种「180 天前
+        // 才有作品的演员」读成「源上确实没片」（用户 2026-11-26）
+        lines.push(tc("当前只查近 " + _state.recentDays + " 天发行的场景。",
+          "Only scenes released in the past " + _state.recentDays + " days are queried."));
+      }
       if (!dropped && !byMeta) {
-        lines.push(tc("该演员在源上的场景都已在本库中。",
-          "Every scene this performer has on the sources is already in your library."));
+        // 窗口开着时不下「都已在本库中」这种断言：源上更早的片根本没查
+        lines.push(winCut
+          ? tc("窗口外的作品没有查询，可以点「不限时间（本次）」看全部。",
+               "Older scenes were not queried — use \"Unlimited time (this session)\" to see them all.")
+          : tc("该演员在源上的场景都已在本库中。",
+               "Every scene this performer has on the sources is already in your library."));
       }
       if (failedN.length) {
         lines.push(tc("部分源查询失败，结果可能不完整。",
@@ -2881,6 +3787,14 @@
         var entEn = _state.entityType === "studio" ? "studio" : "performer";
         lines.push(tc("首选源 " + _state.preferredBoxLabel + " 没有" + entZh + "的编号，已改查其他有编号的源。",
           "The preferred source " + _state.preferredBoxLabel + " has no ID for this " + entEn + ", so the other sources that do were queried."));
+      }
+      // K4：这一屏是带标签问来的，或某个源因为缺标签被挡掉 —— 都得说清楚，
+      // 否则空屏只会读成「这个演员没片」
+      var missZ = tagMissingText(true);
+      if (missZ) lines.push(missZ + "。");
+      if (_state.tagLoadSig && !missZ) {
+        lines.push(tc("当前带标签向源站查询：只返回源上带这些标签的场景。",
+          "The sources were asked with the tag rules, so only scenes carrying those tags are listed."));
       }
       body.appendChild(panelDesc(lines.join(" ")));
       if (failedN.length) {
@@ -2899,11 +3813,28 @@
         viewBtn.onclick = (function (box) { return function () { openBoxPerformer(box); }; })(b);
         actions.appendChild(viewBtn);
       });
-      if (dropped > 0) {
+      if (dropped > 0 || winCut) {
+        // 「不限时间（本次）」：被时间窗口挡掉时给的路；窗口开着但源上什么都
+        // 没返回时同样要给 —— 否则用户无从知道更早有片（用户 2026-11-26）
         var relaxBtn = makePanelBtn(tc("不限时间（本次）", "Unlimited time (this session)"), "primary");
-        relaxBtn.title = tc("临时放开近期/预告时间窗口", "Temporarily lift the recent/preview window");
+        relaxBtn.title = dropped > 0
+          ? tc("临时放开近期/预告时间窗口", "Temporarily lift the recent/preview window")
+          : tc("当前只查近期窗口，点这里改查全时段", "Only the recent window is queried — load all time here");
         relaxBtn.onclick = function () { setWindowRelaxed(true); };
         actions.appendChild(relaxBtn);
+      }
+      // 工具栏的「发行时间」比设置里的窗口更窄时，空态也给出回去的路。
+      // 「不限时间」没换过范围时是重复的第二个按钮（图3），有「不限时间（本次）」
+      // 就不再列它
+      if (_state.rangeKey) {
+        var rngResetBtn = makePanelBtn(tc("恢复默认时间范围", "Reset release range"), "secondary");
+        rngResetBtn.onclick = function () { setTabRange("", ""); };
+        actions.appendChild(rngResetBtn);
+        if (_state.rangeKey !== "all" && !relaxBtn) {
+          var rngAllBtn = makePanelBtn(tc("不限时间", "All time"), "primary");
+          rngAllBtn.onclick = function () { setTabRange("all", ""); };
+          actions.appendChild(rngAllBtn);
+        }
       }
       var retryBtn4 = makePanelBtn(tc("重试", "Retry"), "secondary");
       retryBtn4.onclick = retryLoad;
@@ -2915,19 +3846,23 @@
       // 看只是想确认「忽略的是哪部」，不是要收回忽略（用户 2026-10-30）
       var ignN = hiddenIgnoredCount();
       var hasQuery = (_state.searchQuery || "").trim().length > 0;
-      body.appendChild(panelDesc(hasQuery
-        ? tc("当前搜索没有匹配的场景；另有 " + ignN + " 个已发现的场景被忽略了。",
-             "No scene matches the search; " + ignN + " discovered scene(s) are ignored.")
+      // 标签筛选也算筛选：文案与「清除」按钮都要把它带上，否则点完还是空屏
+      var hasTagF = tabTagOn();
+      var anyF = hasQuery || hasTagF;
+      body.appendChild(panelDesc(anyF
+        ? tc("当前筛选没有匹配的场景；另有 " + ignN + " 个已发现的场景被忽略了。",
+             "No scene matches the filters; " + ignN + " discovered scene(s) are ignored.")
         : tc("已发现的 " + ignN + " 个场景都被忽略了。",
              "All " + ignN + " discovered scene(s) are ignored.")));
-      var showIgnBtn = makePanelBtn(hasQuery
-        ? tc("清除搜索并查看已忽略", "Clear search & show ignored")
+      var showIgnBtn = makePanelBtn(anyF
+        ? tc("清除筛选并查看已忽略", "Clear filters & show ignored")
         : tc("查看已忽略的场景", "Show ignored scenes"), "primary");
       showIgnBtn.title = tc("临时显示已忽略的场景，不改忽略记录",
         "Temporarily show ignored scenes; the ignore list stays untouched");
       showIgnBtn.onclick = function () {
-        // 搜索还挡着的话一并清掉，否则点了还是空屏
+        // 筛选还挡着的话一并清掉，否则点了还是空屏
         if (hasQuery) _state.searchQuery = "";
+        if (hasTagF) tfClear(tabTagRules());
         setIgnoredShown(true);
       };
       actions.appendChild(showIgnBtn);
@@ -2935,11 +3870,22 @@
 
     } else if (vs === "no-match") {
       var found = _state.cachedMissing.length;
-      body.appendChild(panelDesc(tc("清除搜索可查看已发现的全部场景（共 " + found + " 个）。",
-        "Clear the search to see all " + found + " discovered scene(s).")));
-      var clearBtn = makePanelBtn(tc("清除搜索", "Clear search"), "primary");
+      var hasTagNm = tabTagOn();
+      var hasQueryNm = (_state.searchQuery || "").trim().length > 0;
+      body.appendChild(panelDesc(hasQueryNm && hasTagNm
+        ? tc("清除搜索与标签筛选可查看已发现的全部场景（共 " + found + " 个）。",
+             "Clear the search and tag filter to see all " + found + " discovered scene(s).")
+        : (hasTagNm
+          ? tc("清除标签筛选可查看已发现的全部场景（共 " + found + " 个）。",
+               "Clear the tag filter to see all " + found + " discovered scene(s).")
+          : tc("清除搜索可查看已发现的全部场景（共 " + found + " 个）。",
+               "Clear the search to see all " + found + " discovered scene(s)."))));
+      var clearBtn = makePanelBtn(hasQueryNm && hasTagNm
+        ? tc("清除筛选", "Clear filters")
+        : (hasTagNm ? tc("清除标签筛选", "Clear tag filter") : tc("清除搜索", "Clear search")), "primary");
       clearBtn.onclick = function () {
-        _state.searchQuery = "";
+        if (hasQueryNm) _state.searchQuery = "";
+        if (hasTagNm) tfClear(tabTagRules());
         _state.currentPage = 1;
         renderTabContent();
       };
@@ -4355,7 +5301,9 @@
       clearBtn.type = "button";
       clearBtn.className = "clearable-text-field-clear btn btn-secondary";
       clearBtn.title = tc("清除", "Clear");
-      clearBtn.innerHTML = "&times;";
+      // 与原生 ClearableTextField 同一个图标（FA6 xmark 内联 SVG）：以前用文本
+      // "&times;"，字形比图标窄一半（实测 9.7px vs 16.6px），看着比原生小一圈。
+      clearBtn.innerHTML = '<svg data-prefix="fas" data-icon="xmark" class="svg-inline--fa fa-xmark fa-icon" role="img" viewBox="0 0 384 512" aria-hidden="true"><path fill="currentColor" d="M55.1 73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L147.2 256 9.9 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192.5 301.3 329.9 438.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.8 256 375.1 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192.5 210.7 55.1 73.4z"></path></svg>';
       clearBtn.onclick = function () {
         clearTimeout(_searchTimer);
         _state.searchQuery = "";
@@ -4366,6 +5314,58 @@
       searchGroup.appendChild(clearBtn);
     }
     toolbar.appendChild(searchGroup);
+
+    // 标签筛选（K1）：紧跟搜索框，样式同原生按钮。规则存在 _state 里，工具栏
+    // 每次整块重绘都靠 tagUi 把面板原样恢复 —— 连点几个标签面板不会合上。
+    // 只筛已拉到的缓存；是否「问源站」是发现页的那个开关，不在这里。
+    if (tagButtonEnabled()) {
+      var tagSearchSrc = tagSearchBox();
+      var tagWrap = tfMount({
+        rules: tabTagRules(),
+        ui: tabTagUi(),
+        variant: "native",
+        scenes: function () {
+          // 已经带标签问过源站：继续列「不带标签时」那一批的标签，否则每选一个
+          // 标签，可选项就跟着缩一圈，最后什么都不剩
+          if (_state.tagLoadSig && _state.tagUniverse.length) return _state.tagUniverse;
+          return getSearchFilteredMissing().map(function (item) { return item.scene || {}; });
+        },
+        onChange: function () {
+          _state.currentPage = 1;
+          tagRulesChanged();
+          renderTabContent();
+        },
+        // 面板底部的「源站上的其他标签」：只查标签词典（名字→id），不搜场景
+        remoteLabel: tagSearchSrc ? sourceLabel(tagSearchSrc) : "",
+        remoteSearch: tagSearchSrc ? function (q) {
+          return boxTagSearch(tagSearchSrc, q, 12).then(function (list) {
+            var m = tagIdMap(tagSearchSrc.endpoint);
+            list.forEach(function (t) { var k = tfKey(t.name); if (k && t.id) m[k] = String(t.id); });
+            return list;
+          });
+        } : null,
+      });
+      toolbar.appendChild(tagWrap);
+    }
+
+    // 发行时间（K2）：本地窗口的下界。默认项就是设置里的「近期窗口」，
+    // 选了别的只影响这个 tab（会话内有效，换演员复位）
+    var rangeWrap = drMount({
+      value: _state.rangeKey,
+      since: _state.rangeSince,
+      // 文案只写「近 180 天」：加「默认」反而像另一个选项（用户 2026-11-26）。
+      // 设置里窗口为 0（不限）时没有「近 0 天」这种写法，保留「（默认）」好跟
+      // 「不限时间」那一项区分。预填日期 = 当前窗口起点，切到「自某日起…」
+      // 时不会立刻重查
+      defaultLabel: _state.recentDays > 0
+        ? tc("近 " + _state.recentDays + " 天", "Past " + _state.recentDays + " days")
+        : tc("不限时间（默认）", "All time (default)"),
+      defaultSince: tabWindowStart(),
+      minDate: DR_MIN_DATE,
+      onChange: function (key, since) { setTabRange(key, since); },
+      variant: "native",
+    });
+    toolbar.appendChild(rangeWrap);
 
     // Sort — field dropdown + caret button flips direction
     // 热度 = stash-box 上匹配过该场景的用户数（全时段）。TPDB 没有这项数据；不认这个
@@ -4450,10 +5450,15 @@
     sortGroup.appendChild(sortMenu);
 
     var isDesc = _state.sortDir !== "ASC";
+    // 热度只有「最多人匹配在前」一种方向：升序没有意义，直接禁用（用户 2026-11-26）
+    var popSort = curField === "POPULARITY";
     var dirBtn = document.createElement("button");
     dirBtn.type = "button";
     dirBtn.className = "btn btn-secondary";
-    dirBtn.title = isDesc ? tc("降序", "Descending") : tc("升序", "Ascending");
+    dirBtn.disabled = popSort;
+    dirBtn.title = popSort
+      ? tc("按热度排序只有「最多人匹配」在前，没有升序", "Popularity only sorts most-matched first")
+      : (isDesc ? tc("降序", "Descending") : tc("升序", "Ascending"));
     dirBtn.innerHTML =
       '<svg data-prefix="fas" data-icon="caret-down" class="svg-inline--fa fa-caret-down fa-icon" role="img" viewBox="0 0 320 512" aria-hidden="true"' +
       (isDesc ? "" : ' style="transform:rotate(180deg)"') +
@@ -4479,8 +5484,8 @@
     toolbar.appendChild(ppWrap);
 
     // 多选入口（§P6）：只在有卡片可选的 content / no-match 态出现。
-    // 位置在「每页 N 个」右侧、刷新左侧（用户 2026-10-30）—— 它和每页数量
-    // 同属「影响这一屏怎么展示」，刷新是会打断浏览的动作，排在最外侧。
+    // 位置在「每页 N 个」右侧（用户 2026-10-30）；刷新按钮已挪到工具栏最右
+    // 的「列表」右侧（2026-11-26），这里不再紧邻它。
     if (showToolbar) {
       var selBtn = document.createElement("button");
       selBtn.type = "button";
@@ -4494,17 +5499,25 @@
       toolbar.appendChild(selBtn);
     }
 
-    // Refresh — plugin-specific (re-query stash-box)
+    // Refresh — plugin-specific (re-query stash-box). 纯图标（用户 2026-11-26）：
+    // 一排按钮里「刷新」两个字最占宽，图标 + title 足够；位置挪到「列表」按钮
+    // 右侧 —— 它是会打断浏览的动作，排在这条工具栏的最末
     var refreshBtn = document.createElement("button");
     refreshBtn.type = "button";
     refreshBtn.className = "btn btn-secondary ssd-tab-refresh";
-    refreshBtn.textContent = tc("刷新", "Refresh");
+    refreshBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<polyline points="23 4 23 10 17 10"/>' +
+      '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
     refreshBtn.title = tc("重新查询 stash-box", "Re-query stash-box");
+    refreshBtn.setAttribute("aria-label", tc("刷新", "Refresh"));
     refreshBtn.onclick = function () {
       _state.searchQuery = "";
+      // 刷新 = 重查这一屏：标签筛选也一起清掉，否则重查完还是被旧规则筛着
+      tfClear(tabTagRules());
       loadMissingScenes(true);
     };
-    toolbar.appendChild(refreshBtn);
 
     // Display mode — native grid/list toggle (same btn-group + icons as the
     // scenes page toolbar); persisted in localStorage
@@ -4538,6 +5551,7 @@
     displayGroup.appendChild(gridModeBtn);
     displayGroup.appendChild(listModeBtn);
     toolbar.appendChild(displayGroup);
+    toolbar.appendChild(refreshBtn);
 
     // Card size — native zoom slider (0-3); grid only, list rows are fixed
     if (_state.displayMode !== "list") {
@@ -4602,6 +5616,15 @@
       // 一条都不剩时分清「搜索没命中」和「都忽略了」：后者给一个临时查看入口，
       // 而不是让用户对着「清除搜索」白点（用户 2026-10-30）
       var ignHidden = _state.showIgnored ? 0 : hiddenIgnoredCount();
+      // K7：一条不剩也可能是「全被按标题认成已在库中」—— 先把这块提示放出来，
+      // 否则空屏读成「这个演员没片」
+      var ilr0 = inLibRow();
+      if (ilr0) {
+        var ilw = document.createElement("div");
+        ilw.className = "ssd-window-row";
+        ilw.appendChild(ilr0);
+        pane.appendChild(ilw);
+      }
       pane.appendChild(buildStatePanel(ignHidden > 0 ? "ignored-hidden" : "no-match"));
       return;
     }
@@ -4610,7 +5633,8 @@
     // chip → its restore button → preferred-source fallback chip → inline lookup
     // entry. Only the parts that apply are rendered. The four are grouped in
     // pairs so a very narrow viewport wraps between them instead of overflowing.
-    if (_state.windowRelaxed || _state.preferredFallback || _state.showIgnored) {
+    if (_state.windowRelaxed || _state.preferredFallback || _state.showIgnored ||
+        _state.tagLoadSig || tagMissingText(true) || inLibRow()) {
       var metaRow = document.createElement("div");
       metaRow.className = "ssd-window-row";
 
@@ -4618,6 +5642,14 @@
       winGroup.className = "ssd-window-group";
       var fallbackGroup = document.createElement("div");
       fallbackGroup.className = "ssd-window-group";
+
+      // K4：这一轮带着标签问的源站 —— 列表语义变了，必须明说
+      if (_state.tagLoadSig) {
+        var tagChip = makeChip(tc("标签已交给源站筛选", "Tags asked on the stash-box"), "muted");
+        tagChip.title = tc("「必须有」的标签由 stash-box 筛（ThePornDB 除外），「排除」的标签在这里再筛一遍。",
+          "The stash-box returns only scenes with the must-have tags (not ThePornDB); excluded tags are filtered here.");
+        winGroup.appendChild(tagChip);
+      }
 
       if (_state.windowRelaxed) {
         winGroup.appendChild(makeChip(tc("时间窗口：不限 · 本次", "Time window: unlimited · this session"), "muted"));
@@ -4646,13 +5678,49 @@
         if (findEntryVisible("content")) fallbackGroup.appendChild(findEntryBtn("sm", "secondary"));
       }
 
+      // K4：源上缺「必须有」的标签 → 跳过该源。不是查询失败，是这个源上不可能有结果
+      var missText = tagMissingText(true);
+      if (missText) {
+        var missChip = makeChip(missText, "muted");
+        missChip.title = tc("这个源上找不到这些「必须有」的标签，所以没有查它。换一个源、或去掉这个标签就会照常查。",
+          "This source has no such must-have tag, so it was skipped. Another source, or dropping that tag, queries it again.");
+        fallbackGroup.appendChild(missChip);
+      }
+
       if (winGroup.children.length) metaRow.appendChild(winGroup);
+      // K7：「N 个已在库中 · 已隐藏 [显示]」
+      var ilr = inLibRow();
+      if (ilr) metaRow.appendChild(ilr);
       if (fallbackGroup.children.length) metaRow.appendChild(fallbackGroup);
       pane.appendChild(metaRow);
 
       // Only the content state renders the block here; the panels (no-ids /
       // empty / no-match) render their own copy inside the panel body.
       if (_state.findOpen) pane.appendChild(buildFindBlock());
+    }
+
+    // 排序的说明（K2）：按热度排时被略过的源、源不认热度已自动回退。
+    // 不是错误而是解释「为什么结果是这样」—— 常驻灰色小块，不弹 toast（C 方案）
+    var skipNames = tabSkippedNames();
+    var noPopNames = tabNoPopNames();
+    if (skipNames || noPopNames) {
+      var noteRow = document.createElement("div");
+      noteRow.className = "ssd-window-row ssd-sortnote-row";
+      if (skipNames) {
+        var skipChip = makeChip(tc(skipNames + " 无热度数据 · 已跳过",
+          skipNames + " has no popularity · skipped"), "muted");
+        skipChip.title = tc("这个源不提供热度数据，按热度排序时不查它；换回按日期排序照常查询。",
+          "This source has no popularity data, so it is skipped while sorting by popularity. It is queried again with date sorting.");
+        noteRow.appendChild(skipChip);
+      }
+      if (noPopNames) {
+        var noPopChip = makeChip(tc(noPopNames + " 版本较旧 · 已按日期",
+          noPopNames + " is too old · back to date"), "muted");
+        noPopChip.title = tc("这个源不支持按热度排序，已自动改回按日期。",
+          "This source does not support popularity sorting; it fell back to date.");
+        noteRow.appendChild(noPopChip);
+      }
+      pane.appendChild(noteRow);
     }
 
     // Partial failure: cards are shown, but name the source that is missing
@@ -4685,7 +5753,8 @@
       pageItems = filtered.slice(0, _state.perPage);
     }
 
-    var isSearching = (_state.searchQuery || "").trim().length > 0;
+    // 搜索或标签筛选生效：只在这块本地缓存里翻页，不再回源
+    var isSearching = isTabFiltering();
     // Pages the local cache already covers — always known, even mid-lazy-load
     var knownPages = Math.max(1, Math.ceil(filtered.length / _state.perPage));
     var totalPages = isSearching || _state.allLoaded
@@ -4841,8 +5910,70 @@
     if (!SSD.dpIgnore) return 0;
     return _state.cachedMissing.filter(isItemIgnored).length;
   }
+  // ─── 「已在库中」提示（K7）──────────────────────────────────────────────
+  // 按标题认出来、没有这个源编号的片（item.inLib）默认和已入库一样不显示。
+  // 条数给工具栏下的小块用；「显示」把它们放出来核对（卡片带「在库中」+「加编号」）
+  function inLibCount() {
+    return _state.cachedMissing.filter(function (item) {
+      if (!item.inLib) return false;
+      if (_state.showIgnored || !SSD.dpIgnore) return true;
+      return !isItemIgnored(item);
+    }).length;
+  }
+  function setInLibShown(on) {
+    _state.showInLib = !!on;
+    _state.currentPage = 1;
+    renderTabContent();
+  }
+  function inLibRow() {
+    var n = inLibCount();
+    if (!n) return null;
+    var g = document.createElement("div");
+    g.className = "ssd-window-group ssd-inlib-row";
+    if (_state.showInLib) {
+      g.appendChild(makeChip(tc("已在库中：临时显示 " + n + " 个", "In your library: " + n + " shown"), "muted"));
+      var hb = makePanelBtn(tc("隐藏", "Hide"), "secondary", "sm");
+      hb.onclick = function () { setInLibShown(false); };
+      g.appendChild(hb);
+    } else {
+      var chip = makeChip(tc(n + " 个已在库中 · 已隐藏", n + " already in your library · hidden"), "muted");
+      chip.title = tc("库里有这些场景的副本，但没有这个源的编号（按标题认出来的）。点「显示」可以核对。",
+        "Your library already has a copy of these without this source's ID (matched by title). Show them to check.");
+      g.appendChild(chip);
+      var sb = makePanelBtn(tc("显示", "Show"), "secondary", "sm");
+      sb.onclick = function () { setInLibShown(true); };
+      g.appendChild(sb);
+    }
+    return g;
+  }
 
+  // 搜索框 + 标签筛选之后的列表：分页、计数、空态都走这里
   function getFilteredMissing() {
+    var list = getSearchFilteredMissing();
+    var rules = tabTagRules();
+    if (!tabTagOn()) return list;
+    return list.filter(function (item) { return tfMatches(item.scene, rules); });
+  }
+
+  // 有任一筛选（搜索或标签）生效 → 只在已拉到的缓存里翻页
+  function isTabFiltering() {
+    return (_state.searchQuery || "").trim().length > 0 || tabTagOn();
+  }
+
+  // 标签按钮的显示开关在「发现页 › 设置」，与 discover.js 共用同一份 prefs（默认开）。
+  // 关掉开关等于不用标签筛选：规则不再参与过滤，否则会出现「按钮没了但列表还被筛着」
+  function tagButtonEnabled() {
+    try {
+      var p = JSON.parse(localStorage.getItem("SSD:dp:prefs") || "{}");
+      return p.tagButton !== false;
+    } catch (e) { return true; }
+  }
+  function tabTagOn() {
+    return tagButtonEnabled() && tfActive(tabTagRules());
+  }
+
+  // 只过搜索框（不含标签）：标签面板的计数取这一层，选了标签也不会把别的标签数清零
+  function getSearchFilteredMissing() {
     var q = (_state.searchQuery || "").trim().toLowerCase();
     // 已忽略（§5.1 第 3 处）：这个 tab 原先只拿已读做角标统计、并不隐藏场景，
     // 忽略要单独过滤一次 —— 分页、搜索、计数都走这个函数，一处收口全生效。
@@ -4850,6 +5981,11 @@
     var base = _state.cachedMissing;
     if (!_state.showIgnored) {
       base = base.filter(function (item) { return !isItemIgnored(item); });
+    }
+    // K7：按标题认出来「已在库中」的片默认不显示（与编号命中的一样收起来），
+    // 「显示」打开时放出来，卡片上带「在库中」+「加编号」
+    if (!_state.showInLib) {
+      base = base.filter(function (item) { return !item.inLib; });
     }
     if (!q) return base;
     return base.filter(function (item) {
@@ -4866,6 +6002,761 @@
       ].filter(Boolean).join(" ").toLowerCase();
       return haystack.indexOf(q) !== -1;
     });
+  }
+
+  // ─── 标签筛选（演员/工作室 tab 与发现页共用）─────────────────────────────
+  // 与搜索框同口径：只筛本地已经拉到的场景。标签按名字归一化（去首尾空白 +
+  // 小写）比对，多个 stash-box 的同名标签并成一项。每个标签点一下换一态：
+  // 不限 → 必须有 → 排除 → 不限。「全部满足」开：必须有的标签要同时具备；
+  // 关：具备其中任一个即可。排除永远是一个都不能有。
+  // inc/exc 用无原型对象：标签名是外部数据，「constructor」这类名字不能撞上
+  // Object.prototype。
+  var TF_MAX_ROWS = 200;
+
+  function tfKey(name) {
+    return String(name == null ? "" : name).trim().toLowerCase();
+  }
+  function tfHas(map, key) {
+    return !!map && Object.prototype.hasOwnProperty.call(map, key);
+  }
+  function tfNewRules() {
+    return { inc: Object.create(null), exc: Object.create(null), all: false };
+  }
+  // focus：面板里最后获得焦点的是哪一处（q 搜索框 / all 开关 / row 某个标签），
+  // 演员 tab 整块重绘后据此把焦点还回去
+  function tfNewUi() {
+    return { open: false, q: "", caret: null, scroll: 0, focus: "", focusKey: "" };
+  }
+  function tfCount(rules) {
+    if (!rules) return 0;
+    return Object.keys(rules.inc || {}).length + Object.keys(rules.exc || {}).length;
+  }
+  function tfActive(rules) {
+    return tfCount(rules) > 0;
+  }
+  // 规则的「指纹」：源站查询按它判断「这一轮是拿什么问的」（K4）
+  function tfSigOf(rules) {
+    if (!tfActive(rules)) return "";
+    return JSON.stringify([Object.keys(rules.inc).sort(), Object.keys(rules.exc).sort(), !!rules.all]);
+  }
+  // tab 侧的两个容器：没初始化过就建一个（首次渲染早于任何 reset 时也不会炸）
+  function tabTagRules() {
+    if (!_state.tagRules) _state.tagRules = tfNewRules();
+    return _state.tagRules;
+  }
+  function tabTagUi() {
+    if (!_state.tagUi) _state.tagUi = tfNewUi();
+    return _state.tagUi;
+  }
+  function tfState(rules, key) {
+    if (tfHas(rules.inc, key)) return "inc";
+    if (tfHas(rules.exc, key)) return "exc";
+    return "";
+  }
+  function tfMatches(scene, rules) {
+    if (!tfActive(rules)) return true;
+    var have = Object.create(null);
+    ((scene && scene.tags) || []).forEach(function (t) {
+      var k = tfKey(t && t.name);
+      if (k) have[k] = true;
+    });
+    var exc = Object.keys(rules.exc), inc = Object.keys(rules.inc);
+    for (var i = 0; i < exc.length; i++) {
+      if (have[exc[i]]) return false;
+    }
+    if (!inc.length) return true;
+    var hit = 0;
+    for (var j = 0; j < inc.length; j++) {
+      if (have[inc[j]]) hit++;
+    }
+    return rules.all ? hit === inc.length : hit > 0;
+  }
+  // 列表里出现过的标签及其场景数。已选、但当前列表里没有的标签排最前（计数 0），
+  // 否则取消不掉；其余按场景数降序、同数按名字。点选不改变顺序，行不会在手指下跳走。
+  // 同一标签在不同源里大小写可能不一样：显示用出现次数最多的写法
+  function tfCollect(scenes, rules) {
+    var map = Object.create(null), out = [];
+    (scenes || []).forEach(function (sc) {
+      var seen = Object.create(null);
+      ((sc && sc.tags) || []).forEach(function (t) {
+        var name = String((t && t.name) || "").trim();
+        var k = tfKey(name);
+        if (!k || seen[k]) return;
+        seen[k] = true;
+        if (!map[k]) { map[k] = { key: k, name: name, count: 0, spell: Object.create(null) }; out.push(map[k]); }
+        map[k].count++;
+        map[k].spell[name] = (map[k].spell[name] || 0) + 1;
+      });
+    });
+    out.forEach(function (t) {
+      var best = t.spell[t.name];
+      Object.keys(t.spell).forEach(function (s) {
+        if (t.spell[s] > best) { best = t.spell[s]; t.name = s; }
+      });
+      delete t.spell;
+    });
+    ["inc", "exc"].forEach(function (side) {
+      var m = (rules && rules[side]) || {};
+      Object.keys(m).forEach(function (k) {
+        if (!map[k]) { map[k] = { key: k, name: m[k] || k, count: 0 }; out.push(map[k]); }
+      });
+    });
+    out.sort(function (a, b) {
+      return ((a.count ? 1 : 0) - (b.count ? 1 : 0)) || (b.count - a.count) || a.name.localeCompare(b.name);
+    });
+    return out;
+  }
+  function tfCycle(rules, key, name) {
+    var s = tfState(rules, key);
+    if (s === "inc") {
+      delete rules.inc[key];
+      rules.exc[key] = name || key;
+    } else if (s === "exc") {
+      delete rules.exc[key];
+    } else {
+      rules.inc[key] = name || key;
+    }
+  }
+  function tfClear(rules) {
+    rules.inc = Object.create(null);
+    rules.exc = Object.create(null);
+  }
+  function tfCoarse() {
+    try { return window.matchMedia("(pointer: coarse)").matches; } catch (e) { return false; }
+  }
+  function tfFocus(node) {
+    if (!node) return;
+    try { node.focus({ preventScroll: true }); } catch (e) { node.focus(); }
+  }
+
+  // 同一时刻最多一个面板开着：document 级监听只绑一次，按当前打开的那个判断
+  var _tfOpen = null;
+  var _tfBound = false;
+  function tfBindGlobal() {
+    if (_tfBound) return;
+    _tfBound = true;
+    document.addEventListener("pointerdown", function (e) {
+      if (!_tfOpen) return;
+      if (!_tfOpen.wrap.isConnected) { _tfOpen = null; return; }
+      if (_tfOpen.wrap.contains(e.target)) return;
+      _tfOpen.close(false);
+    }, true);
+    // 面板开着时 Esc 只关面板：捕获阶段截住，别让发现页顺手退出多选或收起「更多」
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !_tfOpen) return;
+      if (!_tfOpen.wrap.isConnected) { _tfOpen = null; return; }
+      e.stopPropagation();
+      _tfOpen.close(true);
+    }, true);
+    window.addEventListener("resize", function () {
+      if (_tfOpen && _tfOpen.wrap.isConnected) _tfOpen.place();
+    });
+  }
+
+  // 工具栏里的「标签」按钮 + 下拉面板。
+  //   opts.rules     规则对象（就地修改）
+  //   opts.ui        tfNewUi()：宿主持有、跨重绘保留。演员 tab 每次整块重绘工具栏，
+  //                  重新 mount 时按它把面板原样打开（连点几个标签，面板不会合上）
+  //   opts.scenes()  当前视图「搜索之后、标签之前」的场景，计数用
+  //   opts.onChange  规则变了 → 宿主重绘列表
+  //   opts.variant   "native"：演员/工作室 tab，原生 .btn / .dropdown-menu
+  //                  "dp"：发现页工具栏（--sx-* 主题变量）
+  // 返回包裹元素；发现页工具栏常驻不重建，数据或规则变了调它的 ssdRefresh()
+  function tfMount(opts) {
+    tfBindGlobal();
+    var rules = opts.rules, ui = opts.ui, dp = opts.variant === "dp";
+    var wrap = document.createElement("div");
+    wrap.className = "ssd-tagf" + (dp ? " ssd-tagf-dp" : "");
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "dialog");
+    btn.setAttribute("aria-expanded", "false");
+    btn.title = tc("按 stash-box 上的场景标签筛选", "Filter by the scenes' stash-box tags");
+    wrap.appendChild(btn);
+    var panel = null, input = null, list = null, allBox = null, clearBtn = null;
+    // 面板里的「源站上的其他标签」（K4）：opts.remoteSearch(q) -> Promise<[{id,name}]>，
+    // opts.remoteLabel 是源站名。答案存在 ui 里（工具栏每次重画都重建面板），
+    // 点一个标签不会重新问一遍
+    var remote = null, remoteTimer = 0, remoteSeq = 0;
+    function rLabel() {
+      var l = typeof opts.remoteLabel === "function" ? opts.remoteLabel() : opts.remoteLabel;
+      return String(l || "");
+    }
+
+    function paintBtn() {
+      var n = tfCount(rules);
+      btn.className = (dp ? "ssd-dp-tagbtn" : "btn btn-secondary") + " ssd-tagf-btn" +
+        (n ? (dp ? " on" : " active") : "");
+      // 两处都只留图标（用户 2026-11-26）：与演员详情「短片」tab 的「标签工具」
+      // 同一枚双层价签图标，文字进 title / aria
+      btn.innerHTML = SSD_ICON_TAGS;
+      btn.title = tc("标签工具 · 按 stash-box 上的场景标签筛选", "Tag tools · filter by the scenes' stash-box tags");
+      if (n) {
+        var badge = document.createElement("span");
+        badge.className = "ssd-tagf-n";
+        badge.textContent = String(n);
+        btn.appendChild(badge);
+      }
+      btn.setAttribute("aria-label", n
+        ? tc("标签筛选：" + n + " 条规则", "Tag filter: " + n + " active")
+        : tc("标签筛选", "Tag filter"));
+    }
+
+    function buildPanel() {
+      panel = document.createElement("div");
+      panel.className = "ssd-tagf-panel" + (dp ? "" : " dropdown-menu show");
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-label", tc("标签筛选", "Tag filter"));
+      panel.addEventListener("focusin", function (e) {
+        var t = e.target;
+        if (t === input) ui.focus = "q";
+        else if (t === allBox) ui.focus = "all";
+        else if (t && t.ssdKey) { ui.focus = "row"; ui.focusKey = t.ssdKey; }
+        else ui.focus = "";
+      });
+
+      input = document.createElement("input");
+      input.type = "text";
+      // tab：Stash 的深色输入框类（.text-input）。光有 .form-control 是 Bootstrap 的白底
+      input.className = "ssd-tagf-q" + (dp ? "" : " text-input form-control");
+      input.placeholder = tc("找标签…", "Find a tag…");
+      input.setAttribute("aria-label", tc("找标签", "Find a tag"));
+      input.value = ui.q || "";
+      // 每个 input 都生效，输入法合成过程中也算：安卓键盘逐词合成，input 事件带
+      // isComposing 直到整词选完，列表会跟不上打字（2026-11-15）。只重画下面的列表，
+      // 输入框本身不重建，合成不会被打断；compositionend 兜住「选词后不发 input」的输入法
+      var onType = function () {
+        ui.q = input.value;
+        ui.caret = input.selectionStart;
+        paintList(true);
+      };
+      input.addEventListener("input", onType);
+      input.addEventListener("compositionend", onType);
+      panel.appendChild(input);
+
+      var mode = document.createElement("label");
+      mode.className = "ssd-tagf-mode";
+      mode.title = tc("关：具备任一个「必须有」的标签即可；开：要全部具备",
+        "Off: one must-have tag is enough. On: a scene needs every must-have tag");
+      allBox = document.createElement("input");
+      allBox.type = "checkbox";
+      allBox.addEventListener("change", function () {
+        rules.all = allBox.checked;
+        changed();
+      });
+      var track = document.createElement("span");
+      track.className = "ssd-tagf-switch";
+      track.setAttribute("aria-hidden", "true");
+      var label = document.createElement("span");
+      label.textContent = tc("「必须有」要全部满足", "Must have all of them");
+      mode.appendChild(allBox);
+      mode.appendChild(track);
+      mode.appendChild(label);
+      panel.appendChild(mode);
+
+      list = document.createElement("div");
+      list.className = "ssd-tagf-list";
+      panel.appendChild(list);
+
+      if (opts.remoteSearch) {
+        remote = document.createElement("div");
+        remote.className = "ssd-tagf-remote";
+        panel.appendChild(remote);
+      }
+
+      var foot = document.createElement("div");
+      foot.className = "ssd-tagf-foot";
+      var hint = document.createElement("span");
+      hint.className = "ssd-tagf-hint";
+      hint.textContent = tc("点击切换：必须有/排除/取消",
+        "Tap to cycle: must have / exclude / off");
+      foot.appendChild(hint);
+      clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "ssd-tagf-clear" + (dp ? "" : " btn btn-secondary btn-sm");
+      clearBtn.textContent = tc("清除", "Clear");
+      clearBtn.addEventListener("click", function () {
+        tfClear(rules);
+        ui.focus = "q";
+        changed();
+      });
+      foot.appendChild(clearBtn);
+      panel.appendChild(foot);
+      wrap.appendChild(panel);
+    }
+
+    // 源站上的其他标签：输入 ≥2 字、350ms 去抖问一次，列在列表下方（本地已列出
+    // 的、已经选上的都不重复列）。点一下＝加为「必须有」
+    function paintRemote(localKeys) {
+      if (!remote) return;
+      clearTimeout(remoteTimer);
+      var q = String(ui.q || "").trim();
+      var seq = ++remoteSeq;
+      remote.textContent = "";
+      if (q.length < 2) return;
+      var label = rLabel() || "stash-box";
+      var head = document.createElement("div");
+      head.className = "ssd-tagf-rhead";
+      remote.appendChild(head);
+      function draw(found) {
+        var shown = (found || []).filter(function (t) {
+          var k = tfKey(t && t.name);
+          return k && !localKeys[k] && !tfHas(rules.inc, k) && !tfHas(rules.exc, k);
+        });
+        head.textContent = shown.length ? tc(label + " 上的其他标签", "More tags on " + label)
+          : tc(label + " 上没有别的匹配标签", "No other tag on " + label);
+        shown.forEach(function (t) {
+          var k = tfKey(t.name);
+          var row = document.createElement("button");
+          row.type = "button";
+          row.className = "ssd-tagf-row ssd-tagf-rrow";
+          row.ssdKey = k;
+          row.title = tc("加为「必须有」", "Add as must have");
+          var mark = document.createElement("span");
+          mark.className = "ssd-tagf-mark";
+          mark.setAttribute("aria-hidden", "true");
+          mark.textContent = "+";
+          var name = document.createElement("span");
+          name.className = "ssd-tagf-name";
+          name.textContent = t.name;
+          row.appendChild(mark);
+          row.appendChild(name);
+          row.addEventListener("click", function () {
+            rules.inc[k] = t.name;
+            ui.q = "";
+            ui.caret = 0;
+            if (input) input.value = "";
+            ui.focus = "row";
+            ui.focusKey = k;
+            changed();
+          });
+          remote.appendChild(row);
+        });
+        // 远程结果把面板撑高了：底部可能又越界，重摆一次
+        if (ui.open && panel) (window.requestAnimationFrame || setTimeout)(place);
+      }
+      if (ui.rq === q && ui.rlist) { draw(ui.rlist); return; }
+      head.textContent = tc("在 " + label + " 上查找…", "Looking on " + label + "…");
+      remoteTimer = setTimeout(function () {
+        opts.remoteSearch(q).then(function (found) {
+          ui.rq = q;
+          ui.rlist = found || [];
+          if (seq !== remoteSeq || !remote) return;
+          draw(ui.rlist);
+        }, function () {
+          if (seq !== remoteSeq || !remote) return;
+          head.textContent = tc("查找失败", "Couldn't search " + label);
+        });
+      }, 350);
+    }
+
+    function paintList(resetScroll) {
+      if (!list) return;
+      var keep = resetScroll ? 0 : list.scrollTop;
+      var items = tfCollect(opts.scenes ? opts.scenes() : [], rules);
+      var q = tfKey(ui.q);
+      var shown = q ? items.filter(function (t) { return t.key.indexOf(q) !== -1; }) : items;
+      list.textContent = "";
+      if (!shown.length) {
+        var empty = document.createElement("div");
+        empty.className = "ssd-tagf-empty";
+        empty.textContent = items.length
+          ? tc("没有匹配的标签", "No matching tags")
+          : tc("当前列表里的场景没有标签", "The scenes in this list have no tags");
+        list.appendChild(empty);
+      }
+      shown.slice(0, TF_MAX_ROWS).forEach(function (t) {
+        var st = tfState(rules, t.key);
+        var row = document.createElement("button");
+        row.type = "button";
+        row.className = "ssd-tagf-row" + (st ? " is-" + st : "");
+        row.setAttribute("aria-pressed", st ? "true" : "false");
+        row.ssdKey = t.key;
+        if (st) row.title = st === "inc" ? tc("必须有", "Must have") : tc("已排除", "Excluded");
+        var mark = document.createElement("span");
+        mark.className = "ssd-tagf-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.textContent = st === "inc" ? "✓" : (st === "exc" ? "✕" : "");
+        var name = document.createElement("span");
+        name.className = "ssd-tagf-name";
+        name.textContent = t.name;
+        var cnt = document.createElement("span");
+        cnt.className = "ssd-tagf-cnt";
+        cnt.textContent = String(t.count);
+        row.appendChild(mark);
+        row.appendChild(name);
+        row.appendChild(cnt);
+        row.addEventListener("click", function () {
+          ui.focus = "row";
+          ui.focusKey = t.key;
+          tfCycle(rules, t.key, t.name);
+          changed();
+        });
+        list.appendChild(row);
+      });
+      if (shown.length > TF_MAX_ROWS) {
+        var more = document.createElement("div");
+        more.className = "ssd-tagf-empty";
+        var rest = shown.length - TF_MAX_ROWS;
+        more.textContent = tc("还有 " + rest + " 个，输入名字缩小范围", rest + " more; type to narrow the list");
+        list.appendChild(more);
+      }
+      list.scrollTop = keep;
+      allBox.checked = !!rules.all;
+      clearBtn.hidden = !tfActive(rules);
+      if (remote) {
+        var localKeys = Object.create(null);
+        items.forEach(function (t) { localKeys[t.key] = true; });
+        paintRemote(localKeys);
+      }
+    }
+
+    // 面板别伸出视口（用户 2026-11-26 / 2026-11-26 第二轮）：照设置页下拉的做法
+    // —— 那一侧放不下就收窄，底部放不下就翻到按钮上方，全程不横向溢出。
+    // 手机上的「窗口」是 visualViewport（地址栏/底部工具条会吃掉一截，
+    // 用 innerHeight 量出来的底边会在真机上下溢），所以优先读它，并且打开期间
+    // 监听它的 resize/scroll 重新摆一次（键盘、地址栏收起都会触发）。
+    function vpBox() {
+      var vv = window.visualViewport;
+      var w = Math.round((vv && vv.width) || document.documentElement.clientWidth || window.innerWidth);
+      var h = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight);
+      var top = Math.round((vv && vv.offsetTop) || 0);
+      var left = Math.round((vv && vv.offsetLeft) || 0);
+      return { w: w, h: h, top: top, left: left };
+    }
+    //   1) 宽度先按 300 起算，再夹到「按钮左缘 → 视口右缘」与整条视口可用宽；
+    //   2) 横向还有溢出就整体平移，最后贴左边界；
+    //   3) 竖向量一次：下方装不下、上方更宽裕 → 翻到上面，并把列表高度按剩下的
+    //      空间重算（面板本体不滚动，滚的是标签列表）
+    function place() {
+      if (!panel) return;
+      panel.style.position = "";
+      panel.style.top = "";
+      panel.style.left = "";
+      panel.style.width = "";
+      panel.style.maxHeight = "";
+      panel.style.overflowY = "";
+      panel.classList.remove("is-above");
+      if (list) list.style.maxHeight = "";
+      var v = vpBox();
+      var gutter = 8;
+      var host = wrap.getBoundingClientRect();
+      var availW = v.w - gutter * 2;
+      var roomRight = v.left + v.w - gutter - Math.max(host.left, v.left + gutter);
+      var w = Math.max(200, Math.min(300, availW, roomRight));
+      panel.style.width = w + "px";
+      var r = panel.getBoundingClientRect();
+      var dx = 0;
+      if (r.right > v.left + v.w - gutter) dx = (v.left + v.w - gutter) - r.right;
+      if (r.left + dx < v.left + gutter) dx = (v.left + gutter) - r.left;
+      if (dx) panel.style.left = (panel.offsetLeft + dx) + "px";
+      var r2 = panel.getBoundingClientRect();
+      // 真机上「可视区」量到的底边仍可能被浏览器底部工具条/安全区盖住：
+      // 再让出 safe-area-inset-bottom，触屏再加一点余量
+      var sab = 0;
+      try { sab = parseFloat(getComputedStyle(panel).getPropertyValue("--ssd-sab")) || 0; } catch (e) { /* 老浏览器 */ }
+      var coarse = false;
+      try { coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch (e) { /* 不支持 matchMedia */ }
+      var bottomEdge = v.top + v.h - gutter - sab - (coarse ? 20 : 0);
+      var below = bottomEdge - r2.top;
+      var above = host.top - v.top - gutter - 6;
+      // 上下都装不下（矮窗口、键盘顶起、按钮本来就在屏幕下半截）：
+      // 直接改成贴着可视区的固定浮层，否则面板底边会被窗口裁掉
+      var flip = false;
+      var fixed = false;
+      var fixedRoom = 0;
+      if (r2.height > below) {
+        if (above >= Math.min(r2.height, 260) || above > below) flip = true;
+        else fixed = true;
+      }
+      if (fixed) {
+        // 两个方向都放不下时仍然贴着按钮，只是收窄并允许内部滚：
+        // 之前一律钉在可视区顶部，用户看到的是「弹窗飞到屏幕最上面」（2026-11-27）
+        panel.style.position = "fixed";
+        panel.style.overflowY = "auto";
+        var lw = Math.max(200, Math.min(w, availW));
+        panel.style.width = lw + "px";
+        var lx = Math.max(v.left + gutter, Math.min(host.left, v.left + v.w - gutter - lw));
+        panel.style.left = lx + "px";
+        var spaceBelow = bottomEdge - (host.bottom + 4);
+        var spaceAbove = host.top - (v.top + gutter) - 4;
+        var useBelow = spaceBelow >= spaceAbove;
+        var sideRoom = Math.max(140, useBelow ? spaceBelow : spaceAbove);
+        var wantH = Math.min(sideRoom, r2.height);
+        panel.style.maxHeight = sideRoom + "px";
+        if (useBelow) {
+          panel.style.top = (host.bottom + 4) + "px";
+        } else {
+          panel.style.top = Math.max(v.top + gutter, host.top - 4 - wantH) + "px";
+        }
+        r2 = panel.getBoundingClientRect();
+        if (r2.bottom > bottomEdge) panel.style.top = Math.max(v.top + gutter, bottomEdge - r2.height) + "px";
+        r2 = panel.getBoundingClientRect();
+        fixedRoom = bottomEdge - r2.top;
+      }
+      if (flip) panel.classList.add("is-above");
+      var room = Math.max(120, flip ? above : (fixed ? fixedRoom : below));
+      if (list) {
+        var chrome = r2.height - list.offsetHeight;
+        var listCap = Math.max(60, Math.min(320, room - chrome - 8));
+        list.style.maxHeight = listCap + "px";
+      }
+      // 列表已经到头还装不下（极矮的窗口）：面板自身限高兜底，绝不越过可视底边；
+      // 兜底限高之后底栏/提示若仍被挤掉，就让面板整体可滚（至少能划到「清除」）
+      panel.style.maxHeight = room + "px";
+      if (fixed) {
+        // 定高之后高度还会变一次，再按真实高度收一次
+        var r3 = panel.getBoundingClientRect();
+        if (r3.bottom > bottomEdge) {
+          panel.style.maxHeight = (bottomEdge - (v.top + gutter)) + "px";
+        }
+      }
+      try {
+        panel.style.overflowY = panel.scrollHeight > panel.clientHeight + 2 ? "auto" : "hidden";
+      } catch (e) { /* 老浏览器 */ }
+    }
+
+    // 打开期间视口会变（手机地址栏收起、键盘弹出、旋转）：跟着重新摆
+    var vpBound = false;
+    function vpUpdate() { if (panel && ui.open) place(); }
+    function bindVp(on) {
+      if (!!on === vpBound) return;
+      vpBound = !!on;
+      var m = on ? "addEventListener" : "removeEventListener";
+      window[m]("resize", vpUpdate);
+      window[m]("orientationchange", vpUpdate);
+      var vv = window.visualViewport;
+      if (vv) { vv[m]("resize", vpUpdate); vv[m]("scroll", vpUpdate); }
+    }
+
+    function restoreFocus() {      if (!panel) return;
+      if (ui.focus === "q") {
+        tfFocus(input);
+        var c = typeof ui.caret === "number" ? Math.min(ui.caret, input.value.length) : input.value.length;
+        try { input.setSelectionRange(c, c); } catch (e) { /* 部分输入类型不支持 */ }
+      } else if (ui.focus === "all") {
+        tfFocus(allBox);
+      } else if (ui.focus === "row") {
+        var rows = list.querySelectorAll(".ssd-tagf-row");
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].ssdKey === ui.focusKey) { tfFocus(rows[i]); return; }
+        }
+      }
+    }
+
+    function changed() {
+      if (list) ui.scroll = list.scrollTop;
+      paintBtn();
+      // 宿主重绘会把整个面板换掉、页面高度瞬间塌成骨架，移动端浏览器会把
+      // scrollY 夹到新的最大值 —— 看起来就是「点个标签被打回页首」
+      // （用户 2026-11-26）。记住点之前的滚动位置，重绘完再放回去
+      var keepY = window.scrollY || window.pageYOffset || 0;
+      if (opts.onChange) opts.onChange();
+      var restoreY = function () {
+        if (keepY <= 0) return;
+        if (Math.abs((window.scrollY || 0) - keepY) < 2) return;
+        try { window.scrollTo({ top: keepY, behavior: "auto" }); }
+        catch (_) { window.scrollTo(0, keepY); }
+      };
+      (window.requestAnimationFrame || setTimeout)(restoreY);
+      // 常驻工具栏（发现页）不会因重绘重建：自己把面板刷一遍。演员 tab 这时
+      // wrap 已被换掉（isConnected=false），新 mount 的那份会接着打开
+      if (wrap.isConnected && panel) {
+        paintList(false);
+        restoreFocus();
+      }
+    }
+
+    function open(restoring) {
+      if (_tfOpen && _tfOpen.wrap !== wrap) {
+        if (_tfOpen.wrap.isConnected) _tfOpen.close(false);
+        _tfOpen = null;
+      }
+      ui.open = true;
+      if (!panel) buildPanel();
+      paintList(false);
+      wrap.classList.add("is-open");
+      btn.setAttribute("aria-expanded", "true");
+      _tfOpen = { wrap: wrap, close: close, place: place };
+      var settle = function () {
+        if (!wrap.isConnected || !panel) return;
+        place();
+        list.scrollTop = restoring ? (ui.scroll || 0) : 0;
+        if (restoring) restoreFocus();
+        // 手机上不自动聚焦搜索框：弹出的键盘会盖住标签列表
+        else if (!tfCoarse()) { ui.focus = "q"; tfFocus(input); }
+      };
+      bindVp(true);
+      // 重绘后的再打开发生在宿主把工具栏挂进页面之前：等一帧再量位置、还焦点
+      if (restoring) (window.requestAnimationFrame || setTimeout)(settle);
+      else settle();
+    }
+
+    function close(refocus) {
+      ui.open = false;
+      ui.scroll = 0;
+      ui.focus = "";
+      ui.focusKey = "";
+      bindVp(false);
+      if (panel) {
+        panel.remove();
+        panel = input = list = allBox = clearBtn = null;
+        remote = null;
+        clearTimeout(remoteTimer);
+        remoteSeq++;
+      }
+      wrap.classList.remove("is-open");
+      btn.setAttribute("aria-expanded", "false");
+      if (_tfOpen && _tfOpen.wrap === wrap) _tfOpen = null;
+      if (refocus) tfFocus(btn);
+    }
+
+    btn.addEventListener("click", function () {
+      if (ui.open && panel) close(false);
+      else open(false);
+    });
+    paintBtn();
+    if (ui.open) open(true);
+    wrap.ssdRefresh = function () {
+      paintBtn();
+      if (panel) paintList(false);
+    };
+    return wrap;
+  }
+
+  // 发现页设置里改了「标签按钮」开关：tab 的工具栏是常驻渲染，得重画一次
+  // 才按新设置挂上/摘掉按钮（关掉时规则已在设置页一侧清空）
+  window.addEventListener("ssd:tagpref-changed", function () {
+    if (document.querySelector(".ssd-tab-pane")) renderTabContent();
+  });
+  // 发现页设置里改了「带标签问源站」：规则没变，但「怎么问」变了，得按新开关重查一轮
+  window.addEventListener("ssd:asktags-changed", function () {
+    if (!document.querySelector(".ssd-tab-pane")) return;
+    tagRulesChanged();
+    renderTabContent();
+  });
+
+  // ─── 带标签问源站（K4）────────────────────────────────────────────────────
+  // tab 是一页页取片的，只筛「已取到」的那批会漏掉后面的。开了开关、且这一轮还没
+  // 把整个窗口拉完时，带标签向 stash-box 重问一次：
+  //   「必须有」→ INCLUDES（all 且有多个 → INCLUDES_ALL）；只有排除 → EXCLUDES；
+  //   排除的标签照旧在本地再筛一遍（源端不做「排除」以外的组合）。
+  // 标签名 → 各源的 tag id：先看已加载场景里的 tags，没有再 searchTag（词典跨演员复用）。
+  // 源上没有某个「必须有」标签 → 跳过这个源，并在工具栏下说清楚（不静默）。
+  // ThePornDB 不认这套（自有关联模型），仍旧本地筛。
+  var _tagIdCache = Object.create(null);   // endpoint -> { 标签 key -> id，"" = 源上没有 }
+  var _tagReloadTimer = 0;
+
+  // 开关：发现页 › 设置里的「带标签问源站」，默认关（用户 2026-11-26）。
+  // 与发现页同一份 localStorage 偏好（同一 origin），不另存一份 yml
+  function askTagsOnBox() {
+    try {
+      var p = JSON.parse(localStorage.getItem("SSD:dp:prefs") || "{}");
+      return !!(p && p.askTags === true);
+    } catch (_) { return false; }
+  }
+  // 这一轮是按什么规则问的（"" = 没带标签问）
+  function tagLoadSig() {
+    if (!tagButtonEnabled() || !askTagsOnBox()) return "";
+    return tfSigOf(tabTagRules());
+  }
+
+  function tagIdMap(endpoint) {
+    return _tagIdCache[endpoint] || (_tagIdCache[endpoint] = Object.create(null));
+  }
+  // 从已加载的场景里学标签 id：正常使用能省掉 searchTag
+  function tagIdsRemember(endpoint, scenes) {
+    var m = tagIdMap(endpoint);
+    (scenes || []).forEach(function (sc) {
+      ((sc && sc.tags) || []).forEach(function (t) {
+        var k = tfKey(t && t.name);
+        if (k && t && t.id) m[k] = String(t.id);
+      });
+    });
+  }
+  // 面板的「远程标签」：向源站查标签名（只查标签词典，不搜场景、不跨演员）
+  function boxTagSearch(box, term, limit) {
+    return callBoxGQL(box.endpoint, boxKey(box),
+      "query($t: String!, $n: Int) { searchTag(term: $t, limit: $n) { id name aliases } }",
+      { t: String(term || ""), n: limit || 10 }
+    ).then(function (d) { return (d && d.searchTag) || []; });
+  }
+  // 这些标签 key 在某个源上的 id；源上没有的记 ""（记住，下次不再问）
+  function resolveTagIds(box, keys, names) {
+    var m = tagIdMap(box.endpoint);
+    var missing = keys.filter(function (k) { return !Object.prototype.hasOwnProperty.call(m, k); });
+    return Promise.all(missing.map(function (k) {
+      return boxTagSearch(box, names[k] || k, 10).then(function (list) {
+        var hit = list.filter(function (t) {
+          return tfKey(t.name) === k || (t.aliases || []).some(function (a) { return tfKey(a) === k; });
+        })[0];
+        m[k] = hit ? String(hit.id) : "";
+      });
+    })).then(function () {
+      var out = {};
+      keys.forEach(function (k) { if (m[k]) out[k] = m[k]; });
+      return out;
+    });
+  }
+  // 一个源的标签条件：{ crit: {value, modifier} | null } 或 { skip: true, missing: [名字] }
+  function tagCriterion(box) {
+    var rules = tabTagRules();
+    if (!tagLoadSig() || !tfActive(rules) || isTPDBBox(box)) return Promise.resolve({ crit: null });
+    var inc = Object.keys(rules.inc), exc = Object.keys(rules.exc);
+    var keys = inc.length ? inc : exc;
+    var names = inc.length ? rules.inc : rules.exc;
+    return resolveTagIds(box, keys, names).then(function (ids) {
+      var known = keys.map(function (k) { return ids[k]; }).filter(Boolean);
+      if (inc.length) {
+        // 一个都找不到、或「要全部满足」却凑不齐 → 这个源上不可能有结果
+        if (!known.length || (rules.all && known.length < inc.length)) {
+          var lack = inc.filter(function (k) { return !ids[k]; }).map(function (k) { return names[k] || k; });
+          return { skip: true, missing: lack };
+        }
+        return { crit: { value: known, modifier: rules.all && known.length > 1 ? "INCLUDES_ALL" : "INCLUDES" } };
+      }
+      return { crit: known.length ? { value: known, modifier: "EXCLUDES" } : null };
+    });
+  }
+
+  // 面板上改了规则：没带标签问过、且整个窗口都已拉全 → 本地筛就是完整的，不用重问。
+  // 其它情况把源端那一轮作废、带新规则重查；连点几个标签 = 一次查询（700ms 防抖）。
+  function tagRulesChanged() {
+    clearTimeout(_tagReloadTimer);
+    var sig = tagLoadSig();
+    if (sig === _state.tagLoadSig) return;
+    if (!_state.tagLoadSig && _state.allLoaded) return;
+    if (!_state.tagLoadSig) {
+      // 记下「不带标签时」的场景集：面板继续列这些标签，否则越选列表越短
+      _state.tagUniverse = getSearchFilteredMissing().map(function (item) { return item.scene || {}; });
+    }
+    var pid = _state.performerId, kind = _state.entityType;
+    _tagReloadTimer = setTimeout(function () {
+      if (_state.performerId !== pid || _state.entityType !== kind) return;
+      if (tagLoadSig() === _state.tagLoadSig) return;
+      _state.tagLoadSig = tagLoadSig();
+      loadMissingScenes(true);
+    }, 700);
+  }
+  // 面板的标签词典问哪个源：这个 tab 的第一个非 TPDB 源（StashDB 优先）
+  function tagSearchBox() {
+    var list = ((_state.queryBoxes && _state.queryBoxes.length ? _state.queryBoxes : (_state.allBoxes || []))
+      .filter(function (b) { return b && b.endpoint && !isTPDBBox(b); }));
+    var sdb = list.filter(function (b) { return /(^|\/\/|\.)stashdb\.org(\/|$)/i.test(b.endpoint); })[0];
+    return sdb || list[0] || null;
+  }
+  // 被「源上没这个标签」挡掉的源 → 提示文案（多个同行列出）
+  function tagMissingText(zh) {
+    var names = [];
+    Object.keys(_state.boxTagMissing || {}).forEach(function (ep) {
+      var b = (_state.queryBoxes || []).filter(function (x) { return x.endpoint === ep; })[0];
+      var label = b ? sourceLabel(b) : ep;
+      var tags = _state.boxTagMissing[ep] || [];
+      if (!tags.length) return;
+      names.push(zh ? label + " 缺少标签「" + tags.join("、") + "」· 已跳过"
+        : label + " has no tag " + tags.join(", ") + " · skipped");
+    });
+    return names.join("；");
   }
 
   // Native SceneCardGrid zoom formula:
@@ -5202,6 +7093,8 @@
     tagTd.appendChild(tagUl);
     tr.appendChild(tagTd);
 
+    // K7：按标题认出来的「已在库中」在行里挂徽章（点开库里那条）
+    decorateInLibRow(tr, item);
     return tr;
   }
 
@@ -5372,6 +7265,8 @@
     }
 
     card.onclick = function () { openModal(item, card); };
+    // K7：按标题认出来的「已在库中」—— 左上角标签（点开库里那条）+ 加编号按钮
+    decorateInLibCard(card, item);
     return card;
   }
 
@@ -5380,6 +7275,11 @@
   var SSD_ICON_TAG =
     '<svg data-prefix="fas" data-icon="tag" class="svg-inline--fa fa-tag fa-icon" role="img" viewBox="0 0 512 512" aria-hidden="true">' +
     '<path fill="currentColor" d="M32.5 96l0 149.5c0 17 6.7 33.3 18.7 45.3l192 192c25 25 65.5 25 90.5 0L483.2 333.3c25-25 25-65.5 0-90.5l-192-192C279.2 38.7 263 32 246 32L96.5 32c-35.3 0-64 28.7-64 64zm112 16a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"></path></svg>';
+  // 「标签工具」：两个叠在一起的价签。与演员详情「短片」tab 的那个按钮同一枚图标
+  // （Stash 原生工具栏里的 fa-tags，路径原样抄自页面，用户 2026-11-26）
+  var SSD_ICON_TAGS =
+    '<svg data-prefix="fas" data-icon="tags" class="svg-inline--fa fa-tags fa-icon" role="img" viewBox="0 0 576 512" aria-hidden="true">' +
+    '<path fill="currentColor" d="M401.2 39.1L549.4 189.4c27.7 28.1 27.7 73.1 0 101.2L393 448.9c-9.3 9.4-24.5 9.5-33.9 .2s-9.5-24.5-.2-33.9L515.3 256.8c9.2-9.3 9.2-24.4 0-33.7L367 72.9c-9.3-9.4-9.2-24.6 .2-33.9s24.6-9.2 33.9 .2zM32.1 229.5L32.1 96c0-35.3 28.7-64 64-64l133.5 0c17 0 33.3 6.7 45.3 18.7l144 144c25 25 25 65.5 0 90.5L285.4 418.7c-25 25-65.5 25-90.5 0l-144-144c-12-12-18.7-28.3-18.7-45.3zm144-85.5a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"></path></svg>';
   var SSD_ICON_USER =
     '<svg data-prefix="fas" data-icon="user" class="svg-inline--fa fa-user fa-icon" role="img" viewBox="0 0 448 512" aria-hidden="true">' +
     '<path fill="currentColor" d="M224 248a120 120 0 1 0 0-240 120 120 0 1 0 0 240zm-29.7 56C95.8 304 16 383.8 16 482.3 16 498.7 29.3 512 45.7 512l356.6 0c16.4 0 29.7-13.3 29.7-29.7 0-98.5-79.8-178.3-178.3-178.3l-59.4 0z"></path></svg>';
@@ -9114,6 +11014,19 @@
     // performer's name until the new one finishes loading
     _state.performerName = "";
     _state.searchQuery = "";
+    // 标签筛选跟着搜索框一起复位：它是「看这个人」的本地筛选，换个人留着
+    // 会让新页面一进来就是空列表，而且看不出是被什么筛掉的
+    _state.tagRules = tfNewRules();
+    _state.tagUi = tfNewUi();
+    // 「发行时间」也复位：它是给这一位挑片的窗口，留着会把下一位收进空屏
+    _state.rangeKey = "";
+    _state.rangeSince = "";
+    // K4 的「带标签问源站」也跟着复位：标签 id 词典（_tagIdCache）跨演员复用，
+    // 但「这一轮问的是什么」属于这一位
+    clearTimeout(_tagReloadTimer);
+    _state.tagLoadSig = "";
+    _state.tagUniverse = [];
+    _state.boxTagMissing = {};
   }
 
   function onUrlChange() {
@@ -9744,6 +11657,10 @@
 
   window.SSD = {
     version: PLUGIN_VERSION,
+    // K7：「在库中」标签当链接用（发现页的卡片也调这个）
+    ownedLabelClick: ownedLabelClick,
+    // K7 的匹配器（纯函数，测试探针用；不改状态）
+    titleMatch: { norm: lmNorm, how: lmTitleHow, byTitle: lmByTitle },
     // 翻页后把列表顶部拉回视口（发现页的 render({top:true}) 走同一套吸顶偏移算法）
     scrollListTop: scrollListTop,
     // GraphQL
@@ -9829,6 +11746,50 @@
     guardScrollChain: guardScrollChain,
     // 点遮罩关闭 + 防误触（七个弹层共用）
     bindOverlayClose: bindOverlayClose,
+    // 标签筛选（演员/工作室 tab 与发现页共用同一套规则/面板；发现页只借
+    // tfMount/tfNewRules/tfNewUi/tfCollect，筛选函数由它自己实现）
+    tagFilter: {
+      key: tfKey,
+      has: tfHas,
+      newRules: tfNewRules,
+      newUi: tfNewUi,
+      count: tfCount,
+      active: tfActive,
+      isActive: tfActive,   // 发现页按 isActive 这个名字取（两处命名统一前它一直用这个）
+      state: tfState,
+      matches: tfMatches,
+      collect: tfCollect,
+      cycle: tfCycle,
+      clear: tfClear,
+      mount: tfMount,
+      // 带标签问源站（K4）
+      sig: tfSigOf,
+      askOn: askTagsOnBox,
+      criterion: tagCriterion,
+      remember: tagIdsRemember,
+      boxSearch: boxTagSearch,
+      missing: tagMissingText,
+      loadSig: function () { return _state.tagLoadSig; },
+    },
+    // 发行时间范围（K2）：tab 工具栏用它，发现页与后续「累计热度」共用同一套
+    // key 语义与日期补偿，别各写一份
+    range: {
+      days: DR_DAYS,
+      minDate: DR_MIN_DATE,
+      validDate: drValidDate,
+      cutoff: drCutoff,
+      dayBefore: drDayBefore,
+      defaultSince: drDefaultSince,
+      mount: drMount,
+      recentCut: tabRecentCut,
+      set: setTabRange,
+      skips: tabSortSkips,       // 按热度排时这个源要不要跳过（TPDB）
+      skippedNames: tabSkippedNames,
+      noPopNames: tabNoPopNames,
+    },
+    // 源不支持 POPULARITY（stash-box 0.9 之前）：发现页「累计热度」用它分辨
+    // 「重试没用，切回近期热门」，与 tab 的自动回退同一判据
+    isNoPopularityError: isNoPopularityError,
   };
 
   // ─── Discover nav entry + route shell (synchronous top-level registration) ─

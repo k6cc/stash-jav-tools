@@ -339,6 +339,234 @@
   gap: 8px;
 }
 
+/* Release-range picker (K2) — reuses the native form-control look; only width
+   and gap are plugin-side so it never stretches inside the flex toolbar. */
+.ssd-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  /* 「自某日起…」的换范围菜单按它定位 */
+  position: relative;
+}
+.ssd-range select,
+.ssd-range input {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+/* 英文「Past 180 days」比较长，原生箭头会压到字上：给右侧留出箭头的位置 */
+.ssd-range .ssd-range-sel { padding-right: 26px; }
+/* Date input: the calendar glyph plus 6-digit year needs ~135px; the select
+   next to it keeps its own auto width. */
+
+/* 「自某日起…」：原生下拉收起来，只留 [▾][日期][日历]（用户 2026-11-26）。
+   ▾ 是原来下拉右侧那个展开箭头，挪到日期框左侧并接管「换范围」；三个控件
+   连成一组（边框叠成一条、只留外圈圆角，观感同「网格/列表」那种 btn-group）。 */
+.ssd-range .ssd-range-sel.is-hidden { display: none; }
+.ssd-range .ssd-range-since {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.ssd-range .ssd-range-since > * {
+  border-radius: 0;
+  position: relative;
+}
+.ssd-range .ssd-range-since > :first-child {
+  border-top-left-radius: var(--ssd-radius);
+  border-bottom-left-radius: var(--ssd-radius);
+}
+.ssd-range .ssd-range-since > :last-child {
+  border-top-right-radius: var(--ssd-radius);
+  border-bottom-right-radius: var(--ssd-radius);
+}
+.ssd-range .ssd-range-since > * + * { margin-left: -1px; }
+.ssd-range .ssd-range-since > :focus,
+.ssd-range .ssd-range-since > :focus-visible { z-index: 2; }
+.ssd-range .ssd-range-open,
+.ssd-range .ssd-range-cal {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 33px;
+  padding: 0;
+  line-height: 1;
+  /* 两个按钮都走「正常按钮」的填充色（跟旁边的 Date/每页数量下拉一致） */
+  background: #394b59;
+  border: 1px solid #394b59;
+}
+/* 悬停变深一档（原生 .btn-secondary:hover 的 rgb(42,55,66) / 边 rgb(37,49,58)）。
+   上面那条把 background 写死了，原生 :hover 同特异性但更早，等于被压掉，只能自己补 */
+.ssd-range .ssd-range-open:hover,
+.ssd-range .ssd-range-cal:hover {
+  background: #2a3742;
+  border-color: #25313a;
+  color: #fff;
+}
+/* 日历卡 / 换范围菜单展开期间按钮保持按下态的深色（原生 .btn-secondary:hover 实测 rgb(42,55,66)） */
+.ssd-range .ssd-range-cal.on,
+.ssd-range .ssd-range-open.on {
+  background: #2a3742;
+  border-color: #25313a;
+  color: #fff;
+}
+/* 日期那一格：用「日历按钮按下态」那档深色（原生 .btn-secondary:hover 实测 rgb(42,55,66)），
+   比工具栏按钮 #394b59 暗一档、又比页面底色 #202b33 亮一档，才看得出是一个输入框 */
+.ssd-range .ssd-range-date {
+  width: 94px;
+  min-width: 0;
+  height: 33px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  max-width: 160px;
+  background: #2a3742;
+  border-color: #25313a;
+  color: #f5f8fa;
+}
+/* ▾ 图标尺寸对齐非 since 状态下原生 select 的背景箭头：实测原生双三角可见范围 7×12 */
+.ssd-range .ssd-range-open svg { width: 7.5px; height: 12px; }
+.ssd-range .ssd-range-cal svg { width: 18px; height: 14px; }
+/* 换范围菜单：和原生下拉一样贴着按钮展开，横向越界由 JS 平移/翻上 */
+.ssd-range-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1050;
+  min-width: 140px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+}
+.ssd-range-menu.is-above { top: auto; bottom: calc(100% + 4px); }
+.ssd-range-menu[hidden] { display: none; }
+/* 原生 tab：.dropdown-menu.show 是 display:block，这里要竖向 flex */
+.ssd-range-menu.dropdown-menu.show { display: flex; margin: 0; }
+.ssd-range-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ssd-range-item:hover { background: rgba(127, 127, 127, 0.16); }
+.ssd-range-item.on { color: var(--ssd-primary); }
+.ssd-range-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.ssd-range-menu.dropdown-menu.show .ssd-range-item.on { color: var(--ssd-primary); background: transparent; }
+.ssd-range-menu { overflow-y: auto; overscroll-behavior: contain; }
+
+/* 自绘月历：DOM 结构、元素类名全部沿用 Stash 原生的 react-datepicker
+   （div.react-datepicker > __month-container > __header + __month > __week > __day），
+   配色/尺寸/间距都交给原生 CSS 与主题覆盖链，这里只补「当弹层用」必须的几条：
+   定位、阴影、限高滚动，以及月份/年份下拉的滚动区域 */
+/* 注意选择器带 .react-datepicker：库里的 .react-datepicker 也声明了 position: relative，
+   同级选择器看的是加载顺序，这里用两类的特异性压过去，弹层才真的是绝对定位 */
+.ssd-range-cal-pop.react-datepicker {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1050;
+  /* 绝对定位在窄容器（发现页那组只有 148 宽）里会被 shrink-to-fit 挤窄，
+     这里按内容定宽并兜住原生卡片的 212 */
+  width: max-content;
+  min-width: 212px;
+  max-width: calc(100vw - 16px);
+  /* 原生 .react-datepicker 是 inline-block，弹层里用 block，免得吃行内基线；
+     字号照原生 .8rem（11.2px），发现页那类没加载 DateInput 样式块的路由靠这条兜底 */
+  display: block;
+  font-size: 0.8rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  overflow: visible;
+}
+.ssd-range-cal-pop.react-datepicker.is-above { top: auto; bottom: calc(100% + 4px); }
+/* 只有被限高时才允许内部滚动，否则会把卡片里的下拉裁掉 */
+.ssd-range-cal-pop.react-datepicker.is-scroll { overflow-y: auto; overscroll-behavior: contain; }
+/* 月份/年份读值：原生就是加粗、居中、不带下箭头（container 的 margin 控制两段间距） */
+.ssd-range-cal-sel { cursor: pointer; }
+.ssd-range-cal-sel:hover { background: rgba(138, 155, 168, 0.15); }
+.ssd-range-cal-sel[aria-expanded="true"] { background: rgba(138, 155, 168, 0.22); }
+.ssd-range-cal-sel:focus-visible { outline: 1px solid #216ba5; outline-offset: 1px; }
+/* 月份/年份下拉：底色/选项 hover 由原生 __month-dropdown / __year-dropdown 规则给，
+   这里只补年份长列表的滚动、最小宽度和阴影 */
+.ssd-range-cal-menu {
+  position: absolute;
+  z-index: 1060;
+  min-width: 105px;
+  max-height: 288px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+}
+.ssd-range-cal-opt {
+  cursor: pointer;
+  line-height: 20px;
+}
+.ssd-range-cal-opt.on { font-weight: 700; }
+/* 前后补位的日子不属于本月，只做展示 */
+.ssd-range-cal-day.react-datepicker__day--outside-month { cursor: default; }
+
+/* ---------------------------------------------------------------
+   原生 react-datepicker 的基础结构样式（只作用于本插件日历卡）
+   Stash 把这份样式放在按需加载的 DateInput chunk 里，发现页那类路由不会加载它，
+   类名虽然对上了但没有骨架（格子不并排、箭头变成普通按钮）。
+   下面是从该 chunk 里摘出来、按 .ssd-range-cal-pop 收窄的一份拷贝：
+   特异性 (0,2,0) 高于库基线 (0,1,0)、低于 Stash/主题的 div.react-datepicker 覆盖 (0,2,1)，
+   所以配色仍由主题决定，这里只管「怎么排」。
+   只留本卡片真正 emit 的：__month-year-* / --select / --down-arrow 这些用不到的已裁掉。
+   --------------------------------------------------------------- */
+.ssd-range-cal-pop .react-datepicker__navigation-icon:before { border-color:#ccc;border-style:solid;border-width:3px 3px 0 0;content:"";display:block;height:9px;position:absolute;top:6px;width:9px }
+.ssd-range-cal-pop .react-datepicker__header { text-align:center;background-color:#f0f0f0;border-bottom:1px solid #aeaeae;border-top-left-radius:.3rem;padding:8px 0;position:relative }
+.ssd-range-cal-pop .react-datepicker__header:not(.react-datepicker__header--has-time-select) { border-top-right-radius:.3rem }
+.ssd-range-cal-pop .react-datepicker__month-dropdown-container--scroll, .ssd-range-cal-pop .react-datepicker__year-dropdown-container--scroll { display:inline-block;margin:0 15px }
+.ssd-range-cal-pop .react-datepicker__navigation { align-items:center;background:none;display:flex;justify-content:center;text-align:center;cursor:pointer;position:absolute;top:2px;padding:0;border:none;z-index:1;height:32px;width:32px;text-indent:-999em;overflow:hidden }
+.ssd-range-cal-pop .react-datepicker__navigation--previous { left:2px }
+.ssd-range-cal-pop .react-datepicker__navigation--next { right:2px }
+.ssd-range-cal-pop .react-datepicker__navigation:hover *:before { border-color:#a6a6a6 }
+.ssd-range-cal-pop .react-datepicker__navigation-icon { position:relative;top:-1px;font-size:20px;width:0 }
+.ssd-range-cal-pop .react-datepicker__navigation-icon--next { left:-2px }
+.ssd-range-cal-pop .react-datepicker__navigation-icon--next:before { transform:rotate(45deg);left:-7px }
+.ssd-range-cal-pop .react-datepicker__navigation-icon--previous { right:-2px }
+.ssd-range-cal-pop .react-datepicker__navigation-icon--previous:before { transform:rotate(225deg);right:-7px }
+.ssd-range-cal-pop .react-datepicker__month { margin:.4rem;text-align:center }
+.ssd-range-cal-pop .react-datepicker__day-names { white-space:nowrap;margin-bottom:-8px }
+.ssd-range-cal-pop .react-datepicker__week { white-space:nowrap }
+.ssd-range-cal-pop .react-datepicker__day-name, .ssd-range-cal-pop .react-datepicker__day { color:#000;display:inline-block;width:1.7rem;line-height:1.7rem;text-align:center;margin:.166rem }
+.ssd-range-cal-pop .react-datepicker__day { cursor:pointer }
+.ssd-range-cal-pop .react-datepicker__day:hover { border-radius:.3rem;background-color:#f0f0f0 }
+.ssd-range-cal-pop .react-datepicker__day--today { font-weight:700 }
+.ssd-range-cal-pop .react-datepicker__day--disabled { cursor:default;color:#ccc }
+.ssd-range-cal-pop .react-datepicker__day--disabled:hover { background-color:transparent }
+.ssd-range-cal-pop .react-datepicker__year-read-view, .ssd-range-cal-pop .react-datepicker__month-read-view { border:1px solid transparent;border-radius:.3rem;position:relative }
+.ssd-range-cal-pop .react-datepicker__year-read-view:hover, .ssd-range-cal-pop .react-datepicker__month-read-view:hover { cursor:pointer }
+.ssd-range-cal-pop .react-datepicker__year-dropdown, .ssd-range-cal-pop .react-datepicker__month-dropdown { background-color:#f0f0f0;position:absolute;width:50%;left:25%;top:30px;z-index:1;text-align:center;border-radius:.3rem;border:1px solid #aeaeae }
+.ssd-range-cal-pop .react-datepicker__year-dropdown:hover, .ssd-range-cal-pop .react-datepicker__month-dropdown:hover { cursor:pointer }
+.ssd-range-cal-pop .react-datepicker__year-option, .ssd-range-cal-pop .react-datepicker__month-option { line-height:20px;width:100%;display:block;margin-left:auto;margin-right:auto }
+.ssd-range-cal-pop .react-datepicker__year-option:first-of-type, .ssd-range-cal-pop .react-datepicker__month-option:first-of-type { border-top-left-radius:.3rem;border-top-right-radius:.3rem }
+.ssd-range-cal-pop .react-datepicker__year-option:last-of-type, .ssd-range-cal-pop .react-datepicker__month-option:last-of-type { -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;border-bottom-left-radius:.3rem;border-bottom-right-radius:.3rem }
+.ssd-range-cal-pop .react-datepicker__year-option:hover, .ssd-range-cal-pop .react-datepicker__month-option:hover { background-color:#ccc }
+/* 选中项前面的 ✓ 原生是「绝对定位在选项左侧 15px」。这条也在 DateInput chunk 里，
+   发现页（没加载该 chunk）会退化成行内、紧贴文字左侧，所以必须自己补一份。
+   特异性 (0,2,0)：与 chunk 里那条 (0,1,0) 声明相同，谁先谁后都不影响。 */
+.ssd-range-cal-pop .react-datepicker__year-option--selected,
+.ssd-range-cal-pop .react-datepicker__month-option--selected { position:absolute;left:15px }
+/* 状态色也从原生搬（dp 页没加载 DateInput 样式块时靠这几条） */
+.ssd-range-cal-pop .react-datepicker__day--selected { border-radius:.3rem;background-color:#216ba5;color:#fff }
+.ssd-range-cal-pop .react-datepicker__day--selected:hover { background-color:#1d5d90 }
+
+
 /* Partial-failure notice above the result count */
 .ssd-notice-bar {
   display: flex;
@@ -2763,6 +2991,20 @@
 .ssd-overlay-ignored ~ .ssd-overlay-preview { top: 2.45rem; }
 /* 列表模式下同一个标记（行里没有封面角标，挂进标题下的徽章行） */
 .ssd-row-badges > .ssd-row-ignored { background: rgba(209, 77, 65, 0.94); }
+/* K7：演员页「发现」tab 的「在库中」标签是链接（点开库里那条）。
+   角标默认 pointer-events:none；这里只给这一种放开，点它不冒泡去开场景弹窗。
+   同一角还有「已忽略」时把后者压下一行，两个都露出来（卡片里角标是
+   .video-section 的子元素，行里是 .ssd-row-badges 的子元素）。 */
+.ssd-overlay-owned.ssd-owned-link,
+.ssd-row-badges > .ssd-row-owned.ssd-owned-link { pointer-events: auto; cursor: pointer; }
+.ssd-overlay-owned.ssd-owned-link:hover,
+.ssd-row-badges > .ssd-row-owned.ssd-owned-link:hover { background: #2584c4; }
+.ssd-tab-pane .video-section > .ssd-overlay-owned ~ .ssd-overlay-ignored,
+.ssd-tab-pane .video-section > .ssd-overlay-owned ~ .ssd-overlay-preview { top: 2.45rem; }
+.ssd-tab-pane .video-section > .ssd-overlay-owned ~ .ssd-overlay-ignored ~ .ssd-overlay-preview { top: 4.2rem; }
+/* 「把 X 编号加到库里的片」按钮：挤在日期/简介下面，小一号，别抢标题的位置 */
+.ssd-inlib-add { margin-top: 6px; font-size: 12px; padding: 2px 8px; }
+.ssd-scene-card.ssd-inlib-done { opacity: 0.55; }
 /* ⚠️ 卡片里的 `filter: blur(30px)`（封面）/ `blur(2px)`（标题、描述、工作室链接）
    不是占位残留，是 sfwswitch（社区插件「Blur NSFW images and unblur on mouse over」）
    的效果，悬停时会解到 blur(0)。**别在这里屏蔽**：v2.5.0 曾经整卡写
@@ -4771,8 +5013,10 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   right: 0;
 }
 
-/* 选态：整行居中，收掉会换掉「当前页装的是哪些片」的控件（搜索 / 排序 /
-   每页 / 刷新 / 卡片大小 / 翻页），只留网格·列表切换与操作组。
+/* 选态：整行居中，收掉会换掉「当前页装的是哪些片」的控件（搜索 / 发行时间 /
+   排序 / 每页 / 刷新 / 卡片大小 / 翻页），只留标签筛选、操作组与网格·列表切换。
+   「发行时间」必须收：一改窗口就会重扫源站，多选集跨状态没意义（用户 2026-11-26）；
+   反过来「标签」按钮要留着 —— 它只筛这一屏的本地缓存，不会打断多选。
    不加边框、不加圆角、不换底色 —— 整行就是原生筛选栏，按钮也全是原生 .btn。
    底色也不用自己写：原生 `.filtered-list-toolbar` 规则里本来就带
    `background-color`（Dark 主题是 rgb(32,43,51)，Light 主题是另一份同值编译
@@ -4788,6 +5032,7 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   justify-content: center;
 }
 .ssd-tab-pane.is-selecting .filtered-list-toolbar .search-term-input,
+.ssd-tab-pane.is-selecting .filtered-list-toolbar .ssd-range,
 .ssd-tab-pane.is-selecting .filtered-list-toolbar .sort-by-select,
 .ssd-tab-pane.is-selecting .filtered-list-toolbar .page-size-selector,
 .ssd-tab-pane.is-selecting .filtered-list-toolbar .zoom-slider-container,
@@ -4906,3 +5151,401 @@ button.ssd-dp-extbtn { padding: 0; cursor: pointer; font-family: inherit; }
   color: var(--ssd-modal-muted);
 }
 .ssd-test-err { font-size: 12px; color: var(--ssd-danger); word-break: break-word; }
+
+/* ─── 标签筛选（演员/工作室 tab 与发现页共用）────────────────────────────────
+   按钮 + 下拉面板。tab 用原生 .btn / .dropdown-menu（颜色跟 Stash 主题走），
+   发现页加 .ssd-tagf-dp，改用 --sx-* 变量。面板内滚动，外层不滚。 */
+.ssd-tagf {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.ssd-tagf[hidden] { display: none; }
+.ssd-tagf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+/* 与同排原生按钮等高（实测 33px），徽章撑不高也压不矮；宽度对齐同排纯图标按钮
+   「多选」的 36×33（原来由 15px 图标 + 左右 8px padding 撑出 32，比邻居窄一截） */
+.ssd-tab-pane .btn.ssd-tagf-btn {
+  min-width: 36px;
+  height: 33px;
+  padding: 0 8px;
+  justify-content: center;
+}
+.ssd-tab-pane .btn.ssd-tagf-btn > svg { width: 15px; height: 15px; }
+/* 「刷新」纯图标（用户 2026-11-26）：33px 见方，与旁边的视图切换按钮同宽 */
+.ssd-tab-pane .btn.ssd-tab-refresh {
+  width: 33px;
+  height: 33px;
+  min-height: 33px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ssd-tab-pane .btn.ssd-tab-refresh > svg { width: 15px; height: 15px; }
+/* 激活态同多选入口：只把底色提亮一档，边框/文字跟原生走 */
+.btn.ssd-tagf-btn.active { filter: brightness(1.18); }
+/* 面板展开期间按钮保持按下态的深色（与日历卡/换范围菜单同一档：原生 .btn-secondary:hover） */
+.ssd-tagf.is-open:not(.ssd-tagf-dp) .ssd-tagf-btn {
+  background: #2a3742;
+  border-color: #25313a;
+  color: #fff;
+  filter: none;   /* 有规则时 .active 的 brightness 会把按下态又提亮回去 */
+}
+/* 规则条数：状态徽章，不可点 */
+.ssd-tagf-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(127, 127, 127, 0.28);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.ssd-tagf-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 8px;
+  /* 手机底部工具条/安全区的高度，JS 读到后从可用高度里扣掉 */
+  --ssd-sab: env(safe-area-inset-bottom, 0px);
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  overflow: hidden;
+}
+/* 底部放不下时由 place() 翻到按钮上方（同设置页原生下拉的避让） */
+.ssd-tagf-panel.is-above { top: auto; bottom: calc(100% + 4px); }
+/* 原生 .dropdown-menu.show 是 display:block，这里要竖向 flex */
+.ssd-tagf-panel.dropdown-menu.show { display: flex; margin: 0; }
+.ssd-tagf-dp .ssd-tagf-panel { display: flex; }
+/* 输入框跟同一面板里的标签行等高（原来 27px 明显矮一截，用户 2026-11-26）。
+   flex 列里必须 shrink 0：面板按可用高度限高时，可伸缩的子项会被压扁 ——
+   实测 375 窄屏下 34px 会被挤成 26px */
+.ssd-tagf-q {
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+/* Stash 的 .btn-toolbar .form-control { width: inherit } 会让 tab 里的框继承
+   面板的 300px，从右边撑出去：提高优先级，按面板内容宽度来 */
+.ssd-tagf-panel .ssd-tagf-q.form-control { width: 100%; }
+.ssd-tagf-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  flex: 0 0 auto;
+}
+/* 复选框藏起来，换成滑轨开关（同插件其它开关的做法）。选择器写重一点：
+   发现页工具栏对 input 有一条通用样式 */
+.ssd-tagf .ssd-tagf-mode input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.ssd-tagf-switch {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(127, 127, 127, 0.6);
+  background: rgba(127, 127, 127, 0.38);
+  transition: background 0.15s, border-color 0.15s;
+}
+.ssd-tagf-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.ssd-tagf-mode input:checked + .ssd-tagf-switch { background: var(--ssd-primary); border-color: var(--ssd-primary); }
+.ssd-tagf-mode input:checked + .ssd-tagf-switch::after { transform: translateX(14px); }
+.ssd-tagf-mode input:focus-visible + .ssd-tagf-switch { outline: 2px solid var(--ssd-primary); outline-offset: 2px; }
+.ssd-tagf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.ssd-tagf-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+/* 中性灰叠层：深色主题下提亮、浅色主题下压暗，两边都能看出 hover */
+.ssd-tagf-row:hover { background: rgba(127, 127, 127, 0.16); }
+.ssd-tagf-row:focus { outline: none; }
+.ssd-tagf-row:focus-visible { outline: 2px solid var(--ssd-primary); outline-offset: -2px; }
+.ssd-tagf-mark {
+  flex: 0 0 14px;
+  text-align: center;
+  font-weight: 700;
+}
+.ssd-tagf-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ssd-tagf-cnt {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+.ssd-tagf-row.is-inc { background: rgba(55, 178, 77, 0.22); }
+.ssd-tagf-row.is-inc .ssd-tagf-mark { color: #3dcc91; }
+.ssd-tagf-row.is-exc { background: rgba(240, 62, 62, 0.2); }
+.ssd-tagf-row.is-exc .ssd-tagf-mark { color: #ff7373; }
+.ssd-tagf-row.is-exc .ssd-tagf-name { text-decoration: line-through; opacity: 0.85; }
+.ssd-tagf-empty {
+  padding: 6px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+.ssd-tagf-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.ssd-tagf-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.ssd-tagf-clear {
+  flex: 0 0 auto;
+  /* 「清除」也要看得出是个按钮（用户 2026-11-26）：描一圈边、留点内边距，
+     深浅主题都用一档中性灰 */
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(127, 127, 127, 0.6);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ssd-tagf-clear:hover { border-color: rgba(127, 127, 127, 0.9); background: rgba(127, 127, 127, 0.14); }
+.ssd-tagf-clear[hidden] { display: none; }
+
+/* 发现页工具栏：与多选入口、下拉同一套外观（34px 高、8px 圆角）。
+   标签按钮也只剩图标（用户 2026-11-26），34px 见方，靠 title 说明用途 */
+.ssd-dp-tagbtn {
+  width: auto;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 8px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ssd-dp-tagbtn svg { width: 15px; height: 15px; }
+.ssd-dp-tagbtn:hover { color: var(--sx-hi); border-color: var(--sx-edge); }
+.ssd-dp-tagbtn.on {
+  color: var(--sx-acc-tx);
+  background: var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+.ssd-dp-tagbtn.on .ssd-tagf-n { background: rgba(0, 0, 0, 0.18); }
+/* 面板展开时压出「按下去」（dp 不写死原生色，同 .ssd-range-open.on 的做法） */
+.ssd-tagf-dp.is-open .ssd-tagf-btn {
+  border-color: var(--sx-edge);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+.ssd-tagf-dp .ssd-tagf-panel {
+  background: var(--sx-ui2);
+  border: 1px solid var(--sx-ui3);
+  border-radius: 9px;
+  color: var(--sx-tx);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ssd-dp-toolbar .ssd-tagf-dp .ssd-tagf-q { height: 30px; padding: 0 10px; }
+.ssd-tagf-dp .ssd-tagf-switch { background: var(--sx-ui3); }
+.ssd-tagf-dp .ssd-tagf-mode input:checked + .ssd-tagf-switch { background: var(--sx-acc); }
+.ssd-tagf-dp .ssd-tagf-mode input:focus-visible + .ssd-tagf-switch { outline-color: var(--sx-acc); }
+.ssd-tagf-dp .ssd-tagf-row:hover { background: var(--sx-ui3); }
+.ssd-tagf-dp .ssd-tagf-row:focus-visible { outline-color: var(--sx-acc); }
+.ssd-tagf-dp .ssd-tagf-row.is-inc { background: color-mix(in srgb, var(--sx-gr) 22%, transparent); }
+.ssd-tagf-dp .ssd-tagf-row.is-inc .ssd-tagf-mark { color: var(--sx-gr); }
+.ssd-tagf-dp .ssd-tagf-row.is-exc { background: color-mix(in srgb, var(--sx-re) 20%, transparent); }
+.ssd-tagf-dp .ssd-tagf-row.is-exc .ssd-tagf-mark { color: var(--sx-re-tx); }
+.ssd-tagf-dp .ssd-tagf-clear {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--sx-ui3);
+  border-radius: 7px;
+  background: var(--sx-ui);
+  color: var(--sx-tx2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ssd-tagf-dp .ssd-tagf-clear:hover { color: var(--sx-re-tx); border-color: var(--sx-re); }
+
+/* ─── 带标签问源站（K4）─────────────────────────────────────────────────────
+   面板底部的「源站上的其他标签」：与本地列表分开滚动，空字符串时不占高 */
+.ssd-tagf-remote {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(200px, 30vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ssd-tagf-remote:empty { display: none; }
+.ssd-tagf-rhead { padding: 6px 6px 2px; font-size: 11px; opacity: 0.75; }
+.ssd-tagf-rrow .ssd-tagf-mark { opacity: 0.85; }
+
+/* ─── 发行时间（发现页「累计热度」子 tab 旁 · K3）─────────────────────────────
+   与筛选行的下拉同一套 --sx-* 外观；日期框的原生日历图标跟随页面明暗 */
+.ssd-range-dp { gap: 8px; }
+.ssd-range-dp .ssd-range-sel,
+.ssd-range-dp .ssd-range-date {
+  background: var(--sx-ui);
+  border: 1px solid var(--sx-line2);
+  color: var(--sx-tx);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  min-width: 0;
+  cursor: pointer;
+}
+/* 整组高度对齐右边的翻页按钮（实测 33px） */
+.ssd-range-dp .ssd-range-sel,
+.ssd-range-dp .ssd-range-date { height: 28px; box-sizing: border-box; }
+.ssd-range-dp .ssd-range-sel:focus,
+.ssd-range-dp .ssd-range-date:focus {
+  outline: 1px solid var(--sx-acc);
+  border-color: var(--sx-acc);
+}
+.ssd-range-dp .ssd-range-date { color-scheme: var(--sx-scheme, dark); }
+/* 「自某日起…」的 ▾ 与换范围菜单：跟这一排下拉同一套 --sx-* 外观 */
+.ssd-range-dp .ssd-range-open,
+.ssd-range-dp .ssd-range-cal {
+  height: 28px;
+  width: 30px;
+  background: var(--sx-ui);
+  border: 1px solid var(--sx-line2);
+  color: var(--sx-tx);
+  cursor: pointer;
+}
+.ssd-range-dp .ssd-range-open:hover,
+.ssd-range-dp .ssd-range-cal:hover { color: var(--sx-hi); border-color: var(--sx-edge); }
+/* 连体组：只留外圈圆角（覆盖上面 .ssd-range-date 的 7px） */
+.ssd-range-dp .ssd-range-since > * { border-radius: 0; margin-left: -1px; }
+.ssd-range-dp .ssd-range-since > :first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+.ssd-range-dp .ssd-range-since > :last-child { border-radius: 0 7px 7px 0; }
+/* 日期框宽度：数字本身约 64 宽（12.5px 等宽数字），94 时两侧各空 15px 偏多，
+   收到 90（两侧各 13）刚好（用户 2026-11-27） */
+.ssd-range-dp .ssd-range-date { width: 90px; }
+/* 发现页这套不完全跟原生：日期框左右留白收窄、用主题底色（不用原生的深色选中态），
+   三块靠叠边框的竖线分割；高度/边框宽度/圆角统一，横向线才不会错位 */
+.ssd-range-dp .ssd-range-since > .ssd-range-date {
+  height: 28px;
+  padding: 0 4px;
+  line-height: 26px;
+  background: var(--sx-ui);
+  border-color: var(--sx-line2);
+}
+.ssd-range-dp .ssd-range-since > .ssd-range-open,
+.ssd-range-dp .ssd-range-since > .ssd-range-cal { padding: 0; }
+/* 日历展开时按钮保持按下态（dp 不写死原生色：底色不动，用内阴影压出「按下去」） */
+.ssd-range-dp .ssd-range-cal.on,
+.ssd-range-dp .ssd-range-open.on {
+  background: var(--sx-ui);
+  border-color: var(--sx-edge);
+  color: var(--sx-hi);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+/* ▾ 图标与 select 背景箭头统一收成 discover tab 那档 7.5×12（原来 11×16 / 10×16 偏大） */
+.ssd-range-dp .ssd-range-open svg { width: 7.5px; height: 12px; }
+.ssd-range-dp .ssd-range-cal svg { width: 17px; height: 13px; }
+/* 非「自某日起…」时，select 右侧补上原生的上下双三角（我们的 select 没挂 Stash 的
+   `.btn-secondary.form-control`，所以没有原生的背景箭头） */
+.ssd-range-dp .ssd-range-sel {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='1.25 3.0 2.5 4.0' fill='%23f5f8fa'><polygon points='1.41 4.67 2.48 3.18 3.54 4.67'/><polygon points='3.54 5.33 2.48 6.82 1.41 5.33'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  background-size: 7.5px 12px;
+  padding-right: 24px;
+}
+/* 发现页标签按钮：无徽章时是 34 的方角，有数字时随内容撑开（写死宽度会把图标和数字挤在一起） */
+.ssd-range-dp .ssd-dp-tagbtn,
+.ssd-dp-tagbtn {
+  width: auto;
+  min-width: 34px;
+  padding: 0 6px;
+  gap: 3px;
+  box-sizing: border-box;
+}
+/* 没有计数徽章时收成 34×34 的正方形；有数字时随内容撑开（写死宽度会把图标和数字挤在一起） */
+.ssd-dp-tagbtn:not(:has(.ssd-tagf-n)) {
+  width: 34px;
+  padding: 0;
+}
+.ssd-range-dp .ssd-range-menu {
+  background: var(--sx-ui2);
+  border: 1px solid var(--sx-ui3);
+  border-radius: 9px;
+  color: var(--sx-tx);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ssd-range-dp .ssd-range-item:hover { background: var(--sx-ui3); }
+.ssd-range-dp .ssd-range-item.on { color: var(--sx-acc); }
+/* 日历卡不再做 dp 专属配色：整套走原生 react-datepicker 的类名，主题覆盖链才生效 */

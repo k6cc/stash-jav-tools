@@ -24,6 +24,9 @@
     return;
   }
   var tc = SSD.tc;
+  // 标签筛选（K1）：规则/面板与演员 tab 共用同一套实现，筛选函数由本页自己写
+  // （本页的卡片是 item 包装，tab 是 item.scene，两边的数据形状不一样）
+  var TF = SSD.tagFilter || null;
 
   // ═══ Theme tokens (suiteTheme) ═══════════════════════════════════════════
   // 颜色取自 Stash 当前展示的任何主题：无主题时从页面（背景/卡片/文本/静音文
@@ -284,7 +287,13 @@
   var BATCH_CONCURRENCY = 3;      // binge 实测：3 宽并发对源友好且冷加载快
   var BOX_PAGE_SIZE = 1000;       // 实测源不封顶 per_page；count 制终止兼容偷降源的盒
   var BOX_MAX_PAGES = 50;
-  var TRENDING_PER_PAGE = 30;     // §5 热门榜
+  // §5 热门榜取头部 100 条（源端单页上限），仍只发 page:1、不翻页 —— 提升只加
+  // 单次 payload，请求次数不变。实测 30→100：javstash 2.91s→2.93s / 58→195KB，
+  // stashdb 1.86s→2.47s / 130→411KB；slim 后缓存约 117K 字符，占单键预算 3.2%。
+  var TRENDING_PER_PAGE = 100;
+  // 累计热度榜（K3）：POPULARITY 是「在 stash-box 上匹配过该场景的用户数」，
+  // 也是源端单页 100 的上限 —— 取前 100 就够做榜，不再翻页
+  var POPULAR_PER_PAGE = 100;
   var STUDIO_PAGE_SIZE = 100;     // §4.6 工作室管线
   // 显示上限（设置页可改；分组/详情内不受限 — 用户 2026-10-25 第七轮）
   function capPerActor() { return Math.max(1, toNum(dpPrefs().capPerActor, 2)); }
@@ -568,12 +577,25 @@
     return p;
   }
 
-  // §5 热门榜：TRENDING 全站原样（不过滤库内演员、无日期窗），30 条
+  // §5 热门榜：TRENDING 全站原样（不过滤库内演员、无日期窗），取头部 100 条
   function fetchTrendingScenes(box, prio) {
     return SSD.boxRateLimiter.submit(function () {
       return SSD.callBoxSceneList(box, {
         sort: "TRENDING", direction: "DESC", page: 1, per_page: TRENDING_PER_PAGE,
       }, BOX_TIMEOUT);
+    }, prio).then(function (qs) {
+      return (qs && qs.scenes) || null; // null = 失败
+    });
+  }
+
+  // §5 累计热度榜（K3）：POPULARITY 排序，前 100 条。sinceIsoDate 有值时只看
+  // 那天（含）之后发行的场景 —— source 的 date 条件是严格大于，所以传前一天
+  // （与演员/工作室 tab 同一套 drDayBefore，别各写一份）
+  function fetchPopularScenes(box, sinceIsoDate, prio) {
+    return SSD.boxRateLimiter.submit(function () {
+      var input = { sort: "POPULARITY", direction: "DESC", page: 1, per_page: POPULAR_PER_PAGE };
+      if (sinceIsoDate && SSD.range) input.date = { value: SSD.range.dayBefore(sinceIsoDate), modifier: "GREATER_THAN" };
+      return SSD.callBoxSceneList(box, input, BOX_TIMEOUT);
     }, prio).then(function (qs) {
       return (qs && qs.scenes) || null; // null = 失败
     });
@@ -873,7 +895,7 @@
   // unread.v1 / poll.v1 / trendingPerf.v1 的版本号是各存储自己的，按「以 .v1 结尾」
   // 删会丢用户数据（已读、关注、入库快照都在里面）。host 可能带端口（URL.host 含
   // ":9999"），所以不能假设 host 里没有冒号，用贪婪前缀 + 固定家族名兜住。
-  var CACHE_KEY_TAIL_RE = /^(.*):(newScenes|trending|studios)\.v(\d+)$/;
+  var CACHE_KEY_TAIL_RE = /^(.*):(newScenes|trending|popular|studios)\.v(\d+)$/;
   function sweepOrphanCaches() {
     var removed = 0, chars = 0;
     try {
@@ -1275,6 +1297,172 @@
     });
   }
 
+  // 累计热度榜的发行时间范围（K3）：发现页偏好，跨会话保留，默认不限时间。
+  // tag 标识「这是哪一份数据」：只认起始日。相对范围（近一周/月/年）每天都会算出
+  // 新的起始日，所以必须把算出来的日期算进 tag；而「自某日起…」只要日期相同，
+  // 拿到的就是同一份数据 —— 两者共用一个 tag，切过去才不会平白重查一次源站。
+  var POP_RANGE_KEYS = ["", "7", "30", "365", "all", "since"];
+  function popularRange() {
+    var p = dpPrefs();
+    var key = POP_RANGE_KEYS.indexOf(p.popRange) >= 0 ? (p.popRange || "") : "all";
+    var since = key === "since" && SSD.range && SSD.range.validDate(p.popSince) ? p.popSince : "";
+    if (key === "since" && !since) key = "all";
+    var cutoff = key === "all" ? null : (SSD.range ? SSD.range.cutoff(key, since) : null) || null;
+    if (key !== "all" && !cutoff) key = "all";   // 起始日非法（'' 范围）→ 退回不限
+    return { key: key, since: since, cutoff: cutoff, tag: cutoff || "all" };
+  }
+
+  // 累计热度榜：与热门榜同形（原榜顺序 + 库内演员标记 + 在库中角标）。
+  // TPDB 没有热度数据，它的 REST 适配层还会把这个查询变成「全站最新」→ 直接不查，
+  // 回一个 noPopularity 标记让视图说清楚
+  function getPopularData(opts) {
+    opts = opts || {};
+    var r = popularRange();
+    return resolveBase().then(function (base) {
+      var host = base.source.host;
+      var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
+      var done = function (res) { res.rangeTag = r.tag; return res; };
+      if (SSD.isTPDBBox(box)) {
+        return done({ source: base.source, fetchedAt: 0, fromCache: "network", items: [], noPopularity: true });
+      }
+      function fetchFresh() {
+        return fetchPopularScenes(box, r.cutoff, opts.prio).then(function (scenes) {
+          if (scenes == null) throw { ssdKind: "box", message: "popular fetch failed" };
+          cacheWrite(host, "popular", r.tag, scenes);
+          return buildTrending(base, { fetchedAt: Date.now(), scenes: scenes }, "network").then(done);
+        });
+      }
+      if (!opts.force) {
+        var fresh = cacheRead(host, "popular", r.tag);
+        if (fresh) return buildTrending(base, fresh, "fresh").then(done);
+        // 与 latest / trending 同款 SWR：7 天内的旧榜先出，别空等一次整榜拉取。
+        // 只认同一个范围的旧榜 —— 换了范围先出旧范围的榜会张冠李戴
+        var stale = cacheReadStale(host, "popular");
+        if (stale && stale.sinceIsoDate === r.tag) {
+          return buildTrending(base, stale, "stale").then(function (res) {
+            res.refresh = bgRefresh(fetchFresh);
+            return done(res);
+          });
+        }
+      }
+      return fetchFresh();
+    }).catch(function (e) {
+      // 错误也记下是哪个范围的：用户换了范围，旧错误不该挡着新范围
+      if (e && typeof e === "object") e.rangeTag = r.tag;
+      throw e;
+    });
+  }
+
+  // 热门视图的子 tab：近期热门（TRENDING，近 7 天）| 累计热度（POPULARITY，全时段）。
+  // TPDB 下热门本就是「网站上新」，也没有热度数据，只剩前者
+  function trendSub() {
+    if (dpPrefs().trendSub !== "popular") return "trending";
+    return popSourceIsTPDB() ? "trending" : "popular";
+  }
+  // 当前源是不是 TPDB：先看已到手的数据集（累计热度 / 热门 / 最新）。热门视图不拉
+  // 「最新」，_dp.boxes 可能还是空的，单靠 sourceIsTPDB() 会误判成不是
+  function popSourceIsTPDB() {
+    var s = (_dp.d.popular && _dp.d.popular.source) || (_dp.d.trending && _dp.d.trending.source) ||
+      (_dp.d.latest && _dp.d.latest.source) || null;
+    if (s && s.endpoint) return !!SSD.isTPDBBox({ endpoint: s.endpoint });
+    if (sourceIsTPDB()) return true;
+    // 连数据集和 _dp.boxes 都还没就绪（首屏第一帧就是这种情况，热门视图又不拉
+    // 「最新」）：偏好里存的就是 endpoint（旧版也可能存了名字），直接认这个。
+    var pref = dpPrefs().source || "";
+    if (!pref) return false;
+    return !!SSD.isTPDBBox({ endpoint: pref }) || /theporndb/i.test(pref);
+  }
+  // 切热门子 tab（用户 2026-11-26：进「累计热度」强制原榜顺序，离开时还原）
+  function setTrendSub(sub) {
+    dpSetPrefs({ trendSub: sub === "popular" ? "popular" : "trending" });
+    _dp.page = 1;
+  }
+  function popSortLocked() {
+    return _dp.view === "trending" && trendSub() === "popular";
+  }
+  // 累计热度期间把排序钉在「原榜顺序」：榜单位次就是它的语义，按日期/标题重排
+  // 就不再是榜。进入时记住用户原来的选择，离开（切子 tab 或切视图）即还原。
+  // 只动会话内的 _dp.sort，不写偏好 —— 那是用户对「最新发布」等视图的选择
+  function syncPopSort() {
+    var has = Object.prototype.hasOwnProperty.call(_dp, "popSortPrev");
+    if (popSortLocked()) {
+      if (_dp.sort !== "hot") {
+        if (!has) _dp.popSortPrev = _dp.sort || "";
+        _dp.sort = "hot";
+      }
+    } else if (has) {
+      _dp.sort = _dp.popSortPrev || "date-desc";
+      delete _dp.popSortPrev;
+    }
+  }
+  // 排序下拉跟着锁定状态走：锁定时显示「原榜顺序」并禁用（title 说明原因），
+  // 解锁后回到用户原来的选择
+  function syncSortControl() {
+    var sel = _dp.refs.sort;
+    if (!sel) return;
+    var locked = popSortLocked();
+    var want = _dp.sort || "date-desc";
+    if (sel.value !== want) sel.value = want;
+    sel.disabled = locked;
+    sel.title = locked
+      ? tc("累计热度按原榜顺序排列，不能换排序", "Popular is a ranking — its order can't be changed")
+      : tc("排序方式", "Sort by");
+  }
+
+
+  // 子 tab 行（累计热度时后面跟发行时间下拉）。加载中 / 出错时也画，
+  // 否则用户既切不回去、也换不了范围
+  function trendHead() {
+    if (popSourceIsTPDB()) return null;
+    var sub = trendSub();
+    var row = el("div", "ssd-dp-tabs ssd-dp-subtabs");
+    [["trending", tc("近期热门", "Trending"),
+      tc("最近 7 天在 stash-box 上被匹配最多的场景", "Matched most on the stash-box in the last 7 days")],
+     ["popular", tc("累计热度", "Popular"),
+      tc("在 stash-box 上被最多用户匹配过的场景（全时段）", "Matched by the most users on the stash-box, all time")]].forEach(function (t) {
+      var b = el("button", "ssd-dp-tab" + (sub === t[0] ? " on" : ""), t[1]);
+      b.type = "button";
+      b.title = t[2];
+      b.addEventListener("click", function () {
+        if (sub === t[0]) return;
+        setTrendSub(t[0]);
+        render();
+      });
+      row.appendChild(b);
+    });
+    if (sub !== "popular") return [row];
+    var r = popularRange();
+    var range = SSD.range.mount({
+      variant: "dp",
+      value: r.key || "all",
+      since: r.since,
+      // 切到「自某日起…」时预填当前窗口的起始日：窗口没变，卡片就该原样留着
+      defaultSince: r.cutoff || "",
+      onChange: function (key, since) {
+        var before = popularRange();
+        dpSetPrefs({ popRange: key, popSince: key === "since" ? since : "" });
+        var after = popularRange();
+        // 只是换了个写法（近一周 → 同一日的「自某日起…」）：同一份数据，不重查不重画
+        if (after.tag === before.tag) {
+          render();
+          return;
+        }
+        _dp.page = 1;
+        // 范围变了，手里的这份（以及这个范围的错误）作废；新数据落地前先画骨架
+        _dp.d.popular = null;
+        _dp.err.popular = null;
+        ensureData(["popular"]);
+        render();
+      },
+    });
+    var rangeSel = range.querySelector("select");
+    if (rangeSel) {
+      rangeSel.title = tc("发行时间（热度仍按全时段的匹配人数排）",
+        "Released (popularity still counts all-time matches)");
+    }
+    return [row, range];
+  }
+
   // §4.6 工作室管线
   function getStudioData(opts) {
     opts = opts || {};
@@ -1464,6 +1652,11 @@
     progress: null,   // latest 拉取进度 {done,total}（4a，仅加载态文案）
     fetchedAt: 0,     // 数据集最新 fetchedAt（页头相对时间）
     search: "", page: 1,
+    // 标签筛选（K1）：与搜索框同口径，只筛本地已拉到的数据；tagBase 是
+    // 「搜索排序之后、标签之前」的那批，标签面板拿它算每个标签的条数
+    tags: null,       // TF.newRules()：inc/exc/all
+    tagUi: null,      // TF.newUi()：面板开合/搜索词/焦点/滚动
+    tagBase: [],      // 本帧的 [{sc, ...}]，只在 render 里填
     boxes: [],        // 已配置 stash-box（数据源下拉）
     refreshing: false,
     // 本轮刷新的进度与结果（页头文案 + 模块降暗都读这三个）
@@ -1828,8 +2021,85 @@
   }
   function filterItems(list) {
     var q = _dp.search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(function (it) { return itemHaystack(it).indexOf(q) !== -1; });
+    var out = q ? list.filter(function (it) { return itemHaystack(it).indexOf(q) !== -1; }) : list;
+    if (!TF) return out;
+    // 标签面板的计数以「搜索之后、标签之前」为准：一个标签被选中后，别的
+    // 标签的数字不该跟着变成 0（否则只能一个个试）
+    if (!_dp.tagBase) _dp.tagBase = [];
+    for (var i = 0; i < out.length; i++) _dp.tagBase.push(out[i]);
+    if (!tagFiltering()) return out;
+    return out.filter(function (it) { return TF.matches(it.scene, _dp.tags); });
+  }
+  // 规则对象按需建（模块先于本文件加载，但 _dp.tags 在插件脚本加载时还是 null）
+  function tagRules() {
+    if (!_dp.tags && TF) _dp.tags = TF.newRules();
+    return _dp.tags;
+  }
+  function tagUi() {
+    if (!_dp.tagUi && TF) _dp.tagUi = TF.newUi();
+    return _dp.tagUi;
+  }
+  function tagFiltering() {
+    return !!(TF && TF.isActive(tagRules()));
+  }
+  // 面板计数用的场景：tagBase 去重（同一部可能同时出现在几处）
+  function tagBaseScenes() {
+    var seen = Object.create(null), out = [];
+    (_dp.tagBase || []).forEach(function (it) {
+      var sc = it && it.scene;
+      if (!sc) return;
+      var k = (it.endpoint || "") + ":" + sc.id;
+      if (seen[k]) return;
+      seen[k] = true;
+      out.push(sc);
+    });
+    return out;
+  }
+  // 规则变了：回到第 1 页重画。K4 的「带标签问源站」打开时还要重查源站，
+  // 那部分逻辑在 tagCriterion 那一段里接管（这里只做本地筛选的重画）
+  function tagRulesChanged() {
+    _dp.page = 1;
+    render();
+  }
+  // 工具栏里的标签按钮（发现页 variant：紫色主题走 --sx-*）
+  function mountTagFilter() {
+    if (!TF) return null;
+    return TF.mount({
+      rules: tagRules(),
+      ui: tagUi(),
+      variant: "dp",
+      scenes: tagBaseScenes,
+      onChange: tagRulesChanged,
+    });
+  }
+  // 标签只在列表类视图里生效，总览 / 设置页把按钮藏起来。规则还生效时不藏 ——
+  // 否则用户在总览页找不到取消入口，只能切回列表才看见「标签 1」
+  var TAG_VIEWS = { follow: 1, latest: 1, preview: 1, trending: 1, studios: 1, perfFilter: 1, studioFilter: 1 };
+  function syncTagFilter() {
+    var w = _dp.refs.tagf;
+    if (!w) return;
+    var hide = !TAG_VIEWS[_dp.view] && !tagFiltering();
+    if (w.hidden !== hide) {
+      w.hidden = hide;
+      syncToolbar();       // 可见性变了，单行装不装得下的判定也要重算
+    }
+    if (w.ssdRefresh) w.ssdRefresh();
+  }
+  // 设置页的开关：开 → 挂回按钮；关 → 摘掉并把规则清空（否则列表还在被筛着，
+  // 却找不到取消的地方）
+  function syncTagButtonMount() {
+    var refs = _dp.refs;
+    if (!TF || !refs.bar) return;
+    var want = dpPrefs().tagButton !== false;
+    if (want && !refs.tagf) {
+      refs.tagf = mountTagFilter();
+      if (refs.tagf) refs.bar.insertBefore(refs.tagf, refs.selbar || null);
+    } else if (!want && refs.tagf) {
+      refs.tagf.remove();
+      refs.tagf = null;
+      TF.clear(tagRules());
+    }
+    syncToolbar();
   }
   // 场景内演员数（找单人场景用）。performers 元素有两种形态：stash-box 的
   // {as, performer} 与本地场景的 {performer}，都按「有 performer 主体」计数，
@@ -2034,6 +2304,7 @@
   var DATASETS = {
     latest: function (o) { return getDiscoverData(o); },
     trending: function (o) { return getTrendingData(o); },
+    popular: function (o) { return getPopularData(o); },
     studios: function (o) { return getStudioData(o); },
     trendingPerf: function (o) { return getTrendingPerformers(o); },
   };
@@ -2043,7 +2314,8 @@
       // 反过来的话轻查询会在重下载中途超时（实测「热门」15s 扑空）
       case "overview": return ["trendingPerf", "trending", "studios", "latest"];
       case "latest": case "preview": case "follow": return ["latest"];
-      case "trending": return ["trending"];
+      // 热门视图按子 tab 只取当前那份：近期热门 或 累计热度
+      case "trending": return [trendSub() === "popular" ? "popular" : "trending"];
       case "studios": return ["studios"];
       case "performers": return ["trendingPerf", "latest"];
       case "perfFilter": return ["latest"];
@@ -2113,6 +2385,7 @@
   var MODULES_OF_DATASET = {
     latest: ["actors", "latest", "preview", "performers"],
     trending: ["trending"],
+    popular: ["trending"],     // 累计热度与热门共用「热门」模块
     studios: ["studios"],
     trendingPerf: ["performers"],
   };
@@ -2124,10 +2397,15 @@
     performers: ["latest", "trendingPerf"],
     trending: ["trending"], studios: ["studios"],
   };
+  // 「热门」模块的依赖随子 tab 换：累计热度时等 popular 落地才算亮
+  function moduleDeps(mod) {
+    if (mod === "trending") return [trendSub() === "popular" ? "popular" : "trending"];
+    return MODULE_DEPS[mod] || [];
+  }
   function moduleWaiting(mod) {
     var pend = _dp.refreshPending;
     if (!pend) return false;
-    var deps = MODULE_DEPS[mod] || [];
+    var deps = moduleDeps(mod);
     for (var i = 0; i < deps.length; i++) if (pend[deps[i]]) return true;
     return false;
   }
@@ -2315,9 +2593,11 @@
       // 「在库中」：热门榜保留完整榜单后，已入库的片靠这个徽章标出来
       // （用户 2026-11-06）。与「库内演员」不是一回事 —— 那条指的是这部片里有你
       // 库内的演员，两者可以同时出现，所以插到堆叠容器最上面单独一个。
-      if (opts.owned && item.owned) {
+      if (opts.owned && item.owned && !card.querySelector(".ssd-overlay-owned")) {
         var ownBadge = el("span", "ssd-overlay-owned", tc("在库中", "In library"));
-        ownBadge.title = tc("这部片已在你的本地库中", "This scene is already in your library");
+        ownBadge.title = tc("这部片已在你的本地库中。点开它", "This scene is already in your library. Click to open it");
+        // K7：「在库中」可点，打开库里那条（已知编号的按编号查，再退到番号）
+        if (SSD.ownedLabelClick) SSD.ownedLabelClick(ownBadge, item);
         badgeBox.insertBefore(ownBadge, badgeBox.firstChild);
       }
       if (opts.days) {
@@ -3315,6 +3595,9 @@
     latest: { title: tc("最新发布", "Latest"), key: "latest", items: function (d) { return d.latest || []; }, sort: "date-desc" },
     preview: { title: tc("预告", "Upcoming"), key: "latest", items: function (d) { return d.preview || []; }, sort: "date-asc", days: true },
     trending: { title: tc("热门", "Trending"), key: "trending", items: function (t) { return t.items || []; }, sort: "hot", inlib: true, owned: true },
+    // 累计热度（K3）：与热门榜同形 —— 同样是「源给的榜单位次」，卡片同样标
+    // 库内演员 / 在库中，不按日期过滤也不重排
+    popular: { title: tc("累计热度", "Popular"), key: "popular", items: function (t) { return t.items || []; }, sort: "hot", inlib: true, owned: true },
     studios: { title: tc("工作室新发布", "Studio releases"), key: "studios", items: function (st) { return st.items || []; }, sort: "date-desc" },
   };
   function latestSub() {
@@ -3325,9 +3608,52 @@
     // latest 视图内嵌「已发布 | 预告」子 tab
     var sub = view === "latest" ? latestSub() : "";
     if (view === "latest" && sub === "preview") cfg = DRILL.preview;
+    // 热门视图内嵌「近期热门 | 累计热度」子 tab（K3）
+    var tsub = view === "trending" ? trendSub() : "";
+    if (tsub === "popular") cfg = DRILL.popular;
+    var thead = view === "trending" ? trendHead() : null;
     var ds = _dp.d[cfg.key];
+    // 累计热度换了时间范围：手里这份（或这个错误）属于旧范围，作废重取。
+    // 旧请求还在途时 ensureData 会跳过，它回来后的那次重绘再走到这里重取
+    if (tsub === "popular") {
+      var wantTag = popularRange().tag;
+      var oldErr = _dp.err.popular;
+      if ((ds && ds.rangeTag !== wantTag) || (!ds && oldErr && oldErr.rangeTag && oldErr.rangeTag !== wantTag)) {
+        _dp.d.popular = null;
+        _dp.err.popular = null;
+        ds = null;
+        ensureData(["popular"]);
+      }
+    }
+    // 加载中 / 出错时也先画子 tab 行：否则用户既切不回「近期热门」，也换不了范围
+    function headNode() {
+      if (!thead) return null;
+      var h = el("div", "ssd-dp-headrow");
+      thead.forEach(function (n) { h.appendChild(n); });
+      return h;
+    }
     if (!ds) {
-      if (_dp.err[cfg.key]) { c.appendChild(stateBox("error", errText(_dp.err[cfg.key]), function () { retryDataset(cfg.key); })); return; }
+      if (_dp.err[cfg.key]) {
+        // 老版 stash-box 没有 POPULARITY：重试没用，按钮改成切回「近期热门」
+        var err0 = _dp.err[cfg.key];
+        if (tsub === "popular" && SSD.isNoPopularityError && SSD.isNoPopularityError(err0)) {
+          var h0 = headNode();
+          if (h0) c.appendChild(h0);
+          var npBox = stateBox("error", tc("这个源的 stash-box 版本较旧，没有热度数据。「近期热门」仍可用。",
+            "This source runs an older stash-box without popularity data. Trending still works."), function () {
+            setTrendSub("trending");
+            render();
+          });
+          var npBtn = npBox.querySelector(".ssd-dp-retry");
+          if (npBtn) npBtn.textContent = tc("看近期热门", "Show Trending");
+          c.appendChild(npBox);
+          return;
+        }
+        if (thead) { var h1 = headNode(); if (h1) c.appendChild(h1); }
+        c.appendChild(stateBox("error", errText(err0), function () { retryDataset(cfg.key); }));
+        return;
+      }
+      if (thead) { var h2 = headNode(); if (h2) c.appendChild(h2); }
       c.appendChild(stateBox("loading", loadingText()));
       return;
     }
@@ -3335,7 +3661,8 @@
     // 底部翻页」各占一行，iPad 上白扔约 58px。窄了就由 flex-wrap 把右侧翻页
     // 掉到第二行 —— 正是「不够才换行」。
     var prefs = dpPrefs();
-    var sort = _dp.sort || cfg.sort;
+    // 累计热度锁定「原榜顺序」：榜单位次就是语义（syncPopSort 会分别记住/还原）
+    var sort = popSortLocked() ? "hot" : (_dp.sort || cfg.sort);
     var perPage = toNum(prefs.perPage, 24);
     var all = sortItems(filterItems(cfg.items(ds)), sort);
     var totalPages = Math.max(1, Math.ceil(all.length / perPage));
@@ -3361,6 +3688,7 @@
       });
       headrow.appendChild(subRow);
     }
+    if (thead) thead.forEach(function (n) { headrow.appendChild(n); });
     var topPager = pagerBar(view, all.length, totalPages, perPage, { top: true, trim: ds.cacheTrim });
     if (topPager) headrow.appendChild(topPager);
     if (headrow.firstChild) c.appendChild(headrow);
@@ -3391,8 +3719,13 @@
         goStash.addEventListener("click", function () { window.location.assign(SSD.appUrl("/studios")); });
         noFav.appendChild(goStash);
         c.appendChild(noFav);
+      } else if (ds.noPopularity) {
+        // 这个源没有热度数据（TPDB）：说清楚并给出换源入口，别显示成「暂无内容」
+        c.appendChild(stateBox("empty",
+          tc("这个源没有热度数据。在筛选行把数据源换成 StashDB 等 stash-box 即可。",
+             "This source has no popularity data. Switch the source in the toolbar to a stash-box such as StashDB.")));
       } else {
-        c.appendChild(stateBox("empty", _dp.search ? tc("没有匹配的场景", "No matching scenes") : tc("暂无内容", "Nothing here yet")));
+        c.appendChild(stateBox("empty", (_dp.search || tagFiltering()) ? tc("没有匹配的场景", "No matching scenes") : tc("暂无内容", "Nothing here yet")));
       }
     } else {
       c.appendChild(sceneGrid(pageItems, { days: cfg.days, allowList: true, inlib: cfg.inlib, owned: cfg.owned }));
@@ -4245,6 +4578,29 @@
       }
     }
 
+    // 标签筛选（与搜索叠加）：先把「搜索之后、标签之前」的组内场景记进 tagBase
+    // 供面板计数，再收掉组内一部都不满足的演员。演员名命中搜索时整组都算
+    if (TF) {
+      var followSearchItems = function (f) {
+        var g = byStash[String(f.stashId)];
+        if (!g) return [];
+        if (!q || String(f.name || "").toLowerCase().indexOf(q) !== -1) return g.items;
+        return g.items.filter(function (it) { return itemHaystack(it).indexOf(q) !== -1; });
+      };
+      fl.forEach(function (f) {
+        followSearchItems(f).forEach(function (it) { _dp.tagBase.push(it); });
+      });
+      if (tagFiltering()) {
+        fl = fl.filter(function (f) {
+          return followSearchItems(f).some(function (it) { return TF.matches(it.scene, _dp.tags); });
+        });
+        if (!fl.length) {
+          c.appendChild(stateBox("empty", tc("没有符合标签筛选的新作品", "No new scenes match the tag filter")));
+          return;
+        }
+      }
+    }
+
     // 默认排序（用户 2026-10-27）：有新作品未读 → 有新作品已读 → 无新作品，
     // 同层内按名称（日文片假名/汉字混排用 ja + numeric 更稳）。
     function groupTier(g) {
@@ -4377,11 +4733,16 @@
       if (g && expanded) {
         var body = el("div", "ssd-dp-fgrp-body");
         // 搜索时组内也过滤；截断按过滤后的长度算（先 filter 再 slice）。
+        // 标签筛选同一口径：filterItems 里一并算，没搜索词时也要走
         // 关注页是多组纵向堆叠，组内再嵌一整套翻页会出现多套分页条、且共用
         // _dp.page 会互相串号 → 只显示前「每页」条，要看全部走分组头「详情」
-        var list = q ? filterItems(g.items) : g.items;
+        var list = filterItems(g.items);
         var lim = toNum(dpPrefs().perPage, 24);
-        body.appendChild(sceneGrid(list.slice(0, lim), { unread: true, allowList: true }));
+        if (!list.length) {
+          body.appendChild(el("div", "ssd-dp-mini-sub", tc("这个分组里的新作品都不符合标签筛选", "No new scenes in this group match the tag filter")));
+        } else {
+          body.appendChild(sceneGrid(list.slice(0, lim), { unread: true, allowList: true }));
+        }
         grp.appendChild(body);
       }
       c.appendChild(grp);
@@ -5594,6 +5955,58 @@
     secG.appendChild(rowI);
     wrap.appendChild(secG);
 
+    // ── 筛选（K1 / K4）──────────────────────────────────────────────────────
+    // 两个开关都放这里（用户 2026-11-26）。标签按钮开关只管「显示不显示」——
+    // 关掉时连同已选规则一起清掉，否则列表还被筛着却找不到取消的地方
+    wrap.appendChild(el("h3", "ssd-dp-set-h", tc("筛选", "Filters")));
+    var secF = el("div", "ssd-dp-set-box");
+    var tagBtnLabel = tc("演员 / 工作室「发现」标签显示「标签」筛选按钮",
+      "Show the tag-filter button on the performer/studio Discover tab");
+    var rowTB = el("div", "ssd-dp-setrow");
+    rowTB.appendChild(el("span", "ssd-dp-setname", tagBtnLabel));
+    rowTB.appendChild(switchToggle(prefs.tagButton !== false, function (on) {
+      if (!dpSetPrefs({ tagButton: !!on })) {
+        settingsWarn(wrap, tc("保存失败：本地存储已满，请先在设置里「重置」清出空间。",
+          "Could not save: local storage is full — reset the settings to free space first."));
+        return;
+      }
+      syncTagButtonMount();
+      _dp.page = 1;
+      render();
+      // 演员 tab 是另一套常驻 DOM：通知它重画工具栏（关掉后按钮立即消失）
+      try { window.dispatchEvent(new CustomEvent("ssd:tagpref-changed")); } catch (_) {}
+    }, tagBtnLabel));
+    secF.appendChild(rowTB);
+    secF.appendChild(el("div", "ssd-dp-sethint", tc(
+      "只筛本地已经拉到的场景，不额外请求源站。关掉后按钮与已选标签一起收起。",
+      "Filters already-fetched scenes only — no extra source requests. Turning it off also clears the active tag rules.")));
+
+    // K4：带标签问源站（默认关）。开着时演员/工作室「发现」tab 会把「必须有」
+    // 的标签交给 stash-box 去筛，列表语义从「窗口内全部」变成「源上带这些标签的全部」
+    var askLabel = tc("「发现」标签把「必须有」的标签交给源站筛选",
+      "Ask the stash-box for the must-have tags on the Discover tab");
+    var rowAK = el("div", "ssd-dp-setrow");
+    rowAK.appendChild(el("span", "ssd-dp-setname", askLabel));
+    rowAK.appendChild(switchToggle(prefs.askTags === true, function (on) {
+      if (!dpSetPrefs({ askTags: !!on })) {
+        settingsWarn(wrap, tc("保存失败：本地存储已满，请先在设置里「重置」清出空间。",
+          "Could not save: local storage is full — reset the settings to free space first."));
+        return;
+      }
+      _dp.page = 1;
+      // 演员 tab 那一侧要带新规则重查源站，通知它（重画工具栏不够）
+      try { window.dispatchEvent(new CustomEvent("ssd:asktags-changed")); } catch (_) {}
+      render();
+    }, askLabel));
+    secF.appendChild(rowAK);
+    secF.appendChild(el("div", "ssd-dp-sethint", tc(
+      "开着时：还没拉全窗口的一页页结果会带标签重问源站（「必须有」→ 源端筛，「排除」→ 本地筛）；" +
+      "源上没有这个标签就跳过它并写清原因。ThePornDB 不认这套，仍旧本地筛。",
+      "When on, a tab that hasn't loaded the whole range asks the stash-box again with the tags " +
+      "(must-have → source-side, excluded → filtered here). A source without the tag is skipped and said so. " +
+      "ThePornDB keeps filtering locally.")));
+    wrap.appendChild(secF);
+
     // ── Whisparr（用户 2026-11-09）──────────────────────────────────────────
     // 只对 stashdb.org 源的场景生效。Whisparr 加片必须带 qualityProfileId ——
     // 它的「清晰度」是档案的一部分，插件没法单独指定 720p/1080p，所以这一项的
@@ -6032,6 +6445,14 @@
     });
     bar.appendChild(refs.search);
 
+    // 标签筛选（K1）：排在控件组最前，紧挨搜索框（两者都决定「看哪些片」）。
+    // 工具栏常驻不重建：计数由 render() 末尾的 ssdRefresh 刷、可见性由
+    // syncTagFilter 按当前视图刷。开关在「发现页 › 设置」，默认开
+    if (dpPrefs().tagButton !== false) {
+      refs.tagf = mountTagFilter();
+      if (refs.tagf) bar.appendChild(refs.tagf);
+    }
+
     // ── 多选工具栏（§13.3）：同一个 .ssd-dp-toolbar 原地变身 ──
     // 不新增固定条：进入多选后搜索框 / 排序 / 数据源 / 每页 / 卡片大小全部收掉
     // （它们都会换掉当前页的数据集合或顺序），只剩这组按钮 + 视图切换。
@@ -6466,7 +6887,10 @@
     var gap = parseFloat(cs.columnGap);
     if (isNaN(gap)) gap = 0;
     var avail = bar.clientWidth - padX;
-    var need = TB_SEARCH_MIN + gap + toolsNaturalWidth();
+    // 标签按钮常驻在搜索框右侧，也必须算进「单行装不装得下」——
+    // 漏掉它时 768 竖屏会刚好差一个按钮宽，右侧控件被挤出可视区
+    var tagW = _dp.refs.tagf && _dp.refs.tagf.offsetWidth ? _dp.refs.tagf.offsetWidth + gap : 0;
+    var need = TB_SEARCH_MIN + gap + tagW + toolsNaturalWidth();
     var collapse = need > avail + 0.5;
     if (collapse === bar.classList.contains("is-collapsed")) {
       // 展开态只在收起态下有意义：万一状态残留（宽度刚变过），这里兜一下
@@ -6524,8 +6948,15 @@
   function render(opts) {
     var refs = _dp.refs;
     if (!refs.content) return;
+    // 这一帧重新收集标签面板的计数基础（filterItems / 关注视图逐笔 push 进来）
+    _dp.tagBase = [];
+    // 累计热度锁定/还原「原榜顺序」要在 syncChrome 之前定下来（它读 _dp.sort）
+    syncPopSort();
     syncChrome();
+    syncSortControl();
     renderContent(opts);
+    // 面板挂在常驻工具栏上、不会随内容重建：每帧按最新数据刷一次条数/角标
+    syncTagFilter();
     // 刚建出来的模块要补刷新态：syncChrome 跑在 renderContent 之前，那时还没有
     // 这些节点（刷新中切回总览，会看到模块全亮着却写着「更新中」）
     syncBusyMarks();

@@ -42,11 +42,15 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `probe_cache_trim_setup.js` | **前置**：把 trending 缓存人为裁到 10 条（`totalSeen` 不动） | 是，只动缓存 |
 | `probe_cache_trim_chip.js` | 「缓存不完整」chip 出现 → 点击 → 重拉后消失（须先跑 setup） | 是，走刷新重拉 |
 | `probe_localstorage.js` | localStorage 配额上限、各键占用、版本孤儿清单 | 临时写入后删除，不动既有键 |
+| `probe_popular_subtab.js` | K3 累计热度子 tab：子 tab 行两个／点「累计热度」条数=per_page 上限、排序锁 `hot` 且禁用、范围下拉存在且默认 `all`／缓存键 `…:popular.v3` 的 tag 与数据一致（`all|` 与 `7|cutoff`，最小 release_date = cutoff）／范围改 7 重查写新 tag／切回「近期热门」排序回 `date-desc`、范围控件消失 | 会写 `popular` 缓存（可复用），不写偏好，结束切回「近期热门」+范围 `all` |
 
 ## 演员页「发现」tab
 
 | 脚本 | 验什么 | 会写数据吗 |
 |---|---|---|
+| `probe_tag_filter.js` | K1 标签筛选：面板列出标签与条数（≤ 总数）／点一下＝必须有（列表＝该标签条数）／再点＝排除（总数−该标签）／再点＝不限（回总数）／两标签 OR ≥ max、AND ≤ min／面板搜索框按名字过滤／「清除」回总数 | 否，只点 UI，跑完清规则 |
+| `probe_range_window.js` | K2 发行时间：`SSD.range` 只在一处做日期补偿（`dayBefore = cutoff-1`）／默认窗口条数／近一周更少／不限更多／恢复默认回原值／「自某日起」日期框默认值（= 当前窗口起点，所以切过去不重查）+ 改日期后条数跟着变。条数解析已改成中英双语（`x matched / y found` 取匹配数、`x total`、`x found`、`共 x`），页面切成英文也能读。日期框 Phase 8 起是 `type=text`（自绘日历），不再有 `min/max` 属性，探针里 `since.min` 恒为空属正常。热度排序项按 `popOk` 才出现，源不报热度时 `hasPopItem=false` | 否，只点 UI，会话内状态，跑完还原 |
+| `probe_tag_ask_box.js` | K4 带标签问源站：开关开 + 选一个「必须有」→ 抓到的 `queryScenes` 体里有 `tags:{value:[…],modifier:INCLUDES}`、工具栏出现「标签已交给源站筛选」；源上没这个标签给「缺少标签·已跳过」；开关关 → 0 条带 tags 的请求、chip 消失 | **会临时改 `SSD:dp:prefs.askTags`**（跑完还原），真发几次源站查询 |
 | `probe_tab_paging.js` | 分页终止判据：点「下一页」时是否提前判到底 / 停不下来。跑前用 `localStorage.setItem("SSD:probe.tabMode","normal|clamp|ignore")` 选源行为，输出每页的请求数 / 卡片数 / 页脚文案；`clamp`（每页只回 20、count=5000）应继续翻页，`ignore`（同批重发、count=0）应 2 页内停住（首屏已缓存该页时会给 hint 说明没测到）。mock 场景的日期取**当天**——窗口下界已推给源端，日期落在窗口外的 mock 会被客户端裁掉，分页一条都测不到 | 否，mock box 的 `queryScenes` 响应；跑完删掉探针键 |
 | `probe_tab_select.js` | tab 的多选入口 / 点选 / 全选 / 批量忽略 + 撤销 / Esc 退出（含勾选圈 24px 断言） | 写忽略记录，测完还原 |
 | `probe_ignored_show.js` | 全被忽略 → 空态入口 → 8 卡 8 徽章 + chip → 恢复隐藏 | 写忽略记录，按前后差集删 |
@@ -69,6 +73,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `probe_import_dialog.js` | 入库弹窗三分支 + 字段开关持久化（`import.v1`） | 只开不确认，还原 `import.v1` |
 | `probe_perf_detail_cache.js` | 演员详情冷 1 请求 / 热 0 请求 / 入库预览 0 请求 | 只读 |
 | `probe_perf_box_queries.js` | 弹层与入库两条 box query 的体积与耗时对比 | 只读 |
+| `probe_calendar_menu.js` | 「自某日起」自绘日历卡（Phase 13 起整套用原生 react-datepicker 的类名）：`div.react-datepicker` 与绝对定位、卡片 212 宽、表头 56/6px 起、月份+年份居中 ±2px、read-view 字号字重、翻月按钮 32×32 贴边且本体 9×9/2.67px、星期 `Su..Sa` 与 24×24、日格 24×24、选中 `--selected` 与 `rgb(33,107,165)`、月份菜单原生类名/12 项/底色吃主题/`✓` span/不越出卡片、切月切年、Esc、按钮按下态回弹。34 条断言，`ok` 为总判定 | 只读（不点「确定」） |
 
 ## 移动端
 
@@ -83,6 +88,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `probe_tpdb_api.py` | TPDB REST 语义的**唯一事实来源**：批量 deepObject、uuid→整数 id、`site_operation`、分页上限。改 `tpdb*` 前先跑 |
 | `node_tpdb_harness.js` | 在 Node 里加载插件的 TPDB 适配层跑真实源，不起 UI 也能验；`--only` 单跑用例，`TPDB_DEBUG=1` 打请求日志 |
 | `verify_add_to_library.py` | 「加入库」全链路（演员建档 → 工作室 → 标签 → sceneCreate → 封面候选链），`--source stashdb\|javstash\|theporndb`，默认 dry-run，`--apply` 写库，`--cleanup` 删场景 |
+| `probe_inlib_title.js` | K7「按标题认在库中」的**纯函数**回归（不写库）：归一化／去演员名／near（整词包含或词重合 ≥60%）／含数字词守卫（Part 2 vs Part 3）／纯演员名 weak（要时长+日期都接近）／`byTitle` 的日期 14 天与时长 90s 两条门槛。读 `SSD.titleMatch`，`ok` 为总判定 |
 
 ## 文档提到但已不在目录
 

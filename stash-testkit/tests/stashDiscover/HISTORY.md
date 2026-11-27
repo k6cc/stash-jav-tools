@@ -200,3 +200,15 @@
   `display:none`；NAS（stashui）24 卡全隐藏；时长角标不受影响。闪烁对照：包装 `runPluginOp` 返回
   `configured:false`、延迟 900ms，旧文件 60ms 时 `flex` + 「Whisparr | 推送质量档案 | 读取中…」，
   新文件同条件 `display:none`、`innerHTML` 长度 0、标题插入 0 次。
+
+## 2.8.9 → 2.8.11 全量回归修复（2026-11-27，随 v2.9.0 发布）
+
+对未发版的 2.8.11 做全量回归并逐条修复（报告与发现清单在插件仓库 `docs/archive/stashdiscover/`）：
+
+- **F1** 三处 `tagMissingText(true)` → `tagMissingText(isZh())`，分隔符也按语言切。
+- **F2** 场景详情 / 演员详情 / 忽略记录 / 恢复全部确认框补 `role="dialog"`、`aria-modal`，四个关闭按钮补 `aria-label`。
+- **F3–F5** 新增 `dataBlind()` / `blindReason()`：源全挂、该源无关联演员、空洞陈旧缓存三种「不知道」统一 → 页头计数 `—` + `title` 写原因、状态行只留 `2/4 failed · HH:MM:SS`、Latest/Upcoming 给说明 + Retry。
+- **F6/F7** `purgeBadKey()` + 启动时 `sweepBadDpKeys()`：坏缓存 / 坏偏好解析失败即删，不再原样留在 localStorage 占配额。
+- **O1** 偏好写失败一次性 toast（会话内只提示一次）；**O3** TPDB 下 trending tab 补「无热度榜」悬停说明；**O4** 日历卡表头与月下拉边线改 `var(--bs-border-color,#30404d)`。
+
+机制细节见 PITFALLS「测试方法」「数据与标识」「浏览器与 JS」「CSS 特异性」；一次性验证记录见 `_archive/stashdiscover-v2.8.11-validation.md`；脚本见 SCRIPTS.md「回归与故障注入」。

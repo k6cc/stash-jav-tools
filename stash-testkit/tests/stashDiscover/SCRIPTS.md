@@ -5,9 +5,18 @@
 
 ## 通用跑法
 
-页面内探针（`probe_*.js`）都在页面上下文执行，统一走 `stash_dev.py eval`：
+页面内探针（`probe_*.js`）都在页面上下文执行，两种跑法：
 
 ```bash
+# 推荐：page_eval.py（testkit 根）。stash_dev.py eval 在本机会整条挂住（无输出、CPU≈0）时用它
+python C:/Users/k6cc/.workbuddy/skills/browser-automation-cdp/scripts/start_chrome.py --port 9222
+python E:/Temp/stash-jav-tools/stash-testkit/page_eval.py \
+  E:/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/<脚本>.js \
+  --path /plugins/stashDiscover --settle 9 --vsize 1400x900
+```
+
+```bash
+# 原路：stash_dev.py eval（同机可跑时）
 cd E:/stashAPP/devtools
 MSYS_NO_PATHCONV=1 python stash_dev.py eval \
   "$(cat /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/<脚本>.js)" \
@@ -15,6 +24,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 ```
 
 - 结果是**一段 JSON**，探针各自带 `stage` 字段，卡在哪一步一眼看得出。
+- **发现页路由是 `/plugins/stashDiscover`**；写成 `/plugins/k6cc/stashDiscover` 打开是空壳（`.ssd-dp-tab` 一个都没有）。
 - 演员页相关探针用 `--path /`（直接 `/performers/<id>` 会被 SPA 弹回首页，探针内部自己 `pushState`）。
 - 移动端布局加 `--vsize 390x844`；`shot` 子命令也支持 `--vsize`。
 - 断言前必须等元素出现（异步渲染/预载/回填），点击后立刻读 DOM 拿到的是中间态。
@@ -42,7 +52,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `probe_cache_trim_setup.js` | **前置**：把 trending 缓存人为裁到 10 条（`totalSeen` 不动） | 是，只动缓存 |
 | `probe_cache_trim_chip.js` | 「缓存不完整」chip 出现 → 点击 → 重拉后消失（须先跑 setup） | 是，走刷新重拉 |
 | `probe_localstorage.js` | localStorage 配额上限、各键占用、版本孤儿清单 | 临时写入后删除，不动既有键 |
-| `probe_popular_subtab.js` | K3 累计热度子 tab：子 tab 行两个／点「累计热度」条数=per_page 上限、排序锁 `hot` 且禁用、范围下拉存在且默认 `all`／缓存键 `…:popular.v3` 的 tag 与数据一致（`all|` 与 `7|cutoff`，最小 release_date = cutoff）／范围改 7 重查写新 tag／切回「近期热门」排序回 `date-desc`、范围控件消失 | 会写 `popular` 缓存（可复用），不写偏好，结束切回「近期热门」+范围 `all` |
+| `probe_popular_subtab.js` | K3 累计热度子 tab：子 tab 行两个／点「累计热度」条数=per_page 上限、排序锁 `hot` 且禁用、范围下拉存在且默认 `all`／缓存键 `…:popular.v3` 的 tag 与数据一致（**`tag = 起始日 \|\| "all"`**：同一起始日的「近一周」与「自某日起」共用缓存，Phase 20 起不再带范围前缀；最小 release_date = cutoff）／范围改 7 重查写新 tag／切回「近期热门」排序回 `date-desc`、范围控件消失 | 会写 `popular` 缓存（可复用），不写偏好，结束切回「近期热门」+范围 `all` |
 
 ## 演员页「发现」tab
 
@@ -74,6 +84,37 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `probe_perf_detail_cache.js` | 演员详情冷 1 请求 / 热 0 请求 / 入库预览 0 请求 | 只读 |
 | `probe_perf_box_queries.js` | 弹层与入库两条 box query 的体积与耗时对比 | 只读 |
 | `probe_calendar_menu.js` | 「自某日起」自绘日历卡（Phase 13 起整套用原生 react-datepicker 的类名）：`div.react-datepicker` 与绝对定位、卡片 212 宽、表头 56/6px 起、月份+年份居中 ±2px、read-view 字号字重、翻月按钮 32×32 贴边且本体 9×9/2.67px、星期 `Su..Sa` 与 24×24、日格 24×24、选中 `--selected` 与 `rgb(33,107,165)`、月份菜单原生类名/12 项/底色吃主题/`✓` span/不越出卡片、切月切年、Esc、按钮按下态回弹。34 条断言，`ok` 为总判定 | 只读（不点「确定」） |
+| `probe_calendar_border.js` | 日历卡的主题边线（O4）：表头下边线与月/年下拉边框都是 `rgb(48,64,77)`（不再是库默认 `rgb(174,174,174)`）、表头底色仍吃主题 `rgb(57,75,89)`；同一趟重量几何防回退（卡 212×209 / 表头 56 / 日格 24 / 箭头 32 / 选中 `rgb(33,107,165)`）。结构断言用 `probe_calendar_menu.js`，这条只管配色与不回退 | 只读（只点开日历，不点「确定」） |
+
+## 回归与故障注入（2.8.11 全量回归带出来的）
+
+| 脚本 | 验什么 | 会写数据吗 |
+|---|---|---|
+| `probe_break_ui.js` | **断源态**（F3/F4/F5）：点刷新后页头是否 `— scenes / — performers`、状态行是否只留 `2/4 failed · HH:MM:SS`、Latest/Upcoming 是否给「取不到」说明 + Retry。**前置**：先灌 `boxes_break.gql` | 否（改配置由 gql 做，见下） |
+| `probe_after_restore.js` | 断源还原后的对照采集（`163 scenes / 108 performers`、`updated just now`）。**前置**：灌 `boxes_fix.gql` | 否 |
+| `probe_status_refresh.js` | 单次刷新后的状态行：不出现 `updated just now` 与失败并列（F4） | 否，真发一次刷新 |
+| `probe_status_twice.js` | 连点两次刷新：第二次不误报失败（F4） | 否，真发两次刷新 |
+| `probe_chips_ok.js` | 正常态页头基线（F3–F5 对照）：chips 文案/计数/`title`、各模块副标题 | 否 |
+| `probe_prefs_fail.js` | 偏好写失败（O1）：注入 `QuotaExceededError` → 首次弹 `.ssd-toast.show`、清掉后第二次不再弹、`prefs` 不被污染 | 否（stub 只在本页内存生效） |
+| `probe_tpdb_tab.js` | TPDB 源下 trending tab 文案 `New on site` + 悬停说明（O3），切回 `Trending` 且 title 清除 | 临时改 `prefs.source`，跑完切回 |
+| `probe_modal_aria.js` | 弹窗无障碍（F2）：场景详情/演员详情/忽略记录/确认框的 `role=dialog`、`aria-modal`、关闭按钮 `aria-label`、Esc 可关 | 否 |
+| `probe_discover_ui.js` | 发现页布局（C3）：主 tab 分行、工具栏几何、`docW` 是否横向溢出，配三档视口跑 | 否 |
+| `probe_cache_semantics.js` | 缓存语义（C6 #22–#25）：刷新期间旧数据常驻、换范围后取数路径 | 会走刷新重拉 |
+| `probe_bad_cache.py` | 坏缓存自愈（F6/F7）：把 `SSD:dp:*` 全写坏后重载，坏键被清、页面正常 | **会写 localStorage**，跑完自行恢复 |
+| `probe_quota_fault.py` | 配额注入的 Python 版（与 `probe_prefs_fail.js` 同场景） | 否 |
+| `probe_slow_network.py` | 慢网 3s：旧数据常驻、工具栏不消失、状态推进 | 否 |
+
+**完整回归套件**（30+ 场景脚本 + 证据）不在这里：`E:\stashAPP\devtools\regress_2811\`，`run.py <场景脚本> <视口>` 跑，说明见其 `notes.md`。它绑 `stash_dev.py` 与 data/shots 产物，未搬进 `scripts/`。
+
+断源 / 还原（两个 GraphQL 夹具就在 `scripts/`）：
+
+```bash
+cd E:/stashAPP/devtools
+python stash_dev.py gql "$(cat /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/boxes_break.gql)"
+# → probe_break_ui.js，再
+python stash_dev.py gql "$(cat /e/Temp/stash-jav-tools/stash-testkit/tests/stashDiscover/scripts/boxes_fix.gql)"
+# → probe_after_restore.js 对照；改完配置记得 mutation{reloadPlugins}
+```
 
 ## 移动端
 
@@ -89,6 +130,7 @@ MSYS_NO_PATHCONV=1 python stash_dev.py eval \
 | `node_tpdb_harness.js` | 在 Node 里加载插件的 TPDB 适配层跑真实源，不起 UI 也能验；`--only` 单跑用例，`TPDB_DEBUG=1` 打请求日志 |
 | `verify_add_to_library.py` | 「加入库」全链路（演员建档 → 工作室 → 标签 → sceneCreate → 封面候选链），`--source stashdb\|javstash\|theporndb`，默认 dry-run，`--apply` 写库，`--cleanup` 删场景 |
 | `probe_inlib_title.js` | K7「按标题认在库中」的**纯函数**回归（不写库）：归一化／去演员名／near（整词包含或词重合 ≥60%）／含数字词守卫（Part 2 vs Part 3）／纯演员名 weak（要时长+日期都接近）／`byTitle` 的日期 14 天与时长 90s 两条门槛。读 `SSD.titleMatch`，`ok` 为总判定 |
+| `probe_tag_missing_text.js` | K4「缺标签 · 已跳过」文案的语言分支（F1）的**纯函数**单测，不起浏览器：`node probe_tag_missing_text.js zh\|en` 分别输出中文/英文串，英文必须 `StashDB has no tag <名> · skipped`、中文 `StashDB 缺少标签「…」· 已跳过`，分隔符也不同（`;` vs `；`） |
 
 ## 文档提到但已不在目录
 

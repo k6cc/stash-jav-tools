@@ -1,0 +1,5 @@
+mutation { configureGeneral(input: {stashBoxes: [
+{name: "javastash", endpoint: "https://127.0.0.1:1/graphql", api_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiIwMWEwNjc4Yi0xZjE5LTdjOTMtODJiZi1jNjE3MDJmOTA1MTUiLCJzdWIiOiJBUElLZXkiLCJpYXQiOjE3ODg0NDM1NjV9.DjDaBq_yOyGgeUisn8cqVak8QgnxfNsqXjZA5VeT7Xg"},
+{name: "stashdb.org", endpoint: "https://stashdb.org/graphql", api_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiIwMTlkZjkyNS00ZDc4LTc5MWEtOTVlMS03ZjM4MmU3NTA2ZTEiLCJzdWIiOiJBUElLZXkiLCJpYXQiOjE3NzgwMDE0NjR9.R1OaxcnSi8QZWI9ekcmsMAan_D30rTWjfRuh7LbgMLo"},
+{name: "theporndb", endpoint: "https://theporndb.net/graphql", api_key: "f6bptalbHjviicw3yfAXvLgPbb3PWa0vmq7pJUKka4b43a5c"}
+]}) { stashBoxes { name endpoint } } }

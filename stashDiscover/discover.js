@@ -306,14 +306,44 @@
   var CACHE_SCENES_CAP = 4000;
   var LS_PREFIX = "SSD:dp:";
 
+  // 读不出来的键要删掉（用户 2026-11-27 回归 F6/F7）：留着只会永久占配额、
+  // 每次进入都白 parse 一次，而且偏好坏了会静默失效且无法自愈。
+  function purgeBadKey(key, raw, tag) {
+    try { localStorage.removeItem(key); } catch (_) {}
+    console.warn("[SSD] dropped unreadable key " + key + " (" + tag + ", " + String(raw || "").length + " chars)");
+  }
+
+  // 启动时整片扫一遍：主 JS 和本文件都会往 SSD:dp:* 里写，逐个 reader 打补丁容易漏，
+  // 这里一次性把解析不了的键清掉（F6 的兜底）。
+  function sweepBadDpKeys() {
+    var n = 0;
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (!k || k.indexOf(LS_PREFIX) !== 0) continue;
+        var raw = localStorage.getItem(k);
+        if (!raw) continue;
+        try { JSON.parse(raw); } catch (e) { localStorage.removeItem(k); n++; }
+      }
+    } catch (_) {}
+    if (n) console.warn("[SSD] dropped " + n + " unreadable SSD:dp key" + (n === 1 ? "" : "s") + " on boot");
+  }
+
   // ── 2.0 设置与数据源（§3.6/§4.5）──────────────────────────────────────────
   // yml 设置（服务端）负责低频项；localStorage 偏好（P6 弹窗写）负责其余。
   function dpPrefs() {
+    var key = LS_PREFIX + "prefs";
+    var raw;
+    try { raw = localStorage.getItem(key); } catch (_) { return {}; }
+    if (!raw) return {};
     try {
-      var raw = localStorage.getItem(LS_PREFIX + "prefs");
-      var p = raw ? JSON.parse(raw) : null;
+      var p = JSON.parse(raw);
       return (p && typeof p === "object") ? p : {};
-    } catch (_) { return {}; }
+    } catch (err) {
+      // 坏了一份偏好就永远读不回用户自己的设置，删掉让它回默认（F7）
+      purgeBadKey(key, raw, "prefs json");
+      return {};
+    }
   }
 
   function toNum(v, dflt) {
@@ -714,29 +744,37 @@
   }
 
   function cacheRead(host, family, wantSince) {
+    var key = cacheKey(host, family), raw;
+    try { raw = localStorage.getItem(key); } catch (_) { return null; }
+    if (!raw) return null;
     try {
-      var raw = localStorage.getItem(cacheKey(host, family));
-      if (!raw) return null;
       var e = saneCacheEntry(JSON.parse(raw));
-      if (!e) return null;
+      if (!e) { purgeBadKey(key, raw, "cache shape"); return null; }
       if (wantSince && e.sinceIsoDate !== wantSince) return null;
       var age = Date.now() - (e.fetchedAt || 0);
       if (age < 0 || age > CACHE_TTL_MS) return null;
       return hydrateCacheEntry(e);
-    } catch (_) { return null; }
+    } catch (err) {
+      purgeBadKey(key, raw, "cache json");
+      return null;
+    }
   }
 
   // SWR 陈旧读：忽略 since/TTL，只卡 7d 上限——给"先进缓存立刻可看"路径
   function cacheReadStale(host, family) {
+    var key = cacheKey(host, family), raw;
+    try { raw = localStorage.getItem(key); } catch (_) { return null; }
+    if (!raw) return null;
     try {
-      var raw = localStorage.getItem(cacheKey(host, family));
-      if (!raw) return null;
       var e = saneCacheEntry(JSON.parse(raw));
-      if (!e) return null;
+      if (!e) { purgeBadKey(key, raw, "cache shape"); return null; }
       var age = Date.now() - (e.fetchedAt || 0);
       if (age < 0 || age > CACHE_STALE_MAX_MS) return null;
       return hydrateCacheEntry(e);
-    } catch (_) { return null; }
+    } catch (err) {
+      purgeBadKey(key, raw, "cache json");
+      return null;
+    }
   }
 
   // 缓存投影：写入前裁掉卡片/统计用不到的字段。
@@ -1055,10 +1093,10 @@
   var _localWarned = {};
 
   function lsRead(key) {
-    try {
-      var raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch (_) { return null; }
+    var raw;
+    try { raw = localStorage.getItem(key); } catch (_) { return null; }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (err) { purgeBadKey(key, raw, "local snapshot"); return null; }
   }
 
   function lsReadFresh(key, ttl) {
@@ -1567,10 +1605,11 @@
       var prefs = dpPrefs();
       var genders = prefs.genderFilter && prefs.genderFilter.length ? prefs.genderFilter : ["FEMALE", "TRANSGENDER_FEMALE"];
       if (!opts.force) {
+        var tpKey = LS_PREFIX + host + ":trendingPerf.v1", tpRaw = null;
         try {
-          var raw = localStorage.getItem(LS_PREFIX + host + ":trendingPerf.v1");
-          if (raw) {
-            var e = JSON.parse(raw);
+          tpRaw = localStorage.getItem(tpKey);
+          if (tpRaw) {
+            var e = JSON.parse(tpRaw);
             // v2：缓存条数 24 → 30（补位窗口）。旧缓存只有 24 条，判 miss 重取一次
             if (e && e.v === 2 && Date.now() - (e.fetchedAt || 0) < TRENDING_PERF_CACHE_TTL_MS && Array.isArray(e.performers)) {
               // 旧缓存可能没有 degraded 字段：TPDB 一律归一为 degraded
@@ -1578,7 +1617,9 @@
               return { source: base.source, fromCache: "fresh", performers: e.performers, degraded: deg };
             }
           }
-        } catch (_) {}
+        } catch (err) {
+          if (tpRaw) purgeBadKey(tpKey, tpRaw, "trendingPerf json");
+        }
       }
       var box = { name: base.source.name, endpoint: base.source.endpoint, apiKey: base.source.apiKey, host: host };
       return fetchTrendingPerformers(box, opts.perPage || 30, genders, opts.prio).then(function (r) {
@@ -1674,6 +1715,9 @@
     refs: {},         // chrome 元素引用（head/tabs/toolbar/content）
   };
 
+  // 回归 O1：写失败至少要看见一次，否则「改完刷新又变回旧的」永远查不到原因
+  var _prefsWarned = false;
+
   function dpSetPrefs(patch) {
     try {
       var p = dpPrefs();
@@ -1684,6 +1728,14 @@
       // 配额满时 setItem 抛 QuotaExceededError：以前静默吞掉，用户以为改了，
       // 一刷新就回到旧值（论坛反馈「选完 TPDB 切不回来」的候选原因）
       console.warn("[SSD] prefs write failed:", err);
+      if (!_prefsWarned) {
+        _prefsWarned = true;
+        try {
+          SSD.toast(tc("设置未能保存：浏览器存储写不进去（可能已满），这次修改刷新后会丢失",
+            "Setting not saved — browser storage rejected the write (it may be full). This change is lost on reload."),
+            { duration: 8000 });
+        } catch (_) {}
+      }
       return false;
     }
   }
@@ -1713,11 +1765,16 @@
   }
 
   function followStore() {
+    var raw;
+    try { raw = localStorage.getItem(FOLLOW_KEY); } catch (_) { return { performers: {} }; }
+    if (!raw) return { performers: {} };
     try {
-      var raw = localStorage.getItem(FOLLOW_KEY);
-      var o = raw ? JSON.parse(raw) : null;
+      var o = JSON.parse(raw);
       return (o && typeof o === "object" && o.performers) ? o : { performers: {} };
-    } catch (_) { return { performers: {} }; }
+    } catch (err) {
+      purgeBadKey(FOLLOW_KEY, raw, "follow json");
+      return { performers: {} };
+    }
   }
   function followList() {
     var out = [], m = followStore().performers;
@@ -1755,11 +1812,16 @@
   }
   function readStore() {
     if (_readCache) return _readCache;
+    var raw = null;
+    try { raw = localStorage.getItem(READ_KEY); } catch (_) { raw = null; }
+    if (!raw) { _readCache = { marks: {} }; return _readCache; }
     try {
-      var raw = localStorage.getItem(READ_KEY);
-      var o = raw ? JSON.parse(raw) : null;
+      var o = JSON.parse(raw);
       _readCache = (o && typeof o === "object" && o.marks) ? o : { marks: {} };
-    } catch (_) { _readCache = { marks: {} }; }
+    } catch (err) {
+      purgeBadKey(READ_KEY, raw, "read marks json");
+      _readCache = { marks: {} };
+    }
     if (pruneRead(_readCache)) {
       try { localStorage.setItem(READ_KEY, JSON.stringify(_readCache)); } catch (_) {}
     }
@@ -2219,6 +2281,23 @@
     return b;
   }
 
+  // 回归 F3：这一轮到底有没有拿到内容。三种都算「不知道」，不能写成「0 条」：
+  //   · 源全挂（_dp.err.latest）
+  //   · 这个源上没有关联演员（linkedCount=0，断源/换源后最典型）
+  //   · 只剩一份空洞缓存（fromCache=stale 且条数 0）
+  function dataBlind(d, count) {
+    if (!d) return false;
+    if (_dp.err && _dp.err.latest) return true;
+    if (!d.linkedCount) return true;
+    return !count && d.fromCache === "stale";
+  }
+  // 「—」的悬停说明：数字为什么是未知，按三种原因分开写
+  function blindReason(d) {
+    if (_dp.err && _dp.err.latest) return tc("这一轮没能从数据源取到内容", "This round could not load the source");
+    if (d && !d.linkedCount) return tc("这个源上还没有关联演员，匹配不出内容", "No linked performers on this source, so nothing can be matched");
+    return tc("显示的是上次缓存", "showing the last cached run");
+  }
+
   // ── 刷新反馈：页头文案 + 模块降暗（用户 2026-11-15）─────────────────────
   // 主动刷新不清卡：卡片降到半透明 + 图标转圈，数据集落地就整块亮回来。
   // 页头同时给出进度（2/4）和本轮结果（+3 / 无新增 / 2/4 失败）。
@@ -2275,7 +2354,14 @@
     var base = relTime(_dp.fetchedAt);
     var note = _dp.refreshNote;
     // 失败类不带 until（常驻到下次成功），结果类 10 秒后自动退回纯时间
-    if (!note || (note.until && Date.now() > note.until)) return base;
+    var live = !!note && (!note.until || Date.now() <= note.until);
+    if (!live) return base;
+    // 回归 F4：「updated just now · 2/4 failed」自相矛盾 —— 这轮明明没更新成。
+    // 失败期间只报失败口径，把上次成功的时间戳挪到后面当参照（没有就不写）
+    if (note.fail) {
+      var clock = _dp.fetchedAt ? fmtClock(_dp.fetchedAt) : "";
+      return clock ? note.text + " · " + clock : note.text;
+    }
     return base + " · " + note.text;
   }
 
@@ -3263,11 +3349,12 @@
       // 「预告内容不提醒」开启时，只有预告没有正式新作的演员直接剔除（用户 2026-10-27）
       var aw = (d ? (d.actorsWithNew || []) : []).filter(function (g) { return notifyItems(g).length > 0; });
       var awScenes = aw.reduce(function (n, g) { return n + notifyItems(g).length; }, 0);
+      var actorsBlind = dataBlind(d, aw.length);
       var s1 = sec(parent, {
         icon: I.star, title: tc("有新发布的演员", "Performers with releases"), mod: "actors",
         // 副标题长度按窄屏算过（用户 2026-11-08）：口径说明（回看窗口）包进
         // .ssd-dp-sec-x，本模块副标题独占一行、放得下，所以只在 ≤340 藏
-        count: d ? tc(aw.length + " 位演员 · " + awScenes + " 人次",
+        count: (d && !actorsBlind) ? tc(aw.length + " 位演员 · " + awScenes + " 人次",
           aw.length + " performers · " + awScenes + " appearances") +
           ' <span class="ssd-dp-sec-x">· ' + lookbackText(d.recentDays, SSD.isZh()) + "</span>" : "",
         // 查看更多 → 发现演员页「本地有更新」tab（用户 2026-10-25）
@@ -3275,6 +3362,10 @@
       });
       if (!d) modPlaceholder(s1, "mini", rows.actors, _dp.err.latest, retryLatest);
       else if (!aw.length) {
+        // 回归 F3：这轮没取到就别写「没有可匹配的演员 / 回看期内没有新作品」
+        // 回归 F3：真·拉取失败时给错误框；「这个源没有关联演员」交给下面原有的
+        // noLinked 文案，它比一句报错更准确
+        if (actorsBlind && _dp.err.latest) { secBody(s1, "error", errText(_dp.err.latest), retryLatest); return; }
         // 区分「没有可匹配的演员」与「窗口内确实没有新作品」（用户 2026-10-26）
         var noLinked = !(d.linked || []).length;
         secBody(s1, null).appendChild(stateBox("empty", noLinked
@@ -3306,14 +3397,24 @@
     }
     if (id === "latest") {
       // 模块：最新发布（原生场景卡，按 capPerActor() 截断）
+      // 回归 F3/F5：这轮没取到时，副标题的「0 部未拥有」和正文的「暂无未拥有新场景」
+      // 都会被读成「源上真没有新片」，所以按失败/空洞缓存换成无数字 + 错误框
+      var latestBlind = dataBlind(d, d ? (d.latest || []).length : 0);
       var s2 = sec(parent, {
         icon: I.latest, title: tc("最新发布", "Latest"), mod: "latest",
         // 不再写「每人最多 N 部」（用户 2026-11-08 决定删除）：那是设置页的回显，
         // 塞进副标题只会撑爆窄屏；而且 capByActor 是软上限，单人实际可超过 N
-        count: d ? tc((d.latest || []).length + " 部未拥有", (d.latest || []).length + " unowned") : "",
+        count: (d && !latestBlind) ? tc((d.latest || []).length + " 部未拥有", (d.latest || []).length + " unowned") : "",
         more: function () { switchView("latest"); },
       });
       if (!d) modPlaceholder(s2, "scene", rows.latest, _dp.err.latest, retryLatest);
+      else if (latestBlind && !(d.latest || []).length) {
+        // 失败给错误框 + 重试；「这个源上没有关联演员」不是错误，给说明 + 重试入口
+        // （重试仍可能有用：刚加完编号就点了刷新）
+        if (_dp.err.latest) secBody(s2, "error", errText(_dp.err.latest), retryLatest);
+        else secBody(s2, "error", tc("这个源上还没有关联演员，匹配不出新发布", "No linked performers on this source, so nothing can be matched") +
+          (d.fromCache === "stale" ? tc("（显示的是上次缓存）", " (showing the last cached run)") : ""), retryLatest);
+      }
       else if (!(d.latest || []).length) secBody(s2, null).appendChild(stateBox("empty", tc("暂无未拥有新场景", "No unowned new scenes")));
       else {
         var g2 = sceneGrid(orderModuleItems("latest", d.latest).slice(0, prefetchLimit(rows.latest)));
@@ -3345,16 +3446,23 @@
       return;
     }
     if (id === "preview") {
+      var prevBlind = dataBlind(d, d ? (d.preview || []).length : 0);
       var s4 = sec(parent, {
         icon: I.preview, title: tc("即将发布", "Upcoming"), mod: "preview",
         // 发现页不做未来窗口过滤（用户 2026-11-08）：预告模块列全部未来场景，
         // 由卡片「预告」角标标注档期。previewDays 只作用于演员/工作室 tab 的列表，
         // 不要为了「对齐设置」再把这里收窄 —— 那是刻意不做的。
-        count: d ? tc((d.preview || []).length + " 部", (d.preview || []).length + " scenes") : "",
+        count: (d && !prevBlind) ? tc((d.preview || []).length + " 部", (d.preview || []).length + " scenes") : "",
         // 查看更多 → 最新视图「预告」子 tab（预告分页并入最新 — 用户 2026-10-25）
         more: function () { dpSetPrefs({ latestSub: "preview" }); switchView("latest"); },
       });
       if (!d) modPlaceholder(s4, "scene", rows.preview, _dp.err.latest, retryLatest);
+      else if (prevBlind && !(d.preview || []).length) {
+        // 与最新发布同一口径（回归 F3/F5）：拿不到就说拿不到，别写「近期没有待发布」
+        if (_dp.err.latest) secBody(s4, "error", errText(_dp.err.latest), retryLatest);
+        else secBody(s4, "error", tc("这个源上还没有关联演员，匹配不出预告", "No linked performers on this source, so nothing can be matched") +
+          (d.fromCache === "stale" ? tc("（显示的是上次缓存）", " (showing the last cached run)") : ""), retryLatest);
+      }
       else if (!(d.preview || []).length) secBody(s4, null).appendChild(stateBox("empty", tc("近期没有待发布场景", "No upcoming scenes")));
       else {
         var g4 = sceneGrid(orderModuleItems("preview", d.preview).slice(0, prefetchLimit(rows.preview)), { days: true });
@@ -3995,8 +4103,12 @@
     var overlay = el("div", "ssd-dp-modal-overlay");
     SSD.bindOverlayClose(overlay, closePerfModal);
     var m = el("div", "ssd-dp-modal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.setAttribute("aria-label", tc("演员详情", "Performer details"));
     var close = el("button", "ssd-dp-modal-close", "&times;");
     close.type = "button";
+    close.setAttribute("aria-label", tc("关闭", "Close"));
     close.addEventListener("click", closePerfModal);
     m.appendChild(close);
     // 内容装进内层滚动容器：close 悬浮在 modal 右上角不随内容滚动
@@ -4890,8 +5002,12 @@
     }
     SSD.bindOverlayClose(overlay, shutdown);
     var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.setAttribute("aria-label", tc("忽略记录详情", "Ignored record details"));
     var close = el("button", "ssd-dp-modal-close", "&times;");
     close.type = "button";
+    close.setAttribute("aria-label", tc("关闭", "Close"));
     close.addEventListener("click", shutdown);
     m.appendChild(close);
     var body = el("div", "ssd-dp-modal-body");
@@ -5000,6 +5116,9 @@
     }
     SSD.bindOverlayClose(overlay, shutdown);
     var m = el("div", "ssd-dp-modal ssd-dp-igmodal");
+    m.setAttribute("role", "dialog");
+    m.setAttribute("aria-modal", "true");
+    m.setAttribute("aria-label", tc("恢复全部", "Restore all"));
     var body = el("div", "ssd-dp-modal-body");
     body.appendChild(el("div", "ssd-dp-igmodaltitle", tc("恢复全部", "Restore all")));
     body.appendChild(el("div", "ssd-dp-igmodalmeta",
@@ -6995,6 +7114,14 @@
       if (!d) refs.chips.innerHTML = "";
       else {
         var n = (d.latest || []).length + (d.preview || []).length;
+        // 回归 F3：源全挂（或只剩一份空缓存）时写「0 scenes」等于宣布库被清空。
+        // 拿不到就写 —，把原因放 title；有真实数据时一律照常显示数字
+        var blind = dataBlind(d, n);
+        var blindTip = blind
+          ? tc("数字不是 0 而是未知：" + blindReason(d), "Counts are unknown, not zero: " + blindReason(d))
+          : "";
+        var nTxt = blind ? "—" : String(n);
+        var perfTxt = blind ? "—" : String(d.linkedCount || 0);
         // 文案按窄屏算过（用户 2026-11-08）：四位数时「个新场景 / 位关联演员 /
         // 数据源」会顶到 321px，360 屏（容器 299）直接换行；缩成「个场景 /
         // 位演员 / 源」后中文 273px。英文用 DS（data source，不是 DB）+ 4px 间距
@@ -7002,8 +7129,8 @@
         var srcName = SSD.brandNameForEndpoint(d.source.endpoint, d.source.name);
         var srcTip = tc("数据源：", "Source: ") + srcName;
         refs.chips.innerHTML =
-          '<span class="ssd-dp-chip"><b>' + n + "</b> " + tc("个场景", "scenes") + "</span>" +
-          '<span class="ssd-dp-chip"><b>' + (d.linkedCount || 0) + "</b> " + tc("位演员", "performers") + "</span>" +
+          '<span class="ssd-dp-chip"' + (blindTip ? ' title="' + blindTip + '"' : "") + '><b>' + nTxt + "</b> " + tc("个场景", "scenes") + "</span>" +
+          '<span class="ssd-dp-chip"' + (blindTip ? ' title="' + blindTip + '"' : "") + '><b>' + perfTxt + "</b> " + tc("位演员", "performers") + "</span>" +
           '<span class="ssd-dp-chip" title="' + srcTip + '">' +
             tc("源", "DS") + "<b>" + srcName + "</b></span>";
       }
@@ -7035,7 +7162,20 @@
       });
       // TPDB 下「热门」实为全站最新（A 方案）：tab 文案随当前源同步
       var tb = refs.tabs.querySelector('[data-view="trending"] span');
-      if (tb) tb.textContent = trendingTitle();
+      if (tb) {
+        tb.textContent = trendingTitle();
+        // 回归 O3：TPDB 没有热度榜，这个 tab 列的是「全站最新」。只改名不解释，
+        // 用户会以为热度榜坏了（或以为改名是 bug），所以补一句悬停说明
+        var tTab = tb.parentNode;
+        if (tTab) {
+          if (trendingOnTPDB()) {
+            tTab.title = tc("ThePornDB 不提供热度榜，这个 tab 按入库时间列全站最新",
+              "ThePornDB has no popularity ranking — this tab lists the newest releases site-wide");
+          } else {
+            tTab.removeAttribute("title");
+          }
+        }
+      }
       syncTabDot();
     }
     if (refs.gridBtn && refs.listBtn) {
@@ -7174,6 +7314,7 @@
   function init() {
     console.log("[SSD] discover.js v" + (SSD.version || "?") + " loaded");
     migratePreviewPref(); // 旧「预告不提醒」开关 → 新「预告也计入提醒」（用户 2026-10-27）
+    sweepBadDpKeys();     // 坏键兜底清理（用户 2026-11-27 回归 F6）
     THEME.start();
     // follow tab 红点跟随导航角标同一事件流（§10；P5 轮询驱动）
     // 初值先取主 JS 写入的 unread.v1（硬刷新后事件可能早于本页挂载）
@@ -7200,3 +7341,4 @@
     init();
   }
 })();
+

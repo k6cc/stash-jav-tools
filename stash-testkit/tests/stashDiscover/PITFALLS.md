@@ -130,6 +130,14 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   （主题也会写 `display:flex`，开关要有最终话事权）。弹层 `.ssd-dp-modal-scenes` 走同一套规则，
   它读的是**已保存的偏好**而不是页面上临时改的属性。（2026-11-15）
 
+- **照抄库的 chunk 骨架时必须连配色一起审**：发现页没加载 DateInput chunk，日历卡是照着 chunk
+  抄的一份骨架，结果把库的浅色默认 `#aeaeae` 也抄了回来 —— 暗色主题下表头下边线与月/年下拉边框
+  比四周亮一档（`rgb(174,174,174)` vs 周围的 `rgb(48,64,77)`）。改成
+  `var(--bs-border-color,#30404d)`；**但 Stash 的 `--bs-*` 变量实测全为空**（`getComputedStyle`
+  取不到，html/body 都没有），实际一直走 fallback，别以为变量真的生效。改完必须同一趟重量几何
+  （卡 212×209 / 表头 56 / 日格 24 / 箭头 32 / 选中 `rgb(33,107,165)`），确认只换色没动布局。
+  （2026-11-27，O4；`probe_calendar_border.js`）
+
 ## 布局与尺寸基线
 
 - **原生 `.btn` 实测**：高 33px、`padding 5.25px 10.5px`、`border-radius 3.5px`；
@@ -265,6 +273,16 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   `navSeeded`，两者都持久化。验证「首次安装」分支得先把 `stashDiscover` 从 menuItems 去掉、
   并删掉配置里的 `navSeeded`，别靠「重新装一次」。（第六轮）
 
+- **「不知道」和「0」必须在出口处就分开**：源站全挂、该源没有关联演员（`linkedCount === 0`）、
+  只剩空洞陈旧缓存（`fromCache === "stale"` 且 0 条）—— 这三种情况渲染成 `0 scenes / 0 performers`
+  会被读成「库被清空了」。统一走 `dataBlind()` 判定，计数显示 `—` 并在 `title` 写原因；Latest /
+  Upcoming 也不许写 `No unowned new scenes` / `No upcoming scenes`。**新增模块先问一句：这个 0 是
+  「查了没有」还是「没查到」？** 注意断源时 `2/4 failed` 只含 trending / trendingPerf，latest 是
+  「成功但 0 条」（本地演员在该源下没有 ID，`linked=[]` 直接返回空）——光看 `_err` 修不掉。（2026-11-27）
+- **先核域名拼写，再怀疑网络**：`javastash.org`（多一个 a）全球 NXDOMAIN，表现却是「站点下线 /
+  节点故障 / 插件品牌名乱了」（`BRAND_MAP` 按 host 匹配不到 → 徽章回落成原始 URL）。同一域名打对
+  一个字母（`javstash.org`）立刻正常。（2026-11-27）
+
 ## 浏览器与 JS
 
 - **`\p{L}` 不能用**：`/[^\p{L}\p{N}]+/u` 在**解析期**就要求引擎支持 Unicode 属性转义，老浏览器
@@ -298,6 +316,11 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   真实点击返回 `true`）。注意 execCommand 还要求 `document.hasFocus()`，在 CDP eval 里跑会恒
   返回 false —— 别拿它当「代码坏了」的证据，要用真实鼠标点击验（2026-10-31）。
 
+- **限速器槽位被占会长得像「代码卡死」**：`createRateLimiter(3, 300)` 只有 3 个并发槽。打错
+  endpoint 期间，在途请求会把槽位占满 → 演员 tab 一直 `Scanning sources…`、冷加载偶发卡几分钟，
+  刷新一下就好。判据：网络面板里请求已发出、两个 box 都 200 → 不是逻辑 bug，是排队。排查顺序：
+  请求有没有发出 → 并发数 → 再看代码。（2026-11-27）
+
 ## 测试方法
 
 - **测 sticky 必须先把内容撑过一屏**：否则 `position: sticky` 一直是生效的，只是滚到底也碰不到
@@ -319,6 +342,20 @@ CSS 特异性与顺序 · 布局与尺寸基线 · Stash 宿主机制 · 浏览�
   用 CDP 发 `pointerdown → pointermove → pointerup`，并量 `.setting-group` 高度做对照
   （收起 132 / 展开 1338）：面板内点击、拖到面板外松手、点遮罩三种操作后都必须仍是 132。
   只测面板内部会漏掉「点遮罩关窗也折叠卡片」这一路。
+
+- **`stash_dev.py eval` 本机会整条挂住**：无输出、python 进程 CPU≈0、十几分钟不返回（`gql` /
+  `status` 正常，`start_chrome.py` 单独跑也能 READY）。改用 `stash-testkit/page_eval.py`（连已开的
+  9222 → 导航 → `Runtime.evaluate(awaitPromise=True)`），新起的浏览器只有 `about:blank` 时它会退回
+  首个 page。（2026-11-27）
+- **发现页路由是 `/plugins/stashDiscover`**：写成 `/plugins/k6cc/stashDiscover` 打开是空壳，
+  `.ssd-dp-tab` 一个都没有 —— 别把「探针全返回 null」当插件坏了。
+- **测「应该问源站」的功能，先让本地数据不全**：`tagRulesChanged()` 里
+  `if (!_state.tagLoadSig && _state.allLoaded) return;` 会让「窗口内一屏拉全」时直接本地筛、不再
+  问源站。把 Released 切 `All time`（AIKA 从 46 条变 `Page 1 · 190 found`）才会真发查询。
+  另外 K4 的 `prefs.askTags` 默认关，测前要临时置 `true`。（2026-11-27）
+- **本地存储配额真写不满**：填满 4 MB 后改范围仍能成功（替换同一个键时新值更小，浏览器允许），
+  失败分支只能用 `Storage.prototype.setItem = () => { throw new QuotaExceededError() }` 覆盖。
+  验「一次性提示」时，要先把上一条 toast 从 DOM 删掉再触发第二次，否则残留会被当成重复弹。（2026-11-27）
 
 ## 业务逻辑
 

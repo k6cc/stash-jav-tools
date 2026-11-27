@@ -22,7 +22,7 @@
   window.__ssdLoaded = true;
 
   var PLUGIN_ID = "stashDiscover";
-  var PLUGIN_VERSION = "2.8.11";
+  var PLUGIN_VERSION = "2.9.0";
   // DOM event fired after a discover-page scene is saved to the library;
   // discover.js listens and drops the card from its results
   var SCENE_SAVED_EVENT = "ssd:scene-saved";
@@ -3790,7 +3790,7 @@
       }
       // K4：这一屏是带标签问来的，或某个源因为缺标签被挡掉 —— 都得说清楚，
       // 否则空屏只会读成「这个演员没片」
-      var missZ = tagMissingText(true);
+      var missZ = tagMissingText(isZh());
       if (missZ) lines.push(missZ + "。");
       if (_state.tagLoadSig && !missZ) {
         lines.push(tc("当前带标签向源站查询：只返回源上带这些标签的场景。",
@@ -5634,7 +5634,7 @@
     // entry. Only the parts that apply are rendered. The four are grouped in
     // pairs so a very narrow viewport wraps between them instead of overflowing.
     if (_state.windowRelaxed || _state.preferredFallback || _state.showIgnored ||
-        _state.tagLoadSig || tagMissingText(true) || inLibRow()) {
+        _state.tagLoadSig || tagMissingText(isZh()) || inLibRow()) {
       var metaRow = document.createElement("div");
       metaRow.className = "ssd-window-row";
 
@@ -5679,7 +5679,7 @@
       }
 
       // K4：源上缺「必须有」的标签 → 跳过该源。不是查询失败，是这个源上不可能有结果
-      var missText = tagMissingText(true);
+      var missText = tagMissingText(isZh());
       if (missText) {
         var missChip = makeChip(missText, "muted");
         missChip.title = tc("这个源上找不到这些「必须有」的标签，所以没有查它。换一个源、或去掉这个标签就会照常查。",
@@ -6756,7 +6756,7 @@
       names.push(zh ? label + " 缺少标签「" + tags.join("、") + "」· 已跳过"
         : label + " has no tag " + tags.join(", ") + " · skipped");
     });
-    return names.join("；");
+    return names.join(isZh() ? "；" : "; ");
   }
 
   // Native SceneCardGrid zoom formula:
@@ -7601,11 +7601,16 @@
 
     var modal = document.createElement("div");
     modal.className = "ssd-modal";
+    // F2：读屏与键盘用户要能识别这是一个对话框（C5 无鼠标回归里发现的缺口）
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", tc("场景详情", "Scene details"));
 
     var closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "ssd-modal-close";
     closeBtn.innerHTML = "&times;";
+    closeBtn.setAttribute("aria-label", tc("关闭", "Close"));
     closeBtn.onclick = closeModal;
     modal.appendChild(closeBtn);
 

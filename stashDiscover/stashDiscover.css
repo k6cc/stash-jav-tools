@@ -527,8 +527,12 @@
    所以配色仍由主题决定，这里只管「怎么排」。
    只留本卡片真正 emit 的：__month-year-* / --select / --down-arrow 这些用不到的已裁掉。
    --------------------------------------------------------------- */
+/* 回归 O4：骨架照着 chunk 抄时把边线也抄成 #aeaeae（库的浅色默认值），暗色主题下
+   比四周亮一档。Stash 的 --bs-* 变量实测全为空（getComputedStyle 取不到），
+   所以下面两条实际走 fallback #30404d —— 与暗色主题表头/下拉的实测边线同色；
+   主题哪天补上 --bs-border-color 就自动跟随，不用再改这两行。 */
 .ssd-range-cal-pop .react-datepicker__navigation-icon:before { border-color:#ccc;border-style:solid;border-width:3px 3px 0 0;content:"";display:block;height:9px;position:absolute;top:6px;width:9px }
-.ssd-range-cal-pop .react-datepicker__header { text-align:center;background-color:#f0f0f0;border-bottom:1px solid #aeaeae;border-top-left-radius:.3rem;padding:8px 0;position:relative }
+.ssd-range-cal-pop .react-datepicker__header { text-align:center;background-color:#f0f0f0;border-bottom:1px solid var(--bs-border-color,#30404d);border-top-left-radius:.3rem;padding:8px 0;position:relative }
 .ssd-range-cal-pop .react-datepicker__header:not(.react-datepicker__header--has-time-select) { border-top-right-radius:.3rem }
 .ssd-range-cal-pop .react-datepicker__month-dropdown-container--scroll, .ssd-range-cal-pop .react-datepicker__year-dropdown-container--scroll { display:inline-block;margin:0 15px }
 .ssd-range-cal-pop .react-datepicker__navigation { align-items:center;background:none;display:flex;justify-content:center;text-align:center;cursor:pointer;position:absolute;top:2px;padding:0;border:none;z-index:1;height:32px;width:32px;text-indent:-999em;overflow:hidden }
@@ -551,7 +555,7 @@
 .ssd-range-cal-pop .react-datepicker__day--disabled:hover { background-color:transparent }
 .ssd-range-cal-pop .react-datepicker__year-read-view, .ssd-range-cal-pop .react-datepicker__month-read-view { border:1px solid transparent;border-radius:.3rem;position:relative }
 .ssd-range-cal-pop .react-datepicker__year-read-view:hover, .ssd-range-cal-pop .react-datepicker__month-read-view:hover { cursor:pointer }
-.ssd-range-cal-pop .react-datepicker__year-dropdown, .ssd-range-cal-pop .react-datepicker__month-dropdown { background-color:#f0f0f0;position:absolute;width:50%;left:25%;top:30px;z-index:1;text-align:center;border-radius:.3rem;border:1px solid #aeaeae }
+.ssd-range-cal-pop .react-datepicker__year-dropdown, .ssd-range-cal-pop .react-datepicker__month-dropdown { background-color:#f0f0f0;position:absolute;width:50%;left:25%;top:30px;z-index:1;text-align:center;border-radius:.3rem;border:1px solid var(--bs-border-color,#30404d) }
 .ssd-range-cal-pop .react-datepicker__year-dropdown:hover, .ssd-range-cal-pop .react-datepicker__month-dropdown:hover { cursor:pointer }
 .ssd-range-cal-pop .react-datepicker__year-option, .ssd-range-cal-pop .react-datepicker__month-option { line-height:20px;width:100%;display:block;margin-left:auto;margin-right:auto }
 .ssd-range-cal-pop .react-datepicker__year-option:first-of-type, .ssd-range-cal-pop .react-datepicker__month-option:first-of-type { border-top-left-radius:.3rem;border-top-right-radius:.3rem }

@@ -18,6 +18,7 @@ stash-testkit/
 ├── state_snapshot.py       # 插件 plugin-data 的 state.json 快照/还原
 ├── deploy_plugin.py        # 同步插件 → reloadPlugins → 校验 version（顺带查同 id 旧副本）
 ├── ui_probe.py             # 多视口布局回归（对齐 / 列数 / 行数 / 横向溢出）
+├── page_eval.py            # 在已开的 9222 里跑任意 JS 探针（stash_dev.py eval 挂住时的替代）
 ├── screenshots/            # Stash UI 截图链路（CDP + 登录 + 占位符匿名化，产出论坛帖配图）
 ├── tests/
 │   ├── sceneTranslateAuto/  # 翻译/守卫/scan_all 单测 + worker/全链路（scripts/ + SCRIPTS.md，入口 NOTES.md）
@@ -121,6 +122,7 @@ stash-testkit/
 - **用 CDP 驱动 Chrome 必须带 `--remote-allow-origins=*`**，否则 WebSocket 握手 403；`browser-automation-cdp` 技能的 `start_chrome.py` 已内建该参数，手动启动浏览器时别漏。额外 flag 用它的 `--extra` 透传。
 - **浏览器里测 Stash 流要同源注入**：Stash 流端点无 CORS 头，跨域 `fetch` 必失败；先 `open` 到 `http://127.0.0.1:9999/login` 这类同源页面再注入脚本，段 URL 用 manifest 自带的 apikey（无需登录态）。
 - **断言异步 UI 先等元素出现**：点击触发的渲染/预载/回填是异步的，点击后立即 evaluate 读到中间态；先轮询等目标元素/文本出现再断言（否则"头像没加载出来"式误判）。
+- **`stash_dev.py eval` 本机会整条挂住**：无输出、进程 CPU≈0、十几分钟不返回（`gql` / `status` 正常，`start_chrome.py` 也能 READY）。用 `page_eval.py` 跑同一个 JS 文件（连已开的 9222 → 导航 + 设视口 → `Runtime.evaluate(awaitPromise)`）；它不启停浏览器，用完自己 `stop_chrome.py --port 9222`。
 - **chrome-devtools MCP 的截图工具存不了盘**（`path is not within any of the configured workspace roots`，MCP 版 Chrome 还走 `--remote-debugging-pipe` 无 TCP 端口）：需要落盘走 `screenshots/capture.mjs`，自建 `--remote-debugging-port` 的 Chrome 直连 CDP `Page.captureScreenshot`。
 - **论坛帖截图必须匿名化**：真实演员/场景/工作室/标签/番号一律占位符，注入器 `screenshots/anon-stash.js` 带 250ms 重应用定时器（SPA 重渲染会刷回真实值），规则见 `screenshots/NOTES.md`。
 
@@ -135,12 +137,13 @@ stash-testkit/
 | `state_snapshot.py` | 插件 `plugin-data/<id>/state.json` 快照 / 还原 / 查看 |
 | `deploy_plugin.py` | 同步插件源码到实例 → `reloadPlugins` → 轮询校验 `version`；同 id 旧副本报警 |
 | `ui_probe.py` | 多视口布局回归：同一选择器在多个宽度下量对齐、列数、行数、行高与横向溢出（底层调 `stash_dev.py eval --vsize`） |
+| `page_eval.py` | 在已开的 9222 调试 Chrome 里跑一个 JS 文件（导航 + 设视口 + `Runtime.evaluate(awaitPromise)`）。**`stash_dev.py eval` 本机会整条挂住**（无输出、CPU≈0）时用它；不启停浏览器，用完自己 `stop_chrome.py` |
 | `screenshots/` | 论坛帖配图：起调试 Chrome → 自动登录 → 注入占位符 → 全页截图落 `docs/forum/img/`；场景脚本按 `<插件名>-<视图>.mjs` 命名，用法与占位符规则见 `screenshots/NOTES.md` |
 | `tests/sceneTranslateAuto/` | 守卫语言判据 / 竞态 / worker 延迟 / scan_all 批量任务（分页聚合/dry-run 审计/单场景异常隔离/统计拆细）单测与 E2E；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
 | `tests/javstashAutofill/` | 封面竞态 / 演员解析 / BD 剥离 / 刮削重试 / tag 预查单测 + E2E + javstash 探测；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
 | `tests/nfoSceneParser/` | tagCreate 兜底单测 + 幽灵 id 边界 + 交叉无循环验证；脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，从 `NOTES.md` 进入 |
 | `tests/binge/` | 首页 trending/costar 拉取口径、插件实际设置补查、番号未进首页热门诊断（过滤链模拟）；**流媒体播放实测**（HLS 段生产节奏、真实 Chrome 播放 A/B、PTS 连续性、DASH→MSE）。脚本统一放 `scripts/`，逐个用途与副作用见 `SCRIPTS.md`，端点机制见 `NOTES.md` |
-| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、布局回归（骨架占位 / 模块刷新 / 分页判到底）、请求分布诊断、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
+| `tests/stashDiscover/` | 发现页 / 场景弹窗 / Jackett / TPDB 链路的业务语义与验证探针：源适配与缓存存储、多选与入库流程、布局回归（骨架占位 / 模块刷新 / 分页判到底）、请求分布诊断、**回归与故障注入**（断源计数与状态行、弹窗无障碍、偏好写失败、TPDB 文案）、实测踩过的坑。文档按用途分层、脚本统一放该目录 `scripts/`，**脚本逐个的用途、副作用与跑法见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
 | `tests/tagMerge/` | 映射维护：`NOTES.md`（业务语义）+ `scripts/`（归一化/校验/刮定义，逐个用途见 `SCRIPTS.md`） |
 | `tests/SceneBackfill/` | 补档插件的状态机、规则口径、界面令牌与实测坑清单；`scripts/sf_verify.py` 一键验收（selftest / 规则回读 / 下载器连接 / 守护心跳 / state 巡检，只读），逐个说明见 `SCRIPTS.md`，业务语义见 `NOTES.md` |
 | `tests/ImageMetaSync/` | 图库图片元数据回填：全库口径审计、受控 E2E（建库钩子/竞态等待/编号/开关）、无图库兜底、锁与队列、schema 探针；**脚本逐个用途与副作用见 `SCRIPTS.md`**，从 `NOTES.md` 进入 |
